@@ -1,0 +1,39 @@
+
+{% macro get_py_script_func_name(task_obj, task_name) %}
+{%- if "py_script" in task_obj -%}
+{%- if task_obj["py_script"] == True -%}
+{{ task_name }}
+{%- else -%}
+{{ task_obj["py_script"].split(".")[0] }}
+{%- endif -%}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro deps_to_str(deps) %}
+{%- for dep in deps -%}
+{%- set _dep = "_" + dep %}
+            {{ _dep }}{% if not loop.last %},{% endif %}
+{%- endfor %}
+{%- endmacro %}
+
+{% macro render_wait_for(deps) %}
+{%- if deps != None -%}
+,
+        wait_for=[
+            {{- deps_to_str(deps) }}
+        ]
+{%- endif %}
+{%- endmacro %}
+
+{% macro submit(name, task_obj, deps) -%}
+_{{name}} = submit(
+        "{{name}}",
+        pipeline_config,
+        task_list,
+        ignore_cache
+        {%- if "py_script" in task_obj %},
+        tasks.{{get_py_script_func_name(task_obj, name)}}
+        {%- endif -%}
+        {{ render_wait_for(deps) }}
+    )
+{%- endmacro %}
