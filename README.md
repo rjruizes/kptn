@@ -13,6 +13,10 @@ Define your tasks and their dependencies in YAML and Kapten will render a pipeli
   - **Less boilerplate**: Launch R scripts without writing any wrapper code
   - **Less vendor lock-in**: Any orchestration framework could be rendered, not just Prefect
 
+<p style="text-align: center">
+  <img alt="Kapten UI" src="https://github.com/rti-international/kapten/blob/main/ui/ui-nov24.png?raw=true" height=150px>
+</p>
+
 ## Basic Example
 
 Here's a toy example of a pipeline called `example` with 3 tasks: `A`, `B`, `C`. We first define the graph of tasks, where `A` has no dependencies, `B` depends on `A`, and `C` depends on `A` and `B`.
