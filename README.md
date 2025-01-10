@@ -6,7 +6,7 @@ Define your tasks and their dependencies in YAML and Kapten will render a pipeli
 
 ## Features
 
-  - **Testable tasks** : Built-in change detection
+  - **Testable tasks**: Built-in change detection
   - **Right-sizing**: CPU and memory requirements per task
   - **Branch-based development**: Clone pipeline state across branches
   - **Update in-place**: Tweak and run a subset of the pipeline
@@ -95,6 +95,8 @@ Create a file, `tasks.yaml` that contains definitions of the graphs of tasks and
   <tr><td>tasks.[task_id].cache_result</td><td>A boolean, if `true`, the Python script return value will be saved in the cache database, DynamoDB. If this value is a large list (e.g. 50k items), it will be sharded across DynamoDB items for scalability.</td><td>No</td></tr>
   <tr><td>tasks.[task_id].iterable_item</td><td>If `cache_result` is true and the result is a list, `iterable_item` is a string naming each item. The iterable item can also be a combination of values delimited by commas, e.g. US_STATE,ZIP_CODE</td><td>No</td></tr>
   <tr><td>tasks.[task_id].map_over</td><td>A string that corresponds to an `iterable_item` in a dependency. Setting `map_over` will call this task for each item in the dependency result list. If this task is a Python task, the `iterable_item` will be passed as a function argument. If this task is an R task, the `iterable_item` will be passed as an environment variable to the R script. If the `iterable_item` is a comma-delimited combo, the values will be split and passed in separately.</td><td>No</td></tr>
+  <tr><td>tasks.[task_id].bundle_size</td><td>If `map_over` is set, an integer defining the number of subtasks sent to the Dask worker at one time. Default is 1. For a large number of subtasks, increasing this number can speedup the run time.</td><td>No</td></tr>
+  <tr><td>tasks.[task_id].group_size</td><td>If `map_over` is set, an integer defining the number of subtasks sent to the Dask scheduler at one time. Default is infinity. For a large number of subtasks, setting a max on this number can prevent the scheduler from getting overwhelmed.</td><td>No</td></tr>
   <tr><td>tasks.[task_id].outputs</td><td>A list of files that the script outputs</td><td>No</td></tr>
   <tr><td>tasks.[task_id].aws_vars</td><td>A dictionary that can contain two fields, cpu and memory, corresponding to the <a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#task_size">Fargate task definition values</a></td><td>No</td></tr>
   <tr><td>tasks.[task_id].dask_worker</td><td>When the task is a mapped task (map_over is set), a dictionary that can contain two fields, cpu and memory, which will be used for each dask worker</td><td>No</td></tr>
@@ -135,14 +137,16 @@ Task `B` will map over the result list, setting `US_STATE=${US_STATE}` as an env
 For example, if `A` returned the list `['NC', 'SC']`, `B/run.R` would be called 2 times, once with `US_STATE=NC` and once with `US_STATE=SC`
 
 
+## Frequently Asked Questions (FAQ)
 
+> Why not just use Prefect?
 
+tldr: Kapten simplifies pipeline configuration and improves base implementation
 
+As we tried to scale with Prefect and ran into bugs and wondered if Airflow or Dagster might work better, but we'd already written our pipeline in formulaic Prefect code of "call task A, call task B". It was simple to pull out the logic into a YAML representation of a graph. This is a portable definition, allowing us to render to any orchestrator's code.
 
+A major goal was to test our pipeline. If we change the code for task `A`, we need to be able to run task `A` by itself and check if its outputs changed compared to its previous outputs. Prefect didn't support running tasks by themselves in 2023, and its caching wasn't designed for this use case. Rendering Prefect code allows us to render runnable pieces of the pipeline and use a cache accessible for snapshot testing.
 
+Another major goal is scaling to handle a large number of mapped tasks. Mapped tasks create a single subtask for each input. Prefect has two task runners that allow running subtasks in parallel: Dask and Ray. In our testing with Dask, we've found that we can speedup runtime by batching subtasks into bundles for Dask workers, and prevent the scheduler from crashing by batching subtasks into groups that are run sequentially. Kapten offers both of these features via its API. Caching is particularly important for mapped tasks, because mapped tasks can be very expensive to run and more prone to crash. In the event some subtasks fail, re-running will only re-run failed tasks.
 
-
-
-
-
-
+Overall, Kapten makes maintenance easier. Developing and testing new features, copying production state to a local environment for debugging, and running subsets of subtasks are use cases its designed for.
