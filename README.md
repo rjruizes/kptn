@@ -14,7 +14,7 @@ Define your tasks and their dependencies in YAML and Kapten will render a pipeli
   - **Less vendor lock-in**: Any orchestration framework could be rendered, not just Prefect
 
 <p style="text-align: center">
-  <img alt="Kapten UI" src="https://github.com/rti-international/kapten/blob/main/ui/ui-nov24.png?raw=true" height=150px>
+  <img alt="Kapten UI" src="https://github.com/rti-international/kapten/blob/main/ui/ui-nov24.png?raw=true">
 </p>
 
 ## Basic Example
