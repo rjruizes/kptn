@@ -27,5 +27,10 @@ def watch_files():
     """
     start_watching()
 
+@app.command()
+def backend():
+    from kapten.watcher.app import start
+    start()
+
 if __name__ == "__main__":
     app()

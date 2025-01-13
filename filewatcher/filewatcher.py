@@ -13,7 +13,7 @@ class RehashFilter(DefaultFilter):
     """
     allowed_extensions = '.py', '.yaml', '.R'
     def __call__(self, change: Change, path: str) -> bool:
-        ignore_paths = ['py_src/caching', 'py_src/deploy', 'py_src/util', 'py_src/watcher']
+        ignore_paths = ['kapten/caching', 'kapten/deploy', 'kapten/util', 'kapten/watcher']
         # print(f"Change: {change}, Path: {path}")
         return (
             super().__call__(change, path) and

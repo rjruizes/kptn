@@ -211,7 +211,7 @@ async def shutdown_handler():
 def start():
     """Launched with `uv run dev` at root level"""
     uvicorn.run(
-        "py_src.watcher.app:app",
+        "kapten.watcher.app:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
