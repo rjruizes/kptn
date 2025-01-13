@@ -145,7 +145,7 @@ class Hasher:
                 all_vars = var_pattern.findall(pattern)
                 for var in all_vars:
                     if var in env:
-                        pattern = pattern.replace(f"${{{var}}}", env[var])
+                        pattern = pattern.replace(f"${{{var}}}", str(env[var]))
                     else:
                         # replace with '*' to match any file
                         pattern = pattern.replace(f"${{{var}}}", "*")

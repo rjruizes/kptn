@@ -281,6 +281,8 @@ class TaskStateCache():
             reason = "ignore_cache is set"
         elif self.pipeline_config.SUBSET_MODE:
             reason = "Subset mode"
+        elif cached_state and cached_state.status == "FAILURE":
+            reason = "Task previously failed all subtasks"
         elif self.is_rscript(task_name) and self.r_code_changed(r_code_hashes, cached_state):
             reason = "R code changed"
         elif self.py_code_changed(py_code_hashes, cached_state):
@@ -655,7 +657,10 @@ def map_flow(
             outputs_version = fetch_and_hash_subtasks(tscache, task_name)
             tscache.db_client.set_task_ended(task_name, status=status, outputs_version=outputs_version)
         else:
-            tscache.db_client.set_task_ended(task_name, status=status)
+            if pipeline_config.SUBSET_MODE:
+                tscache.db_client.set_task_ended(task_name) # Subset mode subtasks don't mark the task as INCOMPLETE or FAILURE
+            else:
+                tscache.db_client.set_task_ended(task_name, status=status)
     
 
 @prefect.flow(log_prints=True)
