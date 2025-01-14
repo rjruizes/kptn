@@ -19,7 +19,12 @@ TaskListChoices = list[Literal[{% for name in task_names -%}"{{name}}",{% endfor
 @flow(task_runner=ConcurrentTaskRunner, log_prints=True)
 def {{pipeline_name}}(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
     {% for name in task_names -%}
+    {# If last one, .wait() #}
+    {% if loop.last -%}
+    {{ macros.submit(name, tasks_dict[name] or {}, deps_lookup[name]) }}.wait()
+    {%- else -%}
     {{ macros.submit(name, tasks_dict[name] or {}, deps_lookup[name]) }}
+    {%- endif -%}
     {% endfor %}
 
 
