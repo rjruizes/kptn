@@ -427,7 +427,7 @@ def rscript_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
 def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
     """Call a Python function (this function is called by single and mapped tasks)"""
     if isinstance(pipeline_config, prefect.unmapped):
-        pipeline_config = pipeline_config.value[0][0] # idk a better way to unwrap it
+        pipeline_config = pipeline_config.value
     tscache = TaskStateCache(pipeline_config)
     key = tscache.get_key_value(task_name, kwargs)
     idx = kwargs.pop("idx", None)
@@ -534,7 +534,7 @@ def check_overall_status(statuses):
 def check_futures_success(futures):
     """Determines if all, some, or no elements in a list of futures are successful"""
     total = len(futures)
-    success = sum(future.state.is_completed() for future in futures)
+    success = sum(future.get_state().is_completed() for future in futures)
     if success == total:
         return "SUCCESS"
     elif success == 0:
@@ -661,7 +661,6 @@ def map_flow(
                 tscache.db_client.set_task_ended(task_name) # Subset mode subtasks don't mark the task as INCOMPLETE or FAILURE
             else:
                 tscache.db_client.set_task_ended(task_name, status=status)
-            raise Exception(f"Task {task_name} failed with status {status}")
     
 
 @prefect.flow(log_prints=True)
