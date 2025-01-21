@@ -2,6 +2,7 @@ import boto3
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 from typing import Dict, Any
+from kapten.util.logger import get_logger
 
 deserializer = TypeDeserializer()
 
@@ -24,6 +25,7 @@ def update_task(
     :param update: The update dictionary
     :return: The response from DynamoDB
     """
+    logger = get_logger()
 
     # Construct the primary key
     key = {
@@ -36,6 +38,7 @@ def update_task(
     update_expression = "SET " + ", ".join([f"#{k} = :{k}" for k in update.keys()])
     expression_attribute_names = {f"#{k}": k for k in update.keys()}
     expression_attribute_values = {f":{k}": {"S": str(v)} for k, v in update.items()}
+    logger.info(f"Update expression: {update_expression}, Attribute values: {expression_attribute_values}, Key: {key}")
 
     try:
         response = dynamodb.update_item(

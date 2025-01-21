@@ -20,8 +20,8 @@ def create_subtaskbin(dynamodb: boto3.client, table_name: str, storage_key: str,
     # Construct the item to be inserted
     timestamp = datetime.datetime.now().isoformat()
     item = {
-        'PK': {'S': f'BRANCH#{storage_key}'},
-        'SK': {'S': f'PIPELINE#{pipeline_id}#TASK#{task_id}#SUBTASKBIN#{bin_id}'},
+        'PK': {'S': f'BRANCH#{storage_key}#PIPELINE#{pipeline_id}#TASK#{task_id}#SUBTASKBIN#{bin_id}'},
+        'SK': {'S': f'BIN#{bin_id}'}, # Unused. DynamoDB doesn't allow empty SK
         'BinId': {'S': bin_id},
         'CreatedAt': {'S': timestamp},
         'UpdatedAt': {'S': timestamp},

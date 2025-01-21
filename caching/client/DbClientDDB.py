@@ -12,15 +12,33 @@ from kapten.caching.client.get_subtaskbins import get_subtaskbins
 from kapten.caching.client.get_task import get_single_task
 from kapten.caching.client.get_taskdata import get_taskdatabins
 from kapten.caching.client.get_tasks import get_tasks_for_pipeline
-from kapten.caching.client.set_subtask_time import set_time_in_subitem_in_databin
+from kapten.caching.client.set_subtask_time import set_time_in_subitem_in_bin
 from kapten.caching.client.update_task import update_task
 from kapten.caching.models import Subtask, TaskState, taskStateAdapter, subtasksAdapter
 
-# Max number of items to stuff into a single DynamoDB item (bin)
-# This is to avoid hitting the 400KB limit on item size in DynamoDB
-# 2000 was chosen based on the rough size of 2000 small JSON objects
-BIN_SIZE = 2000
+# Subitems are binned to workaround the low batch operation limit (25) of DynamoDB.
+# A bin size of 500 is chosen to keep the app from getting throttled by a rate limit on the number of 
+# updates to a partition per second.
+BIN_SIZE = 500
 
+def calculate_bin_ids(subitem_count: int) -> List[str]:
+    if not subitem_count:
+        return ["0"]
+    num_bins = int(subitem_count) // BIN_SIZE
+    bin_ids = [str(i) for i in range(0, num_bins+1)]
+    return bin_ids
+
+def get_count_field(bin_name: str):
+    if bin_name == "SUBSETBIN":
+        count_field = "subset_count"
+    elif bin_name == "TASKDATABIN":
+        count_field = "taskdata_count"
+    elif bin_name == "SUBTASKBIN":
+        count_field = "subtask_count"
+    else:
+        raise ValueError(f"Invalid bin type: {bin_name}")
+
+    return count_field
 
 class DbClientDDB(DbClientBase):
     client: boto3.client = None
@@ -85,6 +103,10 @@ class DbClientDDB(DbClientBase):
         """
         raw_task = task.model_dump(exclude_none=True)
         taskdata = raw_task.pop("data", None)
+        data = data or taskdata
+        if isinstance(data, list):
+            raw_task['taskdata_count'] = len(data)
+
         create_task(
             self.client,
             self.table_name,
@@ -93,7 +115,6 @@ class DbClientDDB(DbClientBase):
             task_name,
             raw_task,
         )
-        data = data or taskdata
         if data:
             self.create_taskdata(task_name, data, "TASKDATABIN")
 
@@ -127,12 +148,22 @@ class DbClientDDB(DbClientBase):
             )
 
 
-    def create_subtasks(self, task_name, data):
+    def create_subtasks(self, task_name, data, update_count=True):
+        if update_count:
+            update = {"subtask_count": len(data)}
+            update_task(
+                self.client,
+                self.table_name,
+                self.storage_key,
+                self.pipeline,
+                task_name,
+                update,
+            )
         assert isinstance(data, list)
         # Break up the data into bins
-        for i in range(0, len(data), BIN_SIZE):
-            bin_id = f"{i // BIN_SIZE}"
-            binned_items = [{"i": i, "key": data[i]} for i in range(i, len(data[i : i + BIN_SIZE]))]
+        for j in range(0, len(data), BIN_SIZE):
+            bin_id = f"{j // BIN_SIZE}"
+            binned_items = [{"i": i, "key": data[i]} for i in range(j, min(j + BIN_SIZE, len(data)))]
             create_subtaskbin(
                 self.client,
                 self.table_name,
@@ -145,30 +176,32 @@ class DbClientDDB(DbClientBase):
 
     def set_subtask_started(self, task_name: str, index: str):
         bin_id = f"{index // BIN_SIZE}"
+        adjusted_index = index % BIN_SIZE
         time_value = datetime.datetime.now().isoformat()
-        set_time_in_subitem_in_databin(
+        set_time_in_subitem_in_bin(
             self.client,
             self.table_name,
             self.storage_key,
             self.pipeline,
             task_name,
             bin_id,
-            index,
+            adjusted_index,
             "startTime",
             time_value,
         )
 
     def set_subtask_ended(self, task_name: str, index: str, output_hash=None):
         bin_id = f"{index // BIN_SIZE}"
+        adjusted_index = index % BIN_SIZE
         end_time = datetime.datetime.now().isoformat()
-        set_time_in_subitem_in_databin(
+        set_time_in_subitem_in_bin(
             self.client,
             self.table_name,
             self.storage_key,
             self.pipeline,
             task_name,
             bin_id,
-            index,
+            adjusted_index,
             "endTime",
             end_time,
             hash=output_hash,
@@ -178,6 +211,8 @@ class DbClientDDB(DbClientBase):
         timestamp = datetime.datetime.now().isoformat()
         if subset_mode and result:
             update = {"UpdatedAt": timestamp}
+            if result:
+                update["subset_count"] = len(result)
             update_task(
                 self.client,
                 self.table_name,
@@ -191,6 +226,8 @@ class DbClientDDB(DbClientBase):
             return
 
         update = {"end_time": timestamp, "UpdatedAt": timestamp}
+        if result:
+            update["taskdata_count"] = len(result)
         if outputs_version:
             update["outputs_version"] = outputs_version
         if result_hash:
@@ -223,18 +260,19 @@ class DbClientDDB(DbClientBase):
             self.client, self.table_name, self.storage_key, self.pipeline, task_name
         )
         if single_task and include_data:
+            bin_ids = calculate_bin_ids(single_task["taskdata_count"])
             # if subset mode, try to get subset data; if it doesn't exist, get task data
             if subset_mode:
-                subset = self.get_taskdata(task_name, subset_mode=True)
+                subset = self.get_taskdata(task_name, subset_mode=True, bin_ids=bin_ids)
                 if subset:
                     # print("get_task: Using subset data", subset)
                     single_task["data"] = subset
                 else:
                     # print("get_task: No subset data, using task data")
-                    single_task["data"] = self.get_taskdata(task_name)
+                    single_task["data"] = self.get_taskdata(task_name, bin_ids=bin_ids)
             else:
                 # print("get_task: Using task data")
-                single_task["data"] = self.get_taskdata(task_name)
+                single_task["data"] = self.get_taskdata(task_name, bin_ids=bin_ids)
 
         if single_task is None:
             return None
@@ -245,10 +283,17 @@ class DbClientDDB(DbClientBase):
             self.client, self.table_name, self.storage_key, self.pipeline
         )
 
-    def get_taskdata(self, task_name, subset_mode=False):
+    def get_taskdata(self, task_name, subset_mode=False, bin_ids=None):
+        if bin_ids is None:
+            t = self.get_task(task_name)
+            if t is None:
+                return []
+            count = t.subset_count if subset_mode else t.taskdata_count
+            bin_ids = calculate_bin_ids(count)
+
         bin_name = "SUBSETBIN" if subset_mode else "TASKDATABIN"
         databins = get_taskdatabins(
-            self.client, self.table_name, self.storage_key, self.pipeline, task_name, bin_name
+            self.client, self.table_name, self.storage_key, self.pipeline, task_name, bin_ids, bin_name
         )
         # If data isn't broken up into bins, return it as is
         if len(databins) == 1:
@@ -263,9 +308,15 @@ class DbClientDDB(DbClientBase):
             data.extend(json.loads(bin["data"]))
         return data
 
-    def get_subtasks(self, task_name) -> list[Subtask]:
-        databins = get_subtaskbins(
-            self.client, self.table_name, self.storage_key, self.pipeline, task_name
+    def get_subtasks(self, task_name, bin_ids=None) -> list[Subtask]:
+        if bin_ids is None:
+            t = self.get_task(task_name)
+            if t is None:
+                return []
+            bin_ids = calculate_bin_ids(t.subtask_count)
+
+        databins = get_taskdatabins(
+            self.client, self.table_name, self.storage_key, self.pipeline, task_name, bin_ids, "SUBTASKBIN"
         )
         data = []
         for databin in databins:
@@ -295,10 +346,8 @@ class DbClientDDB(DbClientBase):
                 {
                     "DeleteRequest": {
                         "Key": {
-                            self.primary_key: {"S": f"BRANCH#{storage_key}"},
-                            self.sort_key: {
-                                "S": f"PIPELINE#{pipeline_id}#TASK#{task_id}#{bin_type}#{bin_id}"
-                            },
+                            self.primary_key: {"S": f"BRANCH#{storage_key}#PIPELINE#{pipeline_id}#TASK#{task_id}#{bin_type}#{bin_id}"},
+                            self.sort_key: { "S": f"BIN#{bin_id}" }
                         }
                     }
                 }
@@ -307,14 +356,21 @@ class DbClientDDB(DbClientBase):
         }
         self.client.batch_write_item(RequestItems=request_items)
 
-    def delete_bins(self, task_id: str, bin_type: str):
+    def delete_bins(self, task_id: str, bin_type: str, task: TaskState = None):
+        if task is None:
+            task = self.get_task(task_id)
+            if task is None:
+                return
+        count_field = get_count_field(bin_type)
+        bin_ids = calculate_bin_ids(getattr(task, count_field))
         DDB_MAX_BATCH_SIZE = (
             25  # Max number of items that can be deleted in a single batch
         )
-        bins = get_taskdatabins(
-            self.client, self.table_name, self.storage_key, self.pipeline, task_id, bin_type
-        )
-        bin_ids = [bin["BinId"] for bin in bins]
+
+        # bins = get_taskdatabins(
+        #     self.client, self.table_name, self.storage_key, self.pipeline, task_id, bin_ids, bin_type
+        # )
+        print("Deleting bins", bin_ids)
         for i in range(0, len(bin_ids), DDB_MAX_BATCH_SIZE):
             self._batch_delete_bins(
                 self.storage_key,
@@ -328,9 +384,12 @@ class DbClientDDB(DbClientBase):
 
     def delete_task(self, task_id: str):
         """Delete a task and all associated databins from the DynamoDB table."""
-        self.delete_bins(task_id, "SUBTASKBIN")
-        self.delete_bins(task_id, "TASKDATABIN")
-        self.delete_bins(task_id, "SUBSETBIN")
+        task = self.get_task(task_id)
+        if task is None:
+            return
+        self.delete_bins(task_id, "SUBTASKBIN", task)
+        self.delete_bins(task_id, "TASKDATABIN", task)
+        self.delete_bins(task_id, "SUBSETBIN", task)
 
         # Delete the task itself
         self.client.delete_item(
