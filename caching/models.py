@@ -12,9 +12,12 @@ class TaskState(BaseModel):
     outputs_version: Optional[str] = None # A task lists its outputs in YAML; we hash each file after running
     data: Optional[Any] = None # Python tasks can store data in the cache; it can be iterated over and/or passed into other tasks 
     output_data_version: Optional[str] = None # We fetch the output_data_version of each dependency
-    status:Optional[str] = None
+    status: Optional[str] = None
     start_time: str = None
     end_time: str = None
+    subtask_count: int = None
+    taskdata_count: int = None
+    subset_count: int = None
     UpdatedAt: str = None
 
     @computed_field

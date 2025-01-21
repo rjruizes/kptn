@@ -21,8 +21,9 @@ async function buildAndDeploy (payload: DeployPayload): Promise<[DeployResponse,
   // Push if payload.stack is not 'local'
   return Promise.all([
     deployApi.post({ ...payload }) as Promise<DeployResponse>,
-    buildApi.post(),
-    payload.stack === 'local' ? Promise.resolve() : pushApi.post({ branch: payload.branch, authproxy_url: urlJoin(payload.endpoint, 'authproxy') }),
+    buildApi.post().then((response: any) => {
+      return (payload.stack === 'local' ? Promise.resolve() : pushApi.post({ branch: payload.branch, authproxy_url: urlJoin(payload.endpoint, 'authproxy') }))
+    })
   ])
 }
 
