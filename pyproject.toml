@@ -6,7 +6,16 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12.5",
+    "pyyaml",
+    "jinja2",
+    "requests",
+    "pydantic",
+    "watchfiles",
 ]
+
+[project.optional-dependencies]
+aws = ["boto3"]
+prefect = ["prefect"]
 
 [project.scripts]
 kapten = "kapten.cli:app"
@@ -20,3 +29,8 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["kapten"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
