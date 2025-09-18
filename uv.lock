@@ -674,11 +674,13 @@ name = "kapten"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "fastapi" },
     { name = "jinja2" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "typer" },
+    { name = "uvicorn" },
     { name = "watchfiles" },
 ]
 
@@ -698,12 +700,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", marker = "extra == 'aws'" },
+    { name = "fastapi", specifier = ">=0.116.2" },
     { name = "jinja2" },
     { name = "prefect", marker = "extra == 'prefect'" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "typer", specifier = ">=0.12.5" },
+    { name = "uvicorn", specifier = ">=0.35.0" },
     { name = "watchfiles" },
 ]
 provides-extras = ["aws", "prefect"]

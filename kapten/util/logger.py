@@ -1,6 +1,5 @@
 import logging
 import os
-from prefect.logging import get_run_logger
 
 class CustomFormatter(logging.Formatter):
     # Define color codes
@@ -55,6 +54,7 @@ def get_logger():
         "PREFECT__TASK_RUN_ID",
     ]
     if any(env_var in os.environ for env_var in prefect_env_vars):
+        from prefect.logging import get_run_logger
         return get_run_logger()
     else:
         logger = setup_logger(__name__)

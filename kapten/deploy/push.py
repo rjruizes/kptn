@@ -1,5 +1,4 @@
 import base64
-import boto3
 import logging
 import requests
 import subprocess
@@ -12,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def docker_push(authproxy_url=None, branch=None, image=None):
+    import boto3
     if not image:
         kap_conf = read_config()
         image = kap_conf["docker-image"]

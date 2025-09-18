@@ -11,6 +11,8 @@ dependencies = [
     "requests",
     "pydantic",
     "watchfiles",
+    "fastapi>=0.116.2",
+    "uvicorn>=0.35.0",
 ]
 
 [project.optional-dependencies]
