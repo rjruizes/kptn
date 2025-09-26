@@ -328,3 +328,5 @@ tmp/
 *.bak
 *.backup
 *.orig
+
+shared-local-instance.db
