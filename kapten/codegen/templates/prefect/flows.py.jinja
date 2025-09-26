@@ -7,7 +7,7 @@ from kapten.caching.submit import submit
 from kapten.deploy.prefect_deploy import prefect_deploy
 from kapten.deploy.storage_key import read_branch_storage_key
 from kapten.util.pipeline_config import PipelineConfig, get_storage_key
-import py_src.tasks as tasks
+import {{ py_tasks_dir }} as tasks
 
 from prefect.settings import temporary_settings, PREFECT_API_URL
 from kapten.caching.TaskStateCache import run_task

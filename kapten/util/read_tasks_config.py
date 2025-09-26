@@ -7,7 +7,9 @@ from kapten.util.logger import get_logger
 
 def read_tasks_config(tasks_yaml_path: str):
     logger = get_logger()
-    logger.info(f"Reading tasks config from {tasks_yaml_path}")
+    logger.debug(f"Reading tasks config from {tasks_yaml_path}")
+    if not Path(tasks_yaml_path).exists():
+        raise FileNotFoundError(f"Tasks config file {tasks_yaml_path} not found; cwd={Path.cwd()}")
     with open(tasks_yaml_path) as f:
         return yaml.load(f, Loader=yaml.FullLoader)
 

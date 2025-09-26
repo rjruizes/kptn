@@ -6,8 +6,9 @@ from string import Template
 from kapten.caching.r_imports import get_file_list, hash_r_files
 from kapten.util.hash import hash_file, hash_obj
 from kapten.util.read_tasks_config import read_tasks_configs
+from kapten.util.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 var_pattern = re.compile(r"\$\{([a-zA-Z0-9\-_\.]+)\}")
 
 class Hasher:
@@ -42,7 +43,7 @@ class Hasher:
                     matching_r_scripts.append(r_script_path)
                     matching_r_dir = r_dir
         if len(matching_r_scripts) == 0:
-            raise FileNotFoundError(f"No R script {filename} not found in {self.r_dirs}")
+            raise FileNotFoundError(f"No R script {filename} not found in {self.r_dirs}; cwd={Path.cwd()}")
         return matching_r_scripts, matching_r_dir
 
     def get_task_filelist(self, task: dict) -> list[str]:
@@ -67,6 +68,8 @@ class Hasher:
             py_script_path = Path(py_dir) / filename
             if py_script_path.exists():
                 return py_script_path
+            else:
+                print(f"Debug: {py_script_path} does not exist; cwd={Path.cwd()}")
         raise FileNotFoundError(f"Python script {filename} not found in {self.py_dirs}")
 
     def build_py_code_hashes(self, name: str, task: dict = None) -> str:

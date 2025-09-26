@@ -41,7 +41,7 @@ def setup_logger(logger_name):
 
     logger.addHandler(handler)
     logger.propagate = False
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     logger_initialized = True
     return logger
 

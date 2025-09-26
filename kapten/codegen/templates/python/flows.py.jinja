@@ -1,0 +1,49 @@
+{% import "macros.jinja" as macros %}
+import sys
+from pathlib import Path
+from typing import Literal, Never
+
+from kapten.caching.submit import submit
+from kapten.deploy.storage_key import read_branch_storage_key
+from kapten.util.pipeline_config import PipelineConfig, get_storage_key
+
+# Add the tasks directory to sys.path to enable imports
+tasks_path = Path(__file__).parent / "{{ rel_py_tasks_dir }}"
+if tasks_path.parent not in [Path(p) for p in sys.path]:
+    sys.path.insert(0, str(tasks_path.parent))
+import {{ rel_py_tasks_dir.split('/')[-1] }} as tasks
+
+from kapten.caching.TaskStateCache import run_task
+from kapten.deploy.push import docker_push
+from kapten.watcher.stacks import get_stack_endpoints
+
+TaskListChoices = list[Literal[{% for name in task_names -%}"{{name}}",{% endfor %}]]|list[Never]
+
+def {{pipeline_name}}(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
+    {% for name in task_names -%}
+    {# {{ macros.submit(name, tasks_dict[name] or {}, deps_lookup[name]) }} #}
+    {{ macros.submit(name, tasks_dict[name] or {}, deps_lookup[name]) }}
+    {%- endfor %}
+
+
+if __name__ == "__main__":
+    {# 
+    IMAGE=image,
+    BRANCH=branch,
+    STORAGE_KEY=possible_storage_key,
+    PIPELINE_NAME="srs",
+    PY_MODULE_PATH=tasks.__name__,
+    R_TASKS_DIR_PATH="/code",
+        #}
+    tasks_config_path = Path(__file__).parent / "{{ rel_tasks_conf_path }}"
+    pipeline_config = PipelineConfig(
+        TASKS_CONFIG_PATH=str(tasks_config_path),
+        PIPELINE_NAME="{{pipeline_name}}",
+        PY_MODULE_PATH=tasks.__name__,{% if r_tasks_dir %}
+        R_TASKS_DIR_PATH=str(Path(__file__).parent / "{{ rel_r_tasks_dir }}"),{% endif %}
+    )
+    {{pipeline_name}}(pipeline_config)
+    {# if len(sys.argv) < 2:
+        print("Usage: uv run py_src/{{pipeline_name}}.py <stack_name>")
+        sys.exit(1) #}
+    
