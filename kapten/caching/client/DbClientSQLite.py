@@ -1,10 +1,9 @@
 
 import os
-import sqlite3
 import datetime
 from typing import Any, Dict, List, Optional
 from kapten.caching.client.DbClientBase import DbClientBase
-from kapten.caching.client.sqlite import init_database, get_connection
+from kapten.caching.client.sqlite import get_connection
 from kapten.caching.client.sqlite.create_task import (
     create_task,
     get_single_task,

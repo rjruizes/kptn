@@ -34,6 +34,8 @@ def relative_path_from_flows_dir_to_r_tasks_dir(kap_conf):
     so that the generated flows can find the R tasks
     (e.g. "../../r_tasks")
     """
+    if 'r-tasks-dir' not in kap_conf:
+        return None
     flows_dir = Path(kap_conf['flows-dir'])
     r_tasks_dir = Path(kap_conf['r-tasks-dir'])
     return path.relpath(r_tasks_dir, flows_dir)
@@ -66,7 +68,7 @@ def generate_files(graph: str = None):
             tasks_dict=tasks_dict,
             deps_lookup=deps_lookup,
             py_tasks_dir=kap_conf['py-tasks-dir'],
-            r_tasks_dir=kap_conf['r-tasks-dir'],
+            r_tasks_dir=kap_conf['r-tasks-dir'] if 'r-tasks-dir' in kap_conf else None,
             rel_tasks_conf_path=relative_path_from_flows_dir_to_tasks_conf_path(kap_conf),
             rel_py_tasks_dir=relative_path_from_flows_dir_to_py_tasks_dir(kap_conf),
             rel_r_tasks_dir=relative_path_from_flows_dir_to_r_tasks_dir(kap_conf)

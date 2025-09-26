@@ -50,9 +50,9 @@ class TaskStateCache():
             self = super(TaskStateCache, cls).__new__(cls)
             self.pipeline_config = pipeline_config
             storage_key = get_storage_key(pipeline_config)
-            self.db_client = db_client or init_db_client(table_name=os.getenv("DYNAMODB_TABLE_NAME", "tasks"), storage_key=storage_key, pipeline=pipeline_config.PIPELINE_NAME)
             self.pipeline_name = pipeline_config.PIPELINE_NAME
             self.tasks_config = tasks_config or read_tasks_config(pipeline_config.TASKS_CONFIG_PATH)
+            self.db_client = db_client or init_db_client(table_name=os.getenv("DYNAMODB_TABLE_NAME", "tasks"), storage_key=storage_key, pipeline=pipeline_config.PIPELINE_NAME, tasks_config=self.tasks_config)
             self.r_tasks_dir = pipeline_config.R_TASKS_DIR_PATH
             py_tasks_dir = Path(pipeline_config.TASKS_CONFIG_PATH).parent / pipeline_config.PY_MODULE_PATH.replace(".", os.sep)
             self.hasher = Hasher(
