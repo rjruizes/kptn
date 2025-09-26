@@ -5,8 +5,6 @@ from typing import Optional
 import json
 import yaml
 from kapten.codegen.codegen import generate_files
-from kapten.dockerbuild.dockerbuild import docker_api_server
-from kapten.filewatcher.filewatcher import start_watching
 from kapten.read_config import read_config
 
 app = typer.Typer()
@@ -36,6 +34,7 @@ def serve_docker(
     """
     Start a docker API server to allow the UI to trigger building and pushing docker images
     """
+    from kapten.dockerbuild.dockerbuild import docker_api_server
     if project_dir:
         original_dir = os.getcwd()
         os.chdir(project_dir)
@@ -53,6 +52,7 @@ def watch_files(
     """
     Start a file watcher to monitor for changes in the code and send updates to the UI
     """
+    from kapten.filewatcher.filewatcher import start_watching
     if project_dir:
         original_dir = os.getcwd()
         os.chdir(project_dir)

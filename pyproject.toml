@@ -3,21 +3,23 @@ name = "kapten"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12.5",
     "pyyaml",
     "jinja2",
     "requests",
     "pydantic",
-    "watchfiles",
-    "fastapi>=0.116.2",
-    "uvicorn>=0.35.0",
 ]
 
 [project.optional-dependencies]
 aws = ["boto3"]
 prefect = ["prefect"]
+web = [
+    "watchfiles",
+    "fastapi>=0.116.2",
+    "uvicorn>=0.35.0"]
+
 
 [project.scripts]
 kapten = "kapten.cli:app"
