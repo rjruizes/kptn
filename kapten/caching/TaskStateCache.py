@@ -367,7 +367,7 @@ class TaskStateCache():
             outputs_version=str(output_hashes) if output_hashes else None,
             input_hashes=str(input_file_hashes) if input_file_hashes else None,
             input_data_hashes=str(input_data_hashes) if input_data_hashes else None,
-            UpdatedAt=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
         )
         if status:
             final_state.status = status

@@ -230,7 +230,8 @@ class DbClientSQLite(DbClientBase):
 
     def update_task(self, task_name: str, task: TaskState):
         """Update a task with new data."""
-        raw_task = task.model_dump(exclude_none=True)
+        # Exclude computed fields since they don't exist as database columns
+        raw_task = task.model_dump(exclude_none=True, exclude={'py_code_version', 'r_code_version', 'inputs_version', 'input_data_version'})
         update_task(
             self.conn,
             self.storage_key,

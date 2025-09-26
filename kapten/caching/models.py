@@ -18,7 +18,7 @@ class TaskState(BaseModel):
     subtask_count: int = None
     taskdata_count: int = None
     subset_count: int = None
-    UpdatedAt: str = None
+    updated_at: str = None
 
     @computed_field
     def py_code_version(self) -> str | None:
