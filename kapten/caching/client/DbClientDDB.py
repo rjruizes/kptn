@@ -5,15 +5,17 @@ import json
 import datetime
 from typing import Any, Dict, List
 from kapten.caching.client.DbClientBase import DbClientBase
-from kapten.caching.client.create_subtaskbin import create_subtaskbin
-from kapten.caching.client.create_task import create_task
-from kapten.caching.client.create_taskdatabin import create_taskdatabin
-from kapten.caching.client.get_subtaskbins import get_subtaskbins
-from kapten.caching.client.get_task import get_single_task
-from kapten.caching.client.get_taskdata import get_taskdatabins
-from kapten.caching.client.get_tasks import get_tasks_for_pipeline
-from kapten.caching.client.set_subtask_time import set_time_in_subitem_in_bin
-from kapten.caching.client.update_task import update_task
+from kapten.caching.client.dynamodb import (
+    create_subtaskbin,
+    create_task,
+    create_taskdatabin,
+    get_subtaskbins,
+    get_single_task,
+    get_taskdatabins,
+    get_tasks_for_pipeline,
+    set_time_in_subitem_in_bin,
+    update_task
+)
 from kapten.caching.models import Subtask, TaskState, taskStateAdapter, subtasksAdapter
 
 # Subitems are binned to workaround the low batch operation limit (25) of DynamoDB.
