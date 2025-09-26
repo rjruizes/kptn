@@ -30,7 +30,7 @@ class DbClientBase(BaseModel):
 
 
 def init_db_client(table_name, storage_key, pipeline) -> DbClientBase:
-    """Return a database client; DynamoDB is the only option"""
+    """Return a database client; choose between DynamoDB and SQLite based on flow type"""
 
     if is_flow_prefect():
         from kapten.caching.client.DbClientDDB import DbClientDDB
@@ -42,4 +42,4 @@ def init_db_client(table_name, storage_key, pipeline) -> DbClientBase:
         return DbClientDDB(table_name=table_name, storage_key=storage_key, pipeline=pipeline, aws_auth=aws_auth)
     else:
         from kapten.caching.client.DbClientSQLite import DbClientSQLite
-        return DbClientSQLite() #table_name=table_name, storage_key=storage_key, pipeline=pipeline
+        return DbClientSQLite(table_name=table_name, storage_key=storage_key, pipeline=pipeline)
