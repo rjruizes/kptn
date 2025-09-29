@@ -46,7 +46,7 @@ def duckdb_example(pipeline_config: PipelineConfig, task_list: TaskListChoices =
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the duckdb_example pipeline")
+    parser = argparse.ArgumentParser(description="Run the pipeline")
     parser.add_argument(
         "-f",
         "--force",

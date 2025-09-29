@@ -19,7 +19,7 @@ web = [
     "watchfiles",
     "fastapi>=0.116.2",
     "uvicorn>=0.35.0"]
-
+duckdb = ["duckdb"]
 
 [project.scripts]
 kapten = "kapten.cli:app"
