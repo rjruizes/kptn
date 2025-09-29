@@ -16,6 +16,7 @@ from kapten.caching.client.DbClientBase import DbClientBase, init_db_client
 from kapten.util.flow_type import is_flow_prefect
 from kapten.util.logger import get_logger
 from kapten.util.pipeline_config import PipelineConfig, get_storage_key
+from kapten.util.runtime_config import RuntimeConfig
 from kapten.util.rscript import r_script
 from kapten.util.read_tasks_config import read_tasks_config
 from kapten.util.hash import hash_obj
@@ -179,6 +180,15 @@ class TaskStateCache():
             return task["prefix_args"], ""
         else:
             return "", ""
+
+    def build_runtime_config(self) -> RuntimeConfig:
+        """Construct a runtime configuration for task execution."""
+        tasks_config_path = Path(self.pipeline_config.TASKS_CONFIG_PATH)
+        return RuntimeConfig.from_tasks_config(
+            self.tasks_config,
+            base_dir=tasks_config_path.parent,
+            fallback=self.pipeline_config,
+        )
 
     def get_py_func_name(self, task_name: str) -> str:
         """Return the Python function name of a task."""
@@ -437,7 +447,8 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
     module = importlib.import_module(pipeline_config.PY_MODULE_PATH)
     func_name = tscache.get_py_func_name(task_name)
     task = getattr(module, func_name)
-    result = task(pipeline_config, **kwargs)
+    runtime_config = tscache.build_runtime_config()
+    result = task(runtime_config, **kwargs)
     if key:
         tscache.db_client.set_subtask_ended(task_name, idx)
     else:
