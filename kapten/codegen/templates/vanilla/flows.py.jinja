@@ -1,4 +1,5 @@
 {% import "macros.jinja" as macros %}
+import argparse
 import sys
 from pathlib import Path
 from typing import Literal, Never
@@ -27,6 +28,15 @@ def {{pipeline_name}}(pipeline_config: PipelineConfig, task_list: TaskListChoice
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the pipeline")
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        dest="force",
+        help="Ignore cached results and force all tasks to run",
+    )
+    args, _ = parser.parse_known_args()
     {# 
     IMAGE=image,
     BRANCH=branch,
@@ -42,7 +52,7 @@ if __name__ == "__main__":
         PY_MODULE_PATH=tasks.__name__,{% if r_tasks_dir %}
         R_TASKS_DIR_PATH=str(Path(__file__).parent / "{{ rel_r_tasks_dir }}"),{% endif %}
     )
-    {{pipeline_name}}(pipeline_config)
+    {{pipeline_name}}(pipeline_config, ignore_cache=args.force)
     {# if len(sys.argv) < 2:
         print("Usage: uv run py_src/{{pipeline_name}}.py <stack_name>")
         sys.exit(1) #}

@@ -1,4 +1,5 @@
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Literal, Never
@@ -45,6 +46,15 @@ def duckdb_example(pipeline_config: PipelineConfig, task_list: TaskListChoices =
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the duckdb_example pipeline")
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        dest="force",
+        help="Ignore cached results and force all tasks to run",
+    )
+    args, _ = parser.parse_known_args()
     
     tasks_config_path = Path(__file__).parent / "kapten.yaml"
     pipeline_config = PipelineConfig(
@@ -52,6 +62,6 @@ if __name__ == "__main__":
         PIPELINE_NAME="duckdb_example",
         PY_MODULE_PATH=tasks.__name__,
     )
-    duckdb_example(pipeline_config)
+    duckdb_example(pipeline_config, ignore_cache=args.force)
     
     
