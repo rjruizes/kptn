@@ -6,19 +6,25 @@ settings:
 
 config:
   my_global: 42
-  engine: src.utils:get_engine()
+  duckdb: src.utils:get_engine()
 
 graphs:
   duckdb_example:
     tasks:
-      A:
-      B: A
+      raw_numbers:
+      B: raw_numbers
       C: B
 
 tasks:
-  A:
-    py_script: "a.py"
+  raw_numbers:
+    py_script: "raw_numbers.py"
+    outputs:
+    - duckdb://main.raw_numbers
   B:
     py_script: "b.py"
+    outputs:
+    - duckdb://main.fruit_metrics
   C:
     py_script: "c.py"
+    outputs:
+    - duckdb://main.fruit_summary

@@ -3,16 +3,24 @@
 from kapten.util.runtime_config import RuntimeConfig
 
 
-def c(runtime_config: RuntimeConfig) -> dict[str, int]:
-    """Return aggregate metrics for downstream inspection or caching."""
-    con = runtime_config.engine
-    row = con.execute(
+def c(runtime_config: RuntimeConfig) -> None:
+    """Create summary table from fruit_metrics."""
+    con = runtime_config.duckdb
+    con.execute(
         """
+        create or replace table fruit_summary as
         select
             count(*) as fruit_count,
-            sum(score) as total_score
+            sum(score) as total_score,
+            avg(score) as avg_score,
+            max(score) as max_score,
+            min(score) as min_score
         from fruit_metrics
         """
+    )
+
+    row = con.execute(
+        "select fruit_count, total_score from fruit_summary"
     ).fetchone()
 
     if row is None:
@@ -21,4 +29,3 @@ def c(runtime_config: RuntimeConfig) -> dict[str, int]:
         fruit_count, total_score = row
         summary = {"fruit_count": fruit_count, "total_score": total_score or 0}
     print(f"DuckDB summary: {summary}")
-    return summary

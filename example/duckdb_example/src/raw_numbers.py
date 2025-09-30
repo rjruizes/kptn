@@ -3,9 +3,9 @@
 from kapten.util.runtime_config import RuntimeConfig
 
 
-def a(runtime_config: RuntimeConfig) -> None:
+def raw_numbers(runtime_config: RuntimeConfig) -> None:
     """Create the raw dataset that downstream tasks will reference."""
-    con = runtime_config.engine
+    con = runtime_config.duckdb
     con.execute("drop table if exists raw_numbers")
     con.execute(
         """

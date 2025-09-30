@@ -5,7 +5,7 @@ from kapten.util.runtime_config import RuntimeConfig
 
 def b(runtime_config: RuntimeConfig) -> None:
     """Compute basic metrics from the seeded dataset."""
-    con = runtime_config.engine
+    con = runtime_config.duckdb
     con.execute(
         """
         create or replace table fruit_metrics as
