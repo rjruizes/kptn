@@ -1,11 +1,12 @@
 from datetime import datetime
+from contextlib import suppress
 import functools
 import importlib
 import logging
 import os
 import json
 from os import path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 import requests
 import time
 from pathlib import Path
@@ -19,7 +20,7 @@ from kapten.util.pipeline_config import PipelineConfig, get_storage_key
 from kapten.util.runtime_config import RuntimeConfig
 from kapten.util.rscript import r_script
 from kapten.util.read_tasks_config import read_tasks_config
-from kapten.util.hash import hash_obj
+from kapten.util.hash import hash_file, hash_obj
 
 class TaskStateCache():
     """
@@ -39,6 +40,7 @@ class TaskStateCache():
 
     PYTHON_SUFFIXES = {".py", ".pyw"}
     R_SUFFIXES = {".r"}
+    DUCKDB_SQL_SUFFIXES = {".sql"}
 
     _instance = None
 
@@ -58,7 +60,14 @@ class TaskStateCache():
             self.tasks_config = tasks_config or read_tasks_config(pipeline_config.TASKS_CONFIG_PATH)
             self.db_client = db_client or init_db_client(table_name=os.getenv("DYNAMODB_TABLE_NAME", "tasks"), storage_key=storage_key, pipeline=pipeline_config.PIPELINE_NAME, tasks_config=self.tasks_config)
             self.r_tasks_dir = pipeline_config.R_TASKS_DIR_PATH
-            py_tasks_dir = Path(pipeline_config.TASKS_CONFIG_PATH).parent / pipeline_config.PY_MODULE_PATH.replace(".", os.sep)
+            tasks_config_path = Path(pipeline_config.TASKS_CONFIG_PATH)
+            self.tasks_root_dir = tasks_config_path.parent
+            duckdb_dir_setting = self.tasks_config.get("settings", {}).get("duckdb-tasks-dir")
+            if duckdb_dir_setting:
+                self.duckdb_tasks_dir = (self.tasks_root_dir / duckdb_dir_setting).resolve()
+            else:
+                self.duckdb_tasks_dir = self.tasks_root_dir
+            py_tasks_dir = self.tasks_root_dir / pipeline_config.PY_MODULE_PATH.replace(".", os.sep)
             self.runtime_config = self.build_runtime_config()
             self.hasher = Hasher(
                 py_dirs=[py_tasks_dir],
@@ -68,6 +77,8 @@ class TaskStateCache():
                 runtime_config=self.runtime_config,
             )
             self.logger = get_logger()
+            self._duckdb_sql_functions: dict[str, Callable[..., object]] = {}
+            self._python_tasks_module = None
         return self
 
     def __str__(self):
@@ -163,6 +174,8 @@ class TaskStateCache():
             return "python"
         if suffix in self.R_SUFFIXES:
             return "r"
+        if suffix in self.DUCKDB_SQL_SUFFIXES:
+            return "duckdb_sql"
         raise ValueError(
             f"Task '{task_name}' has unsupported file suffix '{suffix}' for file '{file_path}'"
         )
@@ -174,6 +187,13 @@ class TaskStateCache():
         """Check if the task is an R script."""
         return self._get_task_language(task_name, task) == "r"
 
+    def is_duckdb_sql_task(self, task_name: str, task: dict | None = None) -> bool:
+        """Check if the task is backed by a DuckDB SQL script."""
+        try:
+            return self._get_task_language(task_name, task) == "duckdb_sql"
+        except ValueError:
+            return False
+
     def _as_python_task_spec(self, task_name: str, task: dict) -> dict:
         python_file, python_function = self._parse_file_spec(task_name, task)
         spec = {**task, "py_script": python_file}
@@ -183,6 +203,111 @@ class TaskStateCache():
 
     def _as_r_task_spec(self, task_name: str, task: dict) -> dict:
         return {**task, "r_script": self._get_task_file(task_name, task)}
+
+    def _resolve_duckdb_sql_path(self, task_name: str, task: dict | None = None) -> Path:
+        if task is None:
+            task = self.get_task(task_name)
+        script_location = self._get_task_file(task_name, task)
+        candidate_path = Path(script_location)
+        if candidate_path.is_absolute():
+            resolved = candidate_path
+        else:
+            search_dirs: list[Path] = []
+            if self.duckdb_tasks_dir:
+                search_dirs.append(Path(self.duckdb_tasks_dir))
+            if self.tasks_root_dir not in search_dirs:
+                search_dirs.append(self.tasks_root_dir)
+            resolved = None
+            for base_dir in search_dirs:
+                potential = (base_dir / candidate_path).resolve()
+                if potential.exists():
+                    resolved = potential
+                    break
+            if resolved is None:
+                searched = ", ".join(str(directory) for directory in search_dirs if directory)
+                raise FileNotFoundError(
+                    f"DuckDB SQL file '{script_location}' for task '{task_name}' not found (searched: {searched or 'n/a'})"
+                )
+        if not resolved.exists():
+            raise FileNotFoundError(
+                f"DuckDB SQL file '{script_location}' for task '{task_name}' not found at {resolved}"
+            )
+        return resolved
+
+    def _build_duckdb_sql_hashes(self, task_name: str, task: dict | None = None) -> list[dict[str, str]]:
+        script_path = self._resolve_duckdb_sql_path(task_name, task)
+        digest = hash_file(str(script_path))
+        relative_path = str(script_path)
+        with suppress(ValueError):
+            relative_path = str(script_path.relative_to(self.tasks_root_dir))
+        return [{"file": relative_path, "hash": digest}]
+
+    def _ensure_duckdb_sql_callable(self, task_name: str) -> Callable[[RuntimeConfig], object]:
+        cached = self._duckdb_sql_functions.get(task_name)
+        if cached is not None:
+            return cached
+
+        task = self.get_task(task_name)
+        script_path = self._resolve_duckdb_sql_path(task_name, task)
+        script_dir = script_path.parent
+        logger = self.logger
+
+        def duckdb_sql_runner(runtime_config: RuntimeConfig, **kwargs):
+            conn = getattr(runtime_config, "duckdb", None)
+            if conn is None:
+                raise RuntimeError(
+                    f"Task '{task_name}' requires a DuckDB connection named 'duckdb' in the runtime configuration"
+                )
+
+            if kwargs:
+                logger.debug(
+                    "DuckDB SQL task %s received keyword args %s; they are ignored by the runner",
+                    task_name,
+                    list(kwargs.keys()),
+                )
+
+            previous_search_path: str | None = None
+            with suppress(Exception):
+                row = conn.execute("SELECT current_setting('file_search_path')").fetchone()
+                if row:
+                    previous_search_path = row[0]
+
+            try:
+                conn.execute("SET file_search_path = ?", [str(script_dir)])
+                sql = script_path.read_text(encoding="utf-8")
+                logger.info("Executing DuckDB SQL script %s for task %s", script_path, task_name)
+                conn.execute(sql)
+            finally:
+                if previous_search_path is not None:
+                    with suppress(Exception):
+                        conn.execute("SET file_search_path = ?", [previous_search_path])
+                else:
+                    with suppress(Exception):
+                        conn.execute("RESET file_search_path")
+
+        duckdb_sql_runner.__name__ = task_name
+        self._duckdb_sql_functions[task_name] = duckdb_sql_runner
+        return duckdb_sql_runner
+
+    def _get_python_tasks_module(self):
+        if not self.pipeline_config.PY_MODULE_PATH:
+            raise ValueError("Pipeline configuration missing PY_MODULE_PATH for python tasks")
+        if self._python_tasks_module is None:
+            self._python_tasks_module = importlib.import_module(self.pipeline_config.PY_MODULE_PATH)
+        return self._python_tasks_module
+
+    def get_python_callable(self, task_name: str):
+        """Return the Python callable for a task, creating one for DuckDB SQL tasks if needed."""
+        module = self._get_python_tasks_module()
+        if hasattr(module, task_name):
+            return getattr(module, task_name)
+        if self.is_duckdb_sql_task(task_name):
+            duckdb_callable = self._ensure_duckdb_sql_callable(task_name)
+            setattr(module, task_name, duckdb_callable)
+            return duckdb_callable
+        raise AttributeError(
+            f"Task '{task_name}' not found in module '{self.pipeline_config.PY_MODULE_PATH}'"
+        )
 
     def task_returns_list(self, task_name: str) -> bool:
         """Check if the task is a mapped task."""
@@ -340,6 +465,7 @@ class TaskStateCache():
         cached_state = self.fetch_state(task_name)
         is_r_task = self.is_rscript(task_name, task)
         is_python_task = self.is_python_task(task_name, task)
+        is_duckdb_sql_task = self.is_duckdb_sql_task(task_name, task)
         r_task_spec = self._as_r_task_spec(task_name, task) if is_r_task else None
         py_task_spec = self._as_python_task_spec(task_name, task) if is_python_task else None
         r_code_hashes = (
@@ -352,6 +478,13 @@ class TaskStateCache():
             if is_python_task
             else None
         )
+        duckdb_sql_code_hashes = (
+            self._build_duckdb_sql_hashes(task_name, task)
+            if is_duckdb_sql_task
+            else None
+        )
+        if duckdb_sql_code_hashes is not None:
+            py_code_hashes = duckdb_sql_code_hashes
         deployment_name = (
             f"{run_task.__name__.replace('_', '-')}/{self.pipeline_config.PIPELINE_NAME}-RunTask-{storage_key}"
         )
@@ -368,6 +501,8 @@ class TaskStateCache():
             reason = "R code changed"
         elif is_python_task and self.py_code_changed(py_code_hashes, cached_state):
             reason = f"Python code changed: {py_code_hashes} != {cached_state.py_code_hashes}"
+        elif is_duckdb_sql_task and self.py_code_changed(py_code_hashes, cached_state):
+            reason = "DuckDB SQL changed"
         else:
             dep_states = self.get_dep_states(task_name)
             if self.inputs_changed(self.get_input_hashes(task_name, dep_states), cached_state):
@@ -418,7 +553,7 @@ class TaskStateCache():
             start_time=datetime.now().isoformat(),
         )
         task = self.get_task(task_name)
-        if self.is_python_task(task_name, task) and self.pipeline_config.SUBSET_MODE:
+        if (self.is_python_task(task_name, task) or self.is_duckdb_sql_task(task_name, task)) and self.pipeline_config.SUBSET_MODE:
             # When in subset mode, only create the task if it doesn't exist
             if not self.db_client.get_task(task_name):
                 self.db_client.create_task(task_name, initial_state)
@@ -439,6 +574,7 @@ class TaskStateCache():
         # recompute the hashes to ensure they are up-to-date
         is_r_task = self.is_rscript(task_name, task)
         is_python_task = self.is_python_task(task_name, task)
+        is_duckdb_sql_task = self.is_duckdb_sql_task(task_name, task)
         r_task_spec = self._as_r_task_spec(task_name, task) if is_r_task else None
         py_task_spec = self._as_python_task_spec(task_name, task) if is_python_task else None
 
@@ -452,6 +588,8 @@ class TaskStateCache():
             if is_python_task
             else None
         )
+        if is_duckdb_sql_task:
+            py_code_hashes = self._build_duckdb_sql_hashes(task_name, task)
 
         final_state = TaskState(
             r_code_hashes=str(r_code_hashes) if r_code_hashes else None,
@@ -526,11 +664,9 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
         for arg_name, arg_value in func_args.items():
             if arg_name not in kwargs:
                 kwargs[arg_name] = arg_value
-    module = importlib.import_module(pipeline_config.PY_MODULE_PATH)
-    func_name = task_name
-    task = getattr(module, func_name)
     runtime_config = tscache.build_runtime_config()
-    result = task(runtime_config, **kwargs)
+    task_callable = tscache.get_python_callable(task_name)
+    result = task_callable(runtime_config, **kwargs)
     if key:
         tscache.db_client.set_subtask_ended(task_name, idx)
     else:

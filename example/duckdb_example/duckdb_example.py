@@ -18,23 +18,21 @@ from kapten.caching.TaskStateCache import run_task
 from kapten.deploy.push import docker_push
 from kapten.watcher.stacks import get_stack_endpoints
 
-TaskListChoices = list[Literal["raw_numbers_fn","fruit_metrics_fn","fruit_summary",]]|list[Never]
+TaskListChoices = list[Literal["raw_numbers","fruit_metrics","fruit_summary",]]|list[Never]
 
 def duckdb_example(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
     
-    _raw_numbers_fn = submit(
-        "raw_numbers_fn",
+    _raw_numbers = submit(
+        "raw_numbers",
         pipeline_config,
         task_list,
-        ignore_cache,
-        tasks.raw_numbers_fn
+        ignore_cache
     )
-    _fruit_metrics_fn = submit(
-        "fruit_metrics_fn",
+    _fruit_metrics = submit(
+        "fruit_metrics",
         pipeline_config,
         task_list,
-        ignore_cache,
-        tasks.fruit_metrics_fn
+        ignore_cache
     )
     _fruit_summary = submit(
         "fruit_summary",

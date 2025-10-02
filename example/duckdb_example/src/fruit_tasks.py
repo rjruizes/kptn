@@ -1,40 +1,6 @@
 from kapten.util.runtime_config import RuntimeConfig
 
 
-def raw_numbers_fn(runtime_config: RuntimeConfig) -> None:
-    """Create the raw dataset that downstream tasks will reference."""
-    con = runtime_config.duckdb
-    con.execute("drop table if exists raw_numbers")
-    con.execute(
-        """
-        create table raw_numbers as
-        select * from (
-            values
-                (1, 'apple'),
-                (2, 'banana'),
-                (3, 'cherry'),
-                (4, 'dragonfruit'),
-                (5, 'elderberry')
-        ) as t(id, fruit)
-        """
-    )
-
-def fruit_metrics_fn(runtime_config: RuntimeConfig) -> None:
-    """Compute basic metrics from the seeded dataset."""
-    con = runtime_config.duckdb
-    con.execute(
-        """
-        create or replace table fruit_metrics as
-        select
-            id,
-            fruit,
-            length(fruit) as name_length,
-            id * 10 as score
-        from raw_numbers
-        order by id
-        """
-    )
-
 def fruit_summary(runtime_config: RuntimeConfig) -> None:
     """Create summary table from fruit_metrics."""
     con = runtime_config.duckdb
