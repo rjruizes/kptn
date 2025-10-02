@@ -22,8 +22,8 @@ TaskListChoices = list[Literal[{% for name in task_names -%}"{{name}}",{% endfor
 
 def {{pipeline_name}}(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
     {% for name in task_names -%}
-    {# {{ macros.submit(name, tasks_dict[name] or {}, deps_lookup[name]) }} #}
-    {{ macros.submit(name, tasks_dict[name] or {}, deps_lookup[name]) }}
+    {# {{ macros.submit(name, deps_lookup[name], python_task_names) }} #}
+    {{ macros.submit(name, deps_lookup[name], python_task_names) }}
     {%- endfor %}
 
 

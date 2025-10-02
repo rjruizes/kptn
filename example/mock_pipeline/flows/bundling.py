@@ -1,4 +1,5 @@
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Literal, Never
@@ -33,11 +34,20 @@ def bundling(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], i
         pipeline_config,
         task_list,
         ignore_cache,
-        tasks.combo_process
+        tasks.combo_process_bundle
     )
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the pipeline")
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        dest="force",
+        help="Ignore cached results and force all tasks to run",
+    )
+    args, _ = parser.parse_known_args()
     
     tasks_config_path = Path(__file__).parent / "../kapten.yaml"
     pipeline_config = PipelineConfig(
@@ -46,6 +56,6 @@ if __name__ == "__main__":
         PY_MODULE_PATH=tasks.__name__,
         R_TASKS_DIR_PATH=str(Path(__file__).parent / "../r_tasks"),
     )
-    bundling(pipeline_config)
+    bundling(pipeline_config, ignore_cache=args.force)
     
     

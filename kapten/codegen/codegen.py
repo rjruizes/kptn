@@ -8,6 +8,42 @@ from kapten.codegen.lib.setup_jinja_env import debug
 from kapten.util.filepaths import py_dir, codegen_dir
 from kapten.util.read_tasks_config import read_tasks_config
 
+PYTHON_FILE_SUFFIXES = {".py", ".pyw"}
+
+
+def is_python_task(task_config: dict) -> bool:
+    file_value = task_config.get("file")
+    if not file_value:
+        return False
+    file_path, _, _ = file_value.partition(":")
+    return Path(file_path).suffix.lower() in PYTHON_FILE_SUFFIXES
+
+
+def parse_python_task_spec(task_name: str, task_config: dict) -> dict | None:
+    file_value = task_config.get("file")
+    if not file_value:
+        return None
+    if ":" in file_value:
+        file_path, func_name = file_value.rsplit(":", 1)
+    else:
+        file_path, func_name = file_value, None
+    file_path = file_path.strip()
+    if not file_path:
+        return None
+    suffix = Path(file_path).suffix.lower()
+    if suffix not in PYTHON_FILE_SUFFIXES:
+        return None
+    func_name = func_name.strip() if func_name and func_name.strip() else task_name
+    module_path = file_path
+    if suffix:
+        module_path = module_path[: -len(suffix)]
+    module_path = module_path.replace("/", ".").replace("\\", ".")
+    return {
+        "module": module_path,
+        "function": func_name,
+        "file_path": file_path,
+    }
+
 def relative_path_from_flows_dir_to_tasks_conf_path(kap_conf):
     """
     Get the relative path from the flows dir to the tasks.yaml file
@@ -54,6 +90,12 @@ def generate_files(graph: str = None):
     conf = read_tasks_config(root_dir / tasks_conf_path)
     environment.filters['debug'] = debug
     tasks_dict = conf['tasks']
+    python_task_specs = {}
+    for name, task in tasks_dict.items():
+        spec = parse_python_task_spec(name, task)
+        if spec:
+            python_task_specs[name] = spec
+    python_task_names = list(python_task_specs.keys())
     if graph:
         graphs = {graph: conf['graphs'][graph]}
     else:
@@ -71,7 +113,9 @@ def generate_files(graph: str = None):
             r_tasks_dir=kap_conf['r-tasks-dir'] if 'r-tasks-dir' in kap_conf else None,
             rel_tasks_conf_path=relative_path_from_flows_dir_to_tasks_conf_path(kap_conf),
             rel_py_tasks_dir=relative_path_from_flows_dir_to_py_tasks_dir(kap_conf),
-            rel_r_tasks_dir=relative_path_from_flows_dir_to_r_tasks_dir(kap_conf)
+            rel_r_tasks_dir=relative_path_from_flows_dir_to_r_tasks_dir(kap_conf),
+            python_task_names=python_task_names,
+            python_task_specs=python_task_specs,
         )
         output_file = path.join(flows_dir, f'{graph_name}.py')
         with open(output_file, 'w') as f:
@@ -79,7 +123,12 @@ def generate_files(graph: str = None):
 
     # Write tasks/__init__.py file
     task_names = list(tasks_dict.keys())
-    rendered = environment.get_template('tasks_init.py.jinja').render(task_names=task_names, tasks_dict=tasks_dict)
+    rendered = environment.get_template('tasks_init.py.jinja').render(
+        task_names=task_names,
+        tasks_dict=tasks_dict,
+        python_task_names=python_task_names,
+        python_task_specs=python_task_specs,
+    )
     # output_file = path.join(py_dir, 'tasks', '__init__.py')
     output_file = root_dir / kap_conf['py-tasks-dir'] / '__init__.py'
     with open(output_file, 'w') as f:

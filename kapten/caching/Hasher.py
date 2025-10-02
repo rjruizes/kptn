@@ -341,11 +341,11 @@ class Hasher:
         if task is None:
             task = self.get_task(name)
         # If task["py_script"] is a string, use it as the filename
-        filename = task["py_script"] if type(task["py_script"]) == str else name + ".py"
+        filename = task["py_script"] if isinstance(task.get("py_script"), str) else name + ".py"
         full_path = self.get_full_py_script_path(filename)
         logger.info(f"Building Python code hashes for {name}, path: {full_path}")
         analyzer = self._get_py_function_analyzer()
-        function_name = name
+        function_name = task.get("py_function") or name
         try:
             return analyzer.build_function_hashes(full_path, function_name)
         except Exception as exc:

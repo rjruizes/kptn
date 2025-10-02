@@ -17,14 +17,14 @@ graphs:
 
 tasks:
   raw_numbers_fn:
-    py_script: fruit_tasks.py
+    file: fruit_tasks.py
     outputs:
     - duckdb://main.raw_numbers
   fruit_metrics_fn:
-    py_script: fruit_tasks.py
+    file: fruit_tasks.py
     outputs:
     - duckdb://main.fruit_metrics
   fruit_summary:
-    py_script: fruit_tasks.py
+    file: fruit_tasks.py
     outputs:
     - duckdb://main.fruit_summary

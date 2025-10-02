@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from kapten.caching.Hasher import Hasher
-from kapten.caching.models import Subtask, TaskState
+from kapten.caching.models import TaskState
 from kapten.caching.client.DbClientBase import DbClientBase, init_db_client
 from kapten.util.flow_type import is_flow_prefect
 from kapten.util.logger import get_logger
@@ -36,6 +36,9 @@ class TaskStateCache():
     db_client: DbClientBase
     hasher: Hasher
     logger: Union[logging.Logger, logging.LoggerAdapter]
+
+    PYTHON_SUFFIXES = {".py", ".pyw"}
+    R_SUFFIXES = {".r"}
 
     _instance = None
 
@@ -115,9 +118,10 @@ class TaskStateCache():
 
     def get_task_rscript_path(self, name: str):
         task = self.get_task(name)
-        if "r_script" not in task:
-            task["r_script"] = path.join(name, "run.R")
-        r_script_path = path.join(self.r_tasks_dir, task["r_script"])
+        if not self.is_rscript(name, task):
+            raise ValueError(f"Task '{name}' is not an R task")
+        file_value = self._get_task_file(name, task)
+        r_script_path = path.join(self.r_tasks_dir, file_value)
         return r_script_path
 
     def should_cache_result(self, task_name: str) -> bool:
@@ -130,9 +134,55 @@ class TaskStateCache():
         task = self.get_task(task_name)
         return task.get("main_flow") == True
 
-    def is_rscript(self, task_name: str) -> bool:
+    def _parse_file_spec(self, task_name: str, task: dict | None = None) -> tuple[str, str | None]:
+        if task is None:
+            task = self.get_task(task_name)
+        file_value = task.get("file")
+        if not file_value:
+            raise KeyError(f"Task '{task_name}' is missing required 'file' field")
+        if ":" in file_value:
+            file_path, func_name = file_value.rsplit(":", 1)
+        else:
+            file_path, func_name = file_value, None
+        file_path = file_path.strip()
+        func_name = func_name.strip() if func_name and func_name.strip() else None
+        return file_path, func_name
+
+    def _get_task_file(self, task_name: str, task: dict | None = None) -> str:
+        file_path, _ = self._parse_file_spec(task_name, task)
+        return file_path
+
+    def _get_task_function(self, task_name: str, task: dict | None = None) -> str | None:
+        _, func_name = self._parse_file_spec(task_name, task)
+        return func_name
+
+    def _get_task_language(self, task_name: str, task: dict | None = None) -> str:
+        file_path = self._get_task_file(task_name, task)
+        suffix = Path(file_path).suffix.lower()
+        if suffix in self.PYTHON_SUFFIXES:
+            return "python"
+        if suffix in self.R_SUFFIXES:
+            return "r"
+        raise ValueError(
+            f"Task '{task_name}' has unsupported file suffix '{suffix}' for file '{file_path}'"
+        )
+
+    def is_python_task(self, task_name: str, task: dict | None = None) -> bool:
+        return self._get_task_language(task_name, task) == "python"
+
+    def is_rscript(self, task_name: str, task: dict | None = None) -> bool:
         """Check if the task is an R script."""
-        return "r_script" in self.get_task(task_name)
+        return self._get_task_language(task_name, task) == "r"
+
+    def _as_python_task_spec(self, task_name: str, task: dict) -> dict:
+        python_file, python_function = self._parse_file_spec(task_name, task)
+        spec = {**task, "py_script": python_file}
+        if python_function:
+            spec["py_function"] = python_function
+        return spec
+
+    def _as_r_task_spec(self, task_name: str, task: dict) -> dict:
+        return {**task, "r_script": self._get_task_file(task_name, task)}
 
     def task_returns_list(self, task_name: str) -> bool:
         """Check if the task is a mapped task."""
@@ -195,10 +245,14 @@ class TaskStateCache():
     def get_py_func_name(self, task_name: str) -> str:
         """Return the Python function name of a task."""
         task = self.get_task(task_name)
-        if type(task["py_script"]) == str:
-            return task["py_script"].split(".")[0]
-        else:
+        if not self.is_python_task(task_name, task):
             return task_name
+        func_name = self._get_task_function(task_name, task)
+        if func_name:
+            return func_name
+        file_path = self._get_task_file(task_name, task)
+        stem = Path(file_path).stem
+        return stem or task_name
 
     def get_py_func_args(self, task_name: str) -> dict|None:
         """Return the args of a task."""
@@ -284,8 +338,20 @@ class TaskStateCache():
         storage_key = get_storage_key(self.pipeline_config)
         task = self.get_task(task_name)
         cached_state = self.fetch_state(task_name)
-        r_code_hashes = self.hasher.build_r_code_hashes(task_name, task) if "r_script" in task else None
-        py_code_hashes = self.hasher.build_py_code_hashes(task_name, task) if "py_script" in task else None
+        is_r_task = self.is_rscript(task_name, task)
+        is_python_task = self.is_python_task(task_name, task)
+        r_task_spec = self._as_r_task_spec(task_name, task) if is_r_task else None
+        py_task_spec = self._as_python_task_spec(task_name, task) if is_python_task else None
+        r_code_hashes = (
+            self.hasher.build_r_code_hashes(task_name, r_task_spec)
+            if is_r_task
+            else None
+        )
+        py_code_hashes = (
+            self.hasher.build_py_code_hashes(task_name, py_task_spec)
+            if is_python_task
+            else None
+        )
         deployment_name = (
             f"{run_task.__name__.replace('_', '-')}/{self.pipeline_config.PIPELINE_NAME}-RunTask-{storage_key}"
         )
@@ -298,9 +364,9 @@ class TaskStateCache():
             reason = "Subset mode"
         elif cached_state and cached_state.status == "FAILURE":
             reason = "Task previously failed all subtasks"
-        elif self.is_rscript(task_name) and self.r_code_changed(r_code_hashes, cached_state):
+        elif is_r_task and self.r_code_changed(r_code_hashes, cached_state):
             reason = "R code changed"
-        elif self.py_code_changed(py_code_hashes, cached_state):
+        elif is_python_task and self.py_code_changed(py_code_hashes, cached_state):
             reason = f"Python code changed: {py_code_hashes} != {cached_state.py_code_hashes}"
         else:
             dep_states = self.get_dep_states(task_name)
@@ -351,7 +417,8 @@ class TaskStateCache():
             ecs_task_id=ecs_task_id,
             start_time=datetime.now().isoformat(),
         )
-        if "py_script" in self.get_task(task_name) and self.pipeline_config.SUBSET_MODE:
+        task = self.get_task(task_name)
+        if self.is_python_task(task_name, task) and self.pipeline_config.SUBSET_MODE:
             # When in subset mode, only create the task if it doesn't exist
             if not self.db_client.get_task(task_name):
                 self.db_client.create_task(task_name, initial_state)
@@ -370,8 +437,21 @@ class TaskStateCache():
 
         # Since this function is called by RunTask, a separate flow from the main flow,
         # recompute the hashes to ensure they are up-to-date
-        r_code_hashes = self.hasher.build_r_code_hashes(task_name, task) if self.is_rscript(task_name) else None
-        py_code_hashes = self.hasher.build_py_code_hashes(task_name, task) if "py_script" in task else None
+        is_r_task = self.is_rscript(task_name, task)
+        is_python_task = self.is_python_task(task_name, task)
+        r_task_spec = self._as_r_task_spec(task_name, task) if is_r_task else None
+        py_task_spec = self._as_python_task_spec(task_name, task) if is_python_task else None
+
+        r_code_hashes = (
+            self.hasher.build_r_code_hashes(task_name, r_task_spec)
+            if is_r_task
+            else None
+        )
+        py_code_hashes = (
+            self.hasher.build_py_code_hashes(task_name, py_task_spec)
+            if is_python_task
+            else None
+        )
 
         final_state = TaskState(
             r_code_hashes=str(r_code_hashes) if r_code_hashes else None,

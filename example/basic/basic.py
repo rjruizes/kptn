@@ -1,4 +1,5 @@
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Literal, Never
@@ -17,26 +18,26 @@ from kapten.caching.TaskStateCache import run_task
 from kapten.deploy.push import docker_push
 from kapten.watcher.stacks import get_stack_endpoints
 
-TaskListChoices = list[Literal["A","B","C",]]|list[Never]
+TaskListChoices = list[Literal["a","b","c",]]|list[Never]
 
 def basic(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
     
-    _A = submit(
-        "A",
+    _a = submit(
+        "a",
         pipeline_config,
         task_list,
         ignore_cache,
         tasks.a
     )
-    _B = submit(
-        "B",
+    _b = submit(
+        "b",
         pipeline_config,
         task_list,
         ignore_cache,
         tasks.b
     )
-    _C = submit(
-        "C",
+    _c = submit(
+        "c",
         pipeline_config,
         task_list,
         ignore_cache,
@@ -45,6 +46,15 @@ def basic(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], igno
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the pipeline")
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        dest="force",
+        help="Ignore cached results and force all tasks to run",
+    )
+    args, _ = parser.parse_known_args()
     
     tasks_config_path = Path(__file__).parent / "kapten.yaml"
     pipeline_config = PipelineConfig(
@@ -52,6 +62,6 @@ if __name__ == "__main__":
         PIPELINE_NAME="basic",
         PY_MODULE_PATH=tasks.__name__,
     )
-    basic(pipeline_config)
+    basic(pipeline_config, ignore_cache=args.force)
     
     

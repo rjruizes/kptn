@@ -7,14 +7,14 @@ settings:
 graphs:
   basic:
     tasks:
-      A:
-      B: A
-      C: B
+      a:
+      b: a
+      c: b
 
 tasks:
-  A:
-    py_script: "a.py"
-  B:
-    py_script: "b.py"
-  C:
-    py_script: "c.py"
+  a:
+    file: a.py
+  b:
+    file: b.py
+  c:
+    file: c.py
