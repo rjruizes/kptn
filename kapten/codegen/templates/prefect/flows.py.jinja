@@ -21,9 +21,9 @@ def {{pipeline_name}}(pipeline_config: PipelineConfig, task_list: TaskListChoice
     {% for name in task_names -%}
     {# If last one, .wait() #}
     {% if loop.last -%}
-    {{ macros.submit(name, tasks_dict[name] or {}, deps_lookup[name]) }}.wait()
+    {{ macros.submit(name, deps_lookup[name], python_task_names) }}.wait()
     {%- else -%}
-    {{ macros.submit(name, tasks_dict[name] or {}, deps_lookup[name]) }}
+    {{ macros.submit(name, deps_lookup[name], python_task_names) }}
     {%- endif -%}
     {% endfor %}
 
