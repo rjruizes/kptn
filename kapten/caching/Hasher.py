@@ -1,10 +1,12 @@
+import ast
 import glob
 import hashlib
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from string import Template
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 from kapten.caching.r_imports import get_file_list, hash_r_files
 from kapten.util.hash import hash_file, hash_obj
@@ -21,6 +23,247 @@ DUCKDB_OUTPUT_PREFIX = "duckdb://"
 DUCKDB_EMPTY_SENTINEL = "duckdb-empty-table"
 DUCKDB_EMPTY_HASH = hashlib.md5(DUCKDB_EMPTY_SENTINEL.encode()).hexdigest()
 
+
+@dataclass(frozen=True)
+class FunctionRef:
+    module: str
+    name: str
+    file_path: Path
+
+    @property
+    def qualname(self) -> str:
+        if self.module:
+            return f"{self.module}.{self.name}"
+        return self.name
+
+
+class ModuleSummary:
+    def __init__(self, file_path: Path, module_name: str, source: str, tree: ast.AST):
+        self.file_path = file_path
+        self.module_name = module_name
+        self._package_parts = module_name.split(".")[:-1] if module_name else []
+        self.source = source
+        self.tree = tree
+        self.functions: dict[str, ast.AST] = {}
+        self.module_aliases: dict[str, str] = {}
+        self.symbol_aliases: dict[str, tuple[str, str]] = {}
+        self._index()
+
+    def _index(self) -> None:
+        for node in self.tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.functions[node.name] = node
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "*":  # pragma: no cover - invalid syntax, defensive
+                        continue
+                    bound_name = alias.asname or alias.name.split(".")[0]
+                    self.module_aliases[bound_name] = alias.name
+            elif isinstance(node, ast.ImportFrom):
+                if node.names and any(alias.name == "*" for alias in node.names):
+                    continue
+                module_path = self._resolve_absolute_module(node.module, node.level)
+                if module_path is None:
+                    continue
+                for alias in node.names:
+                    bound_name = alias.asname or alias.name
+                    self.symbol_aliases[bound_name] = (module_path, alias.name)
+
+    def has_function(self, name: str) -> bool:
+        return name in self.functions
+
+    def get_function(self, name: str) -> ast.AST | None:
+        return self.functions.get(name)
+
+    def iter_call_targets(self, node: ast.AST) -> Iterable[tuple[str, object]]:
+        stack = [node]
+        root_ids = {id(node)}
+        while stack:
+            current = stack.pop()
+            if id(current) not in root_ids and isinstance(
+                current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                continue
+            for child in ast.iter_child_nodes(current):
+                stack.append(child)
+            if isinstance(current, ast.Call):
+                func = current.func
+                if isinstance(func, ast.Name):
+                    yield ("name", func.id)
+                elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                    yield ("attr", (func.value.id, func.attr))
+
+    def _resolve_absolute_module(self, module: str | None, level: int) -> str | None:
+        if level == 0:
+            return module
+        if level - 1 > len(self._package_parts):
+            return None
+        base_parts = self._package_parts[: len(self._package_parts) - (level - 1)]
+        extra_parts: list[str] = []
+        if module:
+            extra_parts = [part for part in module.split(".") if part]
+        parts = base_parts + extra_parts
+        if not parts:
+            return None
+        return ".".join(parts)
+
+
+class PythonFunctionAnalyzer:
+    def __init__(self, py_dirs: list[str] | None = None):
+        self.root_dirs = [Path(d) for d in (py_dirs or [])]
+        self._module_cache: dict[Path, ModuleSummary] = {}
+        self._module_cache_by_name: dict[str, ModuleSummary] = {}
+
+    def build_function_hashes(self, file_path: Path, function_name: str) -> list[dict[str, str]]:
+        summary = self._load_module_from_path(file_path)
+        if summary is None:
+            raise FileNotFoundError(f"Unable to parse module at {file_path}")
+        if not summary.has_function(function_name):
+            raise KeyError(f"Function '{function_name}' not found in {file_path}")
+        start = FunctionRef(summary.module_name, function_name, summary.file_path)
+        closure = self._collect_closure(start)
+        digests: list[dict[str, str]] = []
+        for ref in sorted(closure, key=lambda r: (r.qualname, str(r.file_path))):
+            source = self._get_function_source(ref)
+            if source is None:
+                raise ValueError(f"Unable to extract source for {ref.qualname}")
+            digest = hashlib.sha1(source.encode()).hexdigest()
+            digests.append({"function": ref.qualname, "hash": digest})
+        return digests
+
+    def _collect_closure(self, seed: FunctionRef) -> set[FunctionRef]:
+        visited: set[FunctionRef] = set()
+        stack: list[FunctionRef] = [seed]
+        while stack:
+            ref = stack.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            summary = self._load_module_from_path(ref.file_path)
+            if summary is None:
+                continue
+            node = summary.get_function(ref.name)
+            if node is None:
+                continue
+            for kind, payload in summary.iter_call_targets(node):
+                dep = self._resolve_call_target(summary, kind, payload)
+                if dep and dep not in visited:
+                    stack.append(dep)
+        return visited
+
+    def _resolve_call_target(self, summary: ModuleSummary, kind: str, payload: object) -> FunctionRef | None:
+        if kind == "name":
+            name = payload  # type: ignore[assignment]
+            if not isinstance(name, str):
+                return None
+            if summary.has_function(name):
+                return FunctionRef(summary.module_name, name, summary.file_path)
+            symbol = summary.symbol_aliases.get(name)
+            if symbol:
+                module_name, original = symbol
+                module_summary = self._load_module_by_name(module_name)
+                if module_summary and module_summary.has_function(original):
+                    return FunctionRef(module_summary.module_name, original, module_summary.file_path)
+            return None
+        if kind == "attr":
+            if not isinstance(payload, tuple) or len(payload) != 2:
+                return None
+            base, attr = payload
+            if not isinstance(base, str) or not isinstance(attr, str):
+                return None
+            module_name = summary.module_aliases.get(base)
+            if not module_name:
+                symbol = summary.symbol_aliases.get(base)
+                if symbol:
+                    module_name = symbol[0]
+            if not module_name:
+                return None
+            module_summary = self._load_module_by_name(module_name)
+            if module_summary and module_summary.has_function(attr):
+                return FunctionRef(module_summary.module_name, attr, module_summary.file_path)
+        return None
+
+    def _get_function_source(self, ref: FunctionRef) -> str | None:
+        summary = self._load_module_from_path(ref.file_path)
+        if summary is None:
+            return None
+        node = summary.get_function(ref.name)
+        if node is None:
+            return None
+        segment = ast.get_source_segment(summary.source, node)
+        if segment is not None:
+            return segment
+        if not hasattr(node, "lineno") or not hasattr(node, "end_lineno"):
+            return None
+        lines = summary.source.splitlines(keepends=True)
+        start = getattr(node, "lineno", None)
+        end = getattr(node, "end_lineno", None)
+        if start is None or end is None:
+            return None
+        return "".join(lines[start - 1 : end])
+
+    def _load_module_by_name(self, module_name: str) -> ModuleSummary | None:
+        cached = self._module_cache_by_name.get(module_name)
+        if cached:
+            return cached
+        file_path = self._find_module_path(module_name)
+        if not file_path:
+            return None
+        summary = self._parse_module(file_path, module_name)
+        if summary:
+            self._module_cache[file_path] = summary
+            if summary.module_name:
+                self._module_cache_by_name[summary.module_name] = summary
+        return summary
+
+    def _load_module_from_path(self, file_path: Path) -> ModuleSummary | None:
+        resolved = file_path.resolve()
+        cached = self._module_cache.get(resolved)
+        if cached:
+            return cached
+        module_name = self._infer_module_name(resolved)
+        summary = self._parse_module(resolved, module_name)
+        if summary:
+            self._module_cache[resolved] = summary
+            if summary.module_name:
+                self._module_cache_by_name[summary.module_name] = summary
+        return summary
+
+    def _parse_module(self, file_path: Path, module_name: str | None) -> ModuleSummary | None:
+        try:
+            source = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):  # pragma: no cover - IO errors
+            return None
+        try:
+            tree = ast.parse(source, filename=str(file_path), type_comments=True)
+        except SyntaxError:
+            return None
+        return ModuleSummary(file_path, module_name or "", source, tree)
+
+    def _infer_module_name(self, file_path: Path) -> str | None:
+        for root in self.root_dirs:
+            try:
+                relative = file_path.relative_to(root)
+            except ValueError:
+                continue
+            if relative.stem == "__init__":
+                parts = list(relative.parent.parts)
+            else:
+                parts = list(relative.with_suffix("" ).parts)
+            return ".".join(part for part in parts if part)
+        return None
+
+    def _find_module_path(self, module_name: str) -> Path | None:
+        module_rel = Path(*module_name.split("."))
+        for root in self.root_dirs:
+            candidate = (root / module_rel).with_suffix(".py")
+            if candidate.exists():
+                return candidate.resolve()
+            init_candidate = root / module_rel / "__init__.py"
+            if init_candidate.exists():
+                return init_candidate.resolve()
+        return None
+
 class Hasher:
     def __init__(
         self,
@@ -31,12 +274,13 @@ class Hasher:
         tasks_config_paths=None,
         runtime_config=None,
     ):
-        self.r_dirs = r_dirs
-        self.py_dirs = py_dirs
+        self.r_dirs = r_dirs or []
+        self.py_dirs = py_dirs or []
         self.output_dir = output_dir
         self.tasks_config = tasks_config or read_tasks_configs(tasks_config_paths)
         self.runtime_config = runtime_config
         self._duckdb_connection = None
+        self._py_function_analyzer: PythonFunctionAnalyzer | None = None
 
     def get_task(self, name: str):
         """Return the task configuration."""
@@ -100,7 +344,15 @@ class Hasher:
         filename = task["py_script"] if type(task["py_script"]) == str else name + ".py"
         full_path = self.get_full_py_script_path(filename)
         logger.info(f"Building Python code hashes for {name}, path: {full_path}")
-        return hash_file(full_path)
+        analyzer = self._get_py_function_analyzer()
+        function_name = name
+        try:
+            return analyzer.build_function_hashes(full_path, function_name)
+        except Exception as exc:
+            logger.warning(
+                "Falling back to file hash for %s due to %s", name, exc, exc_info=False
+            )
+            return [{"function": "__file__", "hash": hash_file(full_path)}]
 
     def hash_code_for_task(self, name: str):
         task = self.get_task(name)
@@ -111,6 +363,18 @@ class Hasher:
         else:
             raise KeyError(f"Task '{name}' has no R or Python script")
         return code_hashes
+
+    def _get_py_function_analyzer(self) -> PythonFunctionAnalyzer:
+        if self._py_function_analyzer is None:
+            self._py_function_analyzer = PythonFunctionAnalyzer(self.py_dirs or [])
+        return self._py_function_analyzer
+
+    @staticmethod
+    def _infer_python_function_name(task_name: str, task: dict, filename: str) -> str:
+        script_spec = task.get("py_script")
+        if isinstance(script_spec, str):
+            return Path(filename).stem
+        return task_name
 
     def _ensure_duckdb_connection(self):
         if self.runtime_config is None:

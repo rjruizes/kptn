@@ -14,7 +14,9 @@ def cleanup():
 
 def test_Hasher_py():
     h = Hasher(py_dirs=["example/basic/src"], tasks_config_paths=["example/basic/kapten.yaml"])
-    assert type(h.hash_code_for_task("A")) == str
+    hashes = h.hash_code_for_task("A")
+    assert isinstance(hashes, list)
+    assert hashes and all("function" in item and "hash" in item for item in hashes)
 
 def test_Hasher_r():
     h = Hasher(r_dirs=["example/mock_pipeline/r_tasks"], tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
@@ -71,3 +73,28 @@ def test_Hasher_subtask_outputs(cleanup):
     h = Hasher(output_dir=scratch_dir, tasks_config_paths=[tasks_yaml_path])
     assert h.hash_subtask_outputs("write_param", { "item": "T1" }) == "80c0944ca3d675834e1b3c660601c8cc2ac34154"
     assert h.hash_subtask_outputs("write_param", { "item": "T2" }) == "f93d7eeb4966c50ce20e6774363e594821ef1757"
+
+
+def test_py_function_dependency_hashing(tmp_path):
+    pkg_root = tmp_path / "tasks"
+    pkg_root.mkdir()
+    (pkg_root / "__init__.py").write_text("")
+    (pkg_root / "helper.py").write_text(
+        "def helper() -> int:\n    return 41\n"
+    )
+    (pkg_root / "task.py").write_text(
+        "from .helper import helper\n\n"
+        "def task() -> int:\n    return helper() + 1\n"
+    )
+    tasks_config = {
+        "tasks": {
+            "task": {
+                "py_script": "task.py",
+            }
+        }
+    }
+    hasher = Hasher(py_dirs=[str(pkg_root)], tasks_config=tasks_config)
+    hashes = hasher.build_py_code_hashes("task", tasks_config["tasks"]["task"])
+    functions = {item["function"] for item in hashes}
+    assert "task.task" in functions
+    assert "helper.helper" in functions

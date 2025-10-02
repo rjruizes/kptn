@@ -5,7 +5,7 @@ from kapten.util.hash import hash_obj
 class TaskState(BaseModel):
     PK: str = None
     ecs_task_id: str = ""
-    py_code_hashes: Optional[str] = None # We hash the file of the Python task
+    py_code_hashes: Optional[Any] = None # Stored as list of function-level hashes for Python tasks
     r_code_hashes: Optional[str] = None # We hash the file tree of the R task
     input_hashes: Optional[str] = None # We fetch the output_version of each dependency
     input_data_hashes: Optional[str] = None # We fetch the output_version of each dependency

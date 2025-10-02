@@ -11,20 +11,20 @@ config:
 graphs:
   duckdb_example:
     tasks:
-      raw_numbers:
-      B: raw_numbers
-      C: B
+      raw_numbers_fn:
+      fruit_metrics_fn: raw_numbers_fn
+      fruit_summary: fruit_metrics_fn
 
 tasks:
-  raw_numbers:
-    py_script: "raw_numbers.py"
+  raw_numbers_fn:
+    py_script: fruit_tasks.py
     outputs:
     - duckdb://main.raw_numbers
-  B:
-    py_script: "b.py"
+  fruit_metrics_fn:
+    py_script: fruit_tasks.py
     outputs:
     - duckdb://main.fruit_metrics
-  C:
-    py_script: "c.py"
+  fruit_summary:
+    py_script: fruit_tasks.py
     outputs:
     - duckdb://main.fruit_summary

@@ -23,7 +23,7 @@ _{{name}} = submit(
         task_list,
         ignore_cache
         {%- if "py_script" in task_obj %},
-        tasks.{{get_py_script_func_name(task_obj, name)}}
+        tasks.{{name}}
         {%- endif %}
     )
 {%- endmacro %}

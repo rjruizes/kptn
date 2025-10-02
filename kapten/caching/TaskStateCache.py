@@ -205,7 +205,7 @@ class TaskStateCache():
         task = self.get_task(task_name)
         return task.get("args")
 
-    def py_code_changed(self, py_code_hashes: str, cached_state: TaskState = None) -> bool:
+    def py_code_changed(self, py_code_hashes, cached_state: TaskState = None) -> bool:
         """Check if the Python code of a task has changed."""
         if cached_state:
             return hash_obj(py_code_hashes) != cached_state.py_code_version
@@ -375,7 +375,7 @@ class TaskStateCache():
 
         final_state = TaskState(
             r_code_hashes=str(r_code_hashes) if r_code_hashes else None,
-            py_code_hashes=str(py_code_hashes) if py_code_hashes else None,
+            py_code_hashes=py_code_hashes if py_code_hashes else None,
             outputs_version=str(output_hashes) if output_hashes else None,
             input_hashes=str(input_file_hashes) if input_file_hashes else None,
             input_data_hashes=str(input_data_hashes) if input_data_hashes else None,
@@ -447,7 +447,7 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
             if arg_name not in kwargs:
                 kwargs[arg_name] = arg_value
     module = importlib.import_module(pipeline_config.PY_MODULE_PATH)
-    func_name = tscache.get_py_func_name(task_name)
+    func_name = task_name
     task = getattr(module, func_name)
     runtime_config = tscache.build_runtime_config()
     result = task(runtime_config, **kwargs)

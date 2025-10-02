@@ -2,8 +2,8 @@
 
 {% for task_name in task_names -%}
 {%- set task_obj = tasks_dict[task_name] -%}
-{%- set func_name = macros.get_py_script_func_name(task_obj, task_name) -%}
+{%- set script_name = macros.get_py_script_func_name(task_obj, task_name) -%}
 {%- if "py_script" in task_obj -%}
-from .{{ func_name }} import {{ func_name }}
+from .{{ script_name }} import {{ task_name }}
 {% endif -%}
 {% endfor %}
