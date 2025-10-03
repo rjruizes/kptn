@@ -1,6 +1,7 @@
 import pytest
 import os
 import tempfile
+from pathlib import Path
 from kapten.caching.client.DbClientSQLite import DbClientSQLite
 from tests.base_db_client_test import BaseDbClientTest
 
@@ -30,3 +31,26 @@ class TestSQLiteClient(BaseDbClientTest):
                 db.conn.close()
             if os.path.exists(db_path):
                 os.unlink(db_path)
+
+    def test_default_db_path_uses_kapten_directory(self, tmp_path):
+        """Ensure the sqlite file defaults to the kapten.yaml directory."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        config_path = project_dir / "kapten.yaml"
+        config_path.write_text("settings: {}")
+
+        db = DbClientSQLite(
+            table_name="tasks",
+            storage_key="branch",
+            pipeline="pipeline",
+            tasks_config_path=str(config_path),
+        )
+
+        try:
+            assert Path(db.db_path).parent == project_dir.resolve()
+        finally:
+            if hasattr(db, "conn") and db.conn:
+                db.conn.close()
+            db_file = Path(db.db_path)
+            if db_file.exists():
+                db_file.unlink()

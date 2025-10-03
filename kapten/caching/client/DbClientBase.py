@@ -27,7 +27,7 @@ class DbClientBase(BaseModel):
         pass
 
 
-def init_db_client(table_name, storage_key, pipeline, tasks_config=None) -> DbClientBase:
+def init_db_client(table_name, storage_key, pipeline, tasks_config=None, tasks_config_path=None) -> DbClientBase:
     """Return a database client; choose between DynamoDB and SQLite based on db setting in config"""
     
     # Default to DynamoDB for backwards compatibility
@@ -47,6 +47,11 @@ def init_db_client(table_name, storage_key, pipeline, tasks_config=None) -> DbCl
         return DbClientDDB(table_name=table_name, storage_key=storage_key, pipeline=pipeline, aws_auth=aws_auth)
     elif db_type == "sqlite":
         from kapten.caching.client.DbClientSQLite import DbClientSQLite
-        return DbClientSQLite(table_name=table_name, storage_key=storage_key, pipeline=pipeline)
+        return DbClientSQLite(
+            table_name=table_name,
+            storage_key=storage_key,
+            pipeline=pipeline,
+            tasks_config_path=tasks_config_path,
+        )
     else:
         raise ValueError(f"Unsupported database type: {db_type}. Supported types are: dynamodb, sqlite")

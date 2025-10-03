@@ -58,7 +58,13 @@ class TaskStateCache():
             storage_key = get_storage_key(pipeline_config)
             self.pipeline_name = pipeline_config.PIPELINE_NAME
             self.tasks_config = tasks_config or read_tasks_config(pipeline_config.TASKS_CONFIG_PATH)
-            self.db_client = db_client or init_db_client(table_name=os.getenv("DYNAMODB_TABLE_NAME", "tasks"), storage_key=storage_key, pipeline=pipeline_config.PIPELINE_NAME, tasks_config=self.tasks_config)
+            self.db_client = db_client or init_db_client(
+                table_name=os.getenv("DYNAMODB_TABLE_NAME", "tasks"),
+                storage_key=storage_key,
+                pipeline=pipeline_config.PIPELINE_NAME,
+                tasks_config=self.tasks_config,
+                tasks_config_path=pipeline_config.TASKS_CONFIG_PATH,
+            )
             self.r_tasks_dir = pipeline_config.R_TASKS_DIR_PATH
             tasks_config_path = Path(pipeline_config.TASKS_CONFIG_PATH)
             self.tasks_root_dir = tasks_config_path.parent

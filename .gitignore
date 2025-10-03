@@ -329,4 +329,4 @@ tmp/
 *.orig
 
 shared-local-instance.db
-example.db
+*.db

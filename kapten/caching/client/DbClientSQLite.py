@@ -1,6 +1,7 @@
 
 import os
 import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from kapten.caching.client.DbClientBase import DbClientBase
 from kapten.caching.client.sqlite import get_connection
@@ -56,24 +57,51 @@ class DbClientSQLite(DbClientBase):
         "extra": "allow"
     }
 
-    def __init__(self, table_name=None, storage_key=None, pipeline=None, db_path=None):
+    def __init__(self, table_name=None, storage_key=None, pipeline=None, db_path=None, tasks_config_path: Optional[str] = None):
         super().__init__()
         
         # Set instance attributes
         self.table_name = table_name
         self.storage_key = storage_key or ""
         self.pipeline = pipeline or ""
+        self.tasks_config_path = tasks_config_path
         
         # Set up database path
-        if db_path:
-            self.db_path = db_path
-        else:
-            # Use default path based on storage_key and pipeline
-            default_dir = os.path.expanduser("~/.kapten/cache")
-            self.db_path = os.path.join(default_dir, f"{storage_key}_{pipeline}.db")
+        self.db_path = self._resolve_db_path(db_path)
         
         # Initialize database connection
         self.conn = get_connection(self.db_path)
+
+    def _resolve_db_path(self, explicit_path: Optional[str]) -> str:
+        """Determine the on-disk path for the sqlite database."""
+        if explicit_path:
+            return explicit_path
+
+        default_dir = self._resolve_default_dir()
+        default_dir.mkdir(parents=True, exist_ok=True)
+
+        identifier_parts = [part for part in (self.storage_key, self.pipeline) if part]
+        if identifier_parts:
+            filename = "_".join(identifier_parts) + ".db"
+        else:
+            filename = "cache.db"
+
+        return str(default_dir / filename)
+
+    def _resolve_default_dir(self) -> Path:
+        """Find the directory where the sqlite database should live by default."""
+        candidates: List[Path] = []
+
+        if self.tasks_config_path:
+            candidates.append(Path(self.tasks_config_path))
+
+        candidates.append(Path.cwd() / "kapten.yaml")
+
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate.parent.resolve()
+
+        return Path(os.path.expanduser("~/.kapten/cache"))
 
     def create_task(self, task_name: str, task: TaskState, data=None):
         """
