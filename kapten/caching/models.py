@@ -4,8 +4,7 @@ from kapten.util.hash import hash_obj
 
 class TaskState(BaseModel):
     PK: str = None
-    py_code_hashes: Optional[Any] = None # Stored as list of function-level hashes for Python tasks
-    r_code_hashes: Optional[str] = None # We hash the file tree of the R task
+    code_hashes: Optional[Any] = None # Stores function/file-level hashes for Python, R, or SQL tasks
     input_hashes: Optional[str] = None # We fetch the output_version of each dependency
     input_data_hashes: Optional[str] = None # We fetch the output_version of each dependency
     outputs_version: Optional[str] = None # A task lists its outputs in YAML; we hash each file after running
@@ -20,12 +19,8 @@ class TaskState(BaseModel):
     updated_at: str = None
 
     @computed_field
-    def py_code_version(self) -> str | None:
-        return hash_obj(self.py_code_hashes)
-    
-    @computed_field
-    def r_code_version(self) -> str | None:
-        return hash_obj(self.r_code_hashes)
+    def code_version(self) -> str | None:
+        return hash_obj(self.code_hashes)
 
     @computed_field
     def inputs_version(self) -> str | None:

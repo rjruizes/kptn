@@ -17,10 +17,9 @@ interface RunResponse {
 
 interface TaskUpdate {
   task_name: string;
-  local_r_code_hashes: Record<string, string>[]?;
-  local_r_code_version: string?;
-  local_py_code_hashes: Record<string, string>[]?;
-  local_py_code_version: string?;
+  local_code_hashes?: Record<string, string>[];
+  local_code_version?: string;
+  code_kind?: string;
 }
 
 type Graph = {

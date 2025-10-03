@@ -33,7 +33,7 @@ def create_task(
     
     # Add task-specific fields from task_data
     for key, value in task_data.items():
-        if key in ['py_code_hashes', 'r_code_hashes', 'input_hashes', 'input_data_hashes']:
+        if key in ['code_hashes', 'input_hashes', 'input_data_hashes']:
             # Store complex objects as JSON strings
             fields[key] = json.dumps(value) if value is not None else None
         elif key in ['outputs_version', 'output_data_version', 'status', 
@@ -85,7 +85,7 @@ def get_single_task(
     task_data = dict(zip(columns, row))
     
     # Parse JSON fields back to objects
-    for field in ['py_code_hashes', 'r_code_hashes', 'input_hashes', 'input_data_hashes']:
+    for field in ['code_hashes', 'input_hashes', 'input_data_hashes']:
         if task_data.get(field):
             try:
                 task_data[field] = json.loads(task_data[field])
@@ -121,7 +121,7 @@ def update_task(
     # Handle JSON fields
     processed_updates = {}
     for key, value in updates.items():
-        if key in ['py_code_hashes', 'r_code_hashes', 'input_hashes', 'input_data_hashes']:
+        if key in ['code_hashes', 'input_hashes', 'input_data_hashes']:
             processed_updates[key] = json.dumps(value) if value is not None else None
         else:
             processed_updates[key] = value
@@ -167,7 +167,7 @@ def get_tasks_for_pipeline(
         task_data = dict(zip(columns, row))
         
         # Parse JSON fields
-        for field in ['py_code_hashes', 'r_code_hashes', 'input_hashes', 'input_data_hashes']:
+        for field in ['code_hashes', 'input_hashes', 'input_data_hashes']:
             if task_data.get(field):
                 try:
                     task_data[field] = json.loads(task_data[field])

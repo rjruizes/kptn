@@ -32,11 +32,13 @@ export const Table = () => {
   const { gridApi, onGridReady } = useGridApi();
   const setSelectedRows = useRowStore((state) => state.setRows)
   const rowData = taskList.map((task) => {
+    const codeKind = task.code_kind ?? (task.py_script ? 'Python' : 'R')
+    const langKey = codeKind === 'R' ? 'R' : 'py'
     return {
       taskName: task.taskName,
       duration: task.duration,
-      lang: {lang: task.py_script ? 'py' : 'R', filepath: task.filepath},
-      code: task.py_script ? { live: task.local_py_code_version, cached: task.py_code_version } : { live: task.local_r_code_version, cached: task.r_code_version },
+      lang: {lang: langKey, filepath: task.filepath},
+      code: { live: task.local_code_version, cached: task.code_version },
       inputFiles: { live: task.live_inputs_version, cached: task.cached_inputs_version },
       inputData: {
         live_hashes: task.live_input_data_hashes,

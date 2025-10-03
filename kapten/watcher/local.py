@@ -1,3 +1,4 @@
+import ast
 import os
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,48 @@ def ddb_resp_to_item_types(resp) -> tuple[dict, dict, dict]:
                 subtasks[task_id].append(item)
     
     return tasks, taskdata, subtasks
+
+
+def _normalize_code_hashes(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            return ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            return value
+    if isinstance(value, list):
+        normalized = []
+        for element in value:
+            if isinstance(element, dict) and len(element) == 1:
+                inner = next(iter(element.values()))
+            else:
+                inner = element
+            if isinstance(inner, str):
+                try:
+                    normalized.append(ast.literal_eval(inner))
+                    continue
+                except (ValueError, SyntaxError):
+                    pass
+            normalized.append(inner)
+        return normalized
+    return value
+
+
+def _infer_code_kind(task: dict) -> str | None:
+    if "r_script" in task:
+        return "R"
+    file_spec = task.get("file")
+    if isinstance(file_spec, str):
+        file_path = file_spec.split(":", 1)[0].strip()
+        suffix = Path(file_path).suffix.lower()
+        if suffix == ".sql":
+            return "DuckDB SQL"
+        if suffix in {".py", ".pyw"}:
+            return "Python"
+    if "py_script" in task:
+        return "Python"
+    return None
 
 def setup_clients(stack: str, pipeline_name: str, tasks_conf, authproxy_endpoint: str):
     branch = get_active_branch_name()
@@ -141,34 +184,40 @@ def enrich_tasks(stack: str, graph: str, authproxy_endpoint: str = None):
         tasks_dict[task_name]["filepath"] = str(fpath)
         
         # Now set cache-based values
+        local_code_hashes, code_kind = tscache.build_task_code_hashes(task_name, task)
+        if code_kind:
+            tasks_dict[task_name]["code_kind"] = code_kind
+        if local_code_hashes is not None:
+            tasks_dict[task_name]["local_code_hashes"] = local_code_hashes
+            tasks_dict[task_name]["local_code_version"] = hash_obj(local_code_hashes)
+
         if task_name in task_db_states:
-            if "r_code_hashes" in task_db_states[task_name]:
-                tasks_dict[task_name]["r_code_hashes"] = task_db_states[task_name]["r_code_hashes"]
-                tasks_dict[task_name]["r_code_version"] = task_db_states[task_name]["r_code_version"]
-                tasks_dict[task_name]["local_r_code_hashes"] = tscache.hasher.build_r_code_hashes(task_name, task)
-                tasks_dict[task_name]["local_r_code_version"] = hash_obj(tasks_dict[task_name]["local_r_code_hashes"])
-            elif "py_code_hashes" in task_db_states[task_name]:
-                tasks_dict[task_name]["py_code_hashes"] = task_db_states[task_name]["py_code_hashes"]
-                tasks_dict[task_name]["py_code_version"] = task_db_states[task_name]["py_code_version"]
-                tasks_dict[task_name]["local_py_code_hashes"] = tscache.hasher.build_py_code_hashes(task_name, task)
-                tasks_dict[task_name]["local_py_code_version"] = hash_obj(tasks_dict[task_name]["local_py_code_hashes"])
+            state = task_db_states[task_name]
+            cached_code_hashes = _normalize_code_hashes(state.get("code_hashes"))
+            if cached_code_hashes is not None:
+                tasks_dict[task_name]["code_hashes"] = cached_code_hashes
+                cached_version = state.get("code_version")
+                if cached_version:
+                    tasks_dict[task_name]["code_version"] = cached_version
+                else:
+                    tasks_dict[task_name]["code_version"] = hash_obj(cached_code_hashes)
             
-            if "input_hashes" in task_db_states[task_name]:
-                tasks_dict[task_name]["cached_input_hashes"] = task_db_states[task_name]["input_hashes"]
-                tasks_dict[task_name]["cached_inputs_version"] = task_db_states[task_name]["inputs_version"]
+            if "input_hashes" in state:
+                tasks_dict[task_name]["cached_input_hashes"] = state["input_hashes"]
+                tasks_dict[task_name]["cached_inputs_version"] = state["inputs_version"]
                 dep_states = tscache.get_dep_states(task_name)
                 tasks_dict[task_name]["live_input_hashes"] = tscache.get_input_hashes(task_name, dep_states)
                 tasks_dict[task_name]["live_inputs_version"] = hash_obj(tasks_dict[task_name]["live_input_hashes"])
 
-            if "outputs_version" in task_db_states[task_name]:
-                tasks_dict[task_name]["outputs_version"] = task_db_states[task_name]["outputs_version"]
+            if "outputs_version" in state:
+                tasks_dict[task_name]["outputs_version"] = state["outputs_version"]
             
             if task_name in taskdata:
                 tasks_dict[task_name]["data"] = taskdata[task_name][0]["data"]
 
-            if "input_data_hashes" in task_db_states[task_name]:
-                tasks_dict[task_name]["cached_input_data_hashes"] = task_db_states[task_name]["input_data_hashes"]
-                tasks_dict[task_name]["cached_input_data_version"] = task_db_states[task_name]["input_data_version"]
+            if "input_data_hashes" in state:
+                tasks_dict[task_name]["cached_input_data_hashes"] = state["input_data_hashes"]
+                tasks_dict[task_name]["cached_input_data_version"] = state["input_data_version"]
                 tasks_dict[task_name]["live_input_data_hashes"] = tscache.get_data_hashes(task_name)
                 tasks_dict[task_name]["live_input_data_version"] = hash_obj(tasks_dict[task_name]["live_input_data_hashes"])
 
@@ -227,11 +276,15 @@ def hash_code_for_tasks(task_names: list[str]):
         if task_name in tasks_conf["tasks"]:
             update = { "task_name": task_name }
             task = tasks_conf["tasks"][task_name]
-            if "r_script" in task:
-                update["local_r_code_hashes"] = hasher.build_r_code_hashes(task_name, task)
-                update["local_r_code_version"] = hash_obj(update["local_r_code_hashes"])
-            elif "py_script" in task:
-                update["local_py_code_hashes"] = hasher.build_py_code_hashes(task_name, task)
-                update["local_py_code_version"] = hash_obj(update["local_py_code_hashes"])
+            try:
+                local_code_hashes = hasher.hash_code_for_task(task_name)
+            except Exception:
+                local_code_hashes = None
+            if local_code_hashes is not None:
+                update["local_code_hashes"] = local_code_hashes
+                update["local_code_version"] = hash_obj(local_code_hashes)
+            code_kind = _infer_code_kind(task)
+            if code_kind:
+                update["code_kind"] = code_kind
             updates.append(update)
     return updates

@@ -248,6 +248,33 @@ class TaskStateCache():
             relative_path = str(script_path.relative_to(self.tasks_root_dir))
         return [{"file": relative_path, "hash": digest}]
 
+    def build_task_code_hashes(
+        self,
+        task_name: str,
+        task: dict,
+        *,
+        is_r_task: bool | None = None,
+        is_duckdb_sql_task: bool | None = None,
+        is_python_task: bool | None = None,
+    ) -> tuple[list[dict[str, str]] | None, str | None]:
+        if is_r_task is None:
+            is_r_task = self.is_rscript(task_name, task)
+        if is_duckdb_sql_task is None:
+            is_duckdb_sql_task = self.is_duckdb_sql_task(task_name, task)
+        if is_python_task is None:
+            is_python_task = self.is_python_task(task_name, task)
+
+        if is_r_task:
+            r_task_spec = self._as_r_task_spec(task_name, task)
+            return self.hasher.build_r_code_hashes(task_name, r_task_spec), "R"
+        if is_duckdb_sql_task:
+            return self._build_duckdb_sql_hashes(task_name, task), "DuckDB SQL"
+        if is_python_task:
+            py_task_spec = self._as_python_task_spec(task_name, task)
+            return self.hasher.build_py_code_hashes(task_name, py_task_spec), "Python"
+
+        return None, None
+
     def _ensure_duckdb_sql_callable(self, task_name: str) -> Callable[[RuntimeConfig], object]:
         cached = self._duckdb_sql_functions.get(task_name)
         if cached is not None:
@@ -390,24 +417,36 @@ class TaskStateCache():
         task = self.get_task(task_name)
         return task.get("args")
 
-    def py_code_changed(self, py_code_hashes, cached_state: TaskState = None) -> bool:
-        """Check if the Python code of a task has changed."""
-        if cached_state:
-            return hash_obj(py_code_hashes) != cached_state.py_code_version
-        else:
+    def code_changed(
+        self,
+        code_hashes,
+        cached_state: TaskState | None = None,
+        *,
+        code_kind: str | None = None,
+    ) -> bool:
+        """Check if the task code has changed."""
+        if code_hashes is None:
+            return bool(cached_state and cached_state.code_hashes)
+
+        latest_version = hash_obj(code_hashes)
+        if not cached_state:
             return True
 
-    def r_code_changed(self, r_code_hashes: str, cached_state: TaskState = None) -> bool:
-        """Check if the R code of a task has changed."""
-        if cached_state:
-            local_version = hash_obj(r_code_hashes)
-            code_changed = local_version != cached_state.r_code_version
-            if code_changed:
-                self.logger.info(f"R code changed: {r_code_hashes} != {cached_state.r_code_hashes}\n local_version: {local_version} != cached_version: {cached_state.r_code_version}")
-            return code_changed
-        else:
-            self.logger.info("No cached state")
+        cached_version = cached_state.code_version
+        cached_hashes = cached_state.code_hashes
+        if latest_version != cached_version:
+            descriptor = f"{code_kind} code" if code_kind else "Task code"
+            self.logger.info(
+                "%s changed: %s (local=%s) != %s (cached=%s)",
+                descriptor,
+                code_hashes,
+                latest_version,
+                cached_hashes,
+                cached_version,
+            )
             return True
+
+        return False
 
     def inputs_changed(
         self, input_hashes: dict[str, str], cached_state: TaskState = None
@@ -472,25 +511,13 @@ class TaskStateCache():
         is_r_task = self.is_rscript(task_name, task)
         is_python_task = self.is_python_task(task_name, task)
         is_duckdb_sql_task = self.is_duckdb_sql_task(task_name, task)
-        r_task_spec = self._as_r_task_spec(task_name, task) if is_r_task else None
-        py_task_spec = self._as_python_task_spec(task_name, task) if is_python_task else None
-        r_code_hashes = (
-            self.hasher.build_r_code_hashes(task_name, r_task_spec)
-            if is_r_task
-            else None
+        code_hashes, code_kind = self.build_task_code_hashes(
+            task_name,
+            task,
+            is_r_task=is_r_task,
+            is_duckdb_sql_task=is_duckdb_sql_task,
+            is_python_task=is_python_task,
         )
-        py_code_hashes = (
-            self.hasher.build_py_code_hashes(task_name, py_task_spec)
-            if is_python_task
-            else None
-        )
-        duckdb_sql_code_hashes = (
-            self._build_duckdb_sql_hashes(task_name, task)
-            if is_duckdb_sql_task
-            else None
-        )
-        if duckdb_sql_code_hashes is not None:
-            py_code_hashes = duckdb_sql_code_hashes
         deployment_name = (
             f"{run_task.__name__.replace('_', '-')}/{self.pipeline_config.PIPELINE_NAME}-RunTask-{storage_key}"
         )
@@ -503,12 +530,13 @@ class TaskStateCache():
             reason = "Subset mode"
         elif cached_state and cached_state.status == "FAILURE":
             reason = "Task previously failed all subtasks"
-        elif is_r_task and self.r_code_changed(r_code_hashes, cached_state):
-            reason = "R code changed"
-        elif is_python_task and self.py_code_changed(py_code_hashes, cached_state):
-            reason = f"Python code changed: {py_code_hashes} != {cached_state.py_code_hashes}"
-        elif is_duckdb_sql_task and self.py_code_changed(py_code_hashes, cached_state):
-            reason = "DuckDB SQL changed"
+        elif self.code_changed(
+            code_hashes,
+            cached_state,
+            code_kind=code_kind,
+        ):
+            descriptor = f"{code_kind} code" if code_kind else "Task code"
+            reason = f"{descriptor} changed"
         else:
             dep_states = self.get_dep_states(task_name)
             if self.inputs_changed(self.get_input_hashes(task_name, dep_states), cached_state):
@@ -577,28 +605,10 @@ class TaskStateCache():
 
         # Since this function is called by RunTask, a separate flow from the main flow,
         # recompute the hashes to ensure they are up-to-date
-        is_r_task = self.is_rscript(task_name, task)
-        is_python_task = self.is_python_task(task_name, task)
-        is_duckdb_sql_task = self.is_duckdb_sql_task(task_name, task)
-        r_task_spec = self._as_r_task_spec(task_name, task) if is_r_task else None
-        py_task_spec = self._as_python_task_spec(task_name, task) if is_python_task else None
-
-        r_code_hashes = (
-            self.hasher.build_r_code_hashes(task_name, r_task_spec)
-            if is_r_task
-            else None
-        )
-        py_code_hashes = (
-            self.hasher.build_py_code_hashes(task_name, py_task_spec)
-            if is_python_task
-            else None
-        )
-        if is_duckdb_sql_task:
-            py_code_hashes = self._build_duckdb_sql_hashes(task_name, task)
+        code_hashes, _ = self.build_task_code_hashes(task_name, task)
 
         final_state = TaskState(
-            r_code_hashes=str(r_code_hashes) if r_code_hashes else None,
-            py_code_hashes=py_code_hashes if py_code_hashes else None,
+            code_hashes=code_hashes if code_hashes else None,
             outputs_version=str(output_hashes) if output_hashes else None,
             input_hashes=str(input_file_hashes) if input_file_hashes else None,
             input_data_hashes=str(input_data_hashes) if input_data_hashes else None,
