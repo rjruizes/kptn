@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal, Never
 
 from kapten.caching.submit import submit
-from kapten.deploy.storage_key import read_branch_storage_key
+
 from kapten.util.pipeline_config import PipelineConfig, get_storage_key
 
 # Add the tasks directory to sys.path to enable imports
@@ -14,11 +14,8 @@ if tasks_path.parent not in [Path(p) for p in sys.path]:
     sys.path.insert(0, str(tasks_path.parent))
 import src as tasks
 
-from kapten.caching.TaskStateCache import run_task
-from kapten.deploy.push import docker_push
-from kapten.watcher.stacks import get_stack_endpoints
-
 TaskListChoices = list[Literal["a","b","c",]]|list[Never]
+VALID_TASKS: set[str] = { "a", "b", "c" }
 
 def basic(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
     
@@ -54,6 +51,15 @@ if __name__ == "__main__":
         dest="force",
         help="Ignore cached results and force all tasks to run",
     )
+    parser.add_argument(
+        "tasks",
+        nargs="?",
+        default="",
+        help=(
+            "Optional comma-separated list of task names to run; "
+            "runs all tasks when omitted"
+        ),
+    )
     args, _ = parser.parse_known_args()
     
     tasks_config_path = Path(__file__).parent / "kapten.yaml"
@@ -62,6 +68,21 @@ if __name__ == "__main__":
         PIPELINE_NAME="basic",
         PY_MODULE_PATH=tasks.__name__,
     )
-    basic(pipeline_config, ignore_cache=args.force)
-    
-    
+    raw_task_list = args.tasks
+    task_list = (
+        [task.strip() for task in raw_task_list.split(",") if task.strip()]
+        if raw_task_list
+        else []
+    )
+    if task_list:
+        invalid_tasks = [task for task in task_list if task not in VALID_TASKS]
+        if invalid_tasks:
+            parser.error(
+                "Invalid task(s): " + ", ".join(invalid_tasks) + ". "
+                "Expected one of: " + ", ".join(sorted(VALID_TASKS))
+            )
+    basic(
+        pipeline_config,
+        task_list=task_list,
+        ignore_cache=args.force,
+    )
