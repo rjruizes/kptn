@@ -34,7 +34,6 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             storage_key TEXT NOT NULL,
             pipeline TEXT NOT NULL,
             task_id TEXT NOT NULL,
-            ecs_task_id TEXT DEFAULT '',
             py_code_hashes TEXT,
             r_code_hashes TEXT,
             input_hashes TEXT,

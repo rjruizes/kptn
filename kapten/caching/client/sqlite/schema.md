@@ -13,7 +13,6 @@ CREATE TABLE tasks (
     storage_key TEXT NOT NULL,           -- Branch/storage key
     pipeline TEXT NOT NULL,              -- Pipeline ID
     task_id TEXT NOT NULL,               -- Task ID
-    ecs_task_id TEXT DEFAULT '',
     py_code_hashes TEXT,                 -- JSON string
     r_code_hashes TEXT,                  -- JSON string  
     input_hashes TEXT,                   -- JSON string

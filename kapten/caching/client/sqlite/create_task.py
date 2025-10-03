@@ -36,7 +36,7 @@ def create_task(
         if key in ['py_code_hashes', 'r_code_hashes', 'input_hashes', 'input_data_hashes']:
             # Store complex objects as JSON strings
             fields[key] = json.dumps(value) if value is not None else None
-        elif key in ['ecs_task_id', 'outputs_version', 'output_data_version', 'status', 
+        elif key in ['outputs_version', 'output_data_version', 'status', 
                      'start_time', 'end_time']:
             fields[key] = value
         elif key in ['subtask_count', 'taskdata_count', 'subset_count']:

@@ -553,9 +553,8 @@ class TaskStateCache():
 
     def set_initial_state(self, task_name: str) -> TaskState:
         """Set initial state for a task before execution."""
-        ecs_task_id = self.log_ecs_task_id()
+        self.log_ecs_task_id()
         initial_state = TaskState(
-            ecs_task_id=ecs_task_id,
             start_time=datetime.now().isoformat(),
         )
         task = self.get_task(task_name)
