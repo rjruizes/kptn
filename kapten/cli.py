@@ -7,7 +7,7 @@ import yaml
 from kapten.caching.TaskStateDbClient import TaskStateDbClient
 from kapten.codegen.codegen import generate_files
 from kapten.read_config import read_config
-from kapten.util.pipeline_config import PipelineConfig
+from kapten.util.pipeline_config import PipelineConfig, _module_path_from_dir
 
 try:
     from botocore.exceptions import NoCredentialsError, NoRegionError
@@ -59,14 +59,6 @@ def _choose_pipeline(kap_conf: dict[str, Any], requested: Optional[str]) -> str:
     raise ValueError(
         f"Multiple pipelines found ({available}); please specify --pipeline"
     )
-
-
-def _module_path_from_dir(py_tasks_dir: str) -> str:
-    parts = [part for part in Path(py_tasks_dir).parts if part and part != "."]
-    module_path = ".".join(parts)
-    if not module_path:
-        raise ValueError("Unable to derive module path from py-tasks-dir setting")
-    return module_path
 
 
 def _build_pipeline_config(

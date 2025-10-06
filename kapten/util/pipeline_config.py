@@ -1,9 +1,10 @@
 import os
 from enum import Enum
 from pathlib import Path
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, computed_field, model_validator
 from kapten.deploy.ecr_image import get_full_image_and_branch
 from kapten.util.filepaths import project_root
+import yaml
 
 
 class StoreType(str, Enum):
@@ -14,6 +15,28 @@ class StoreType(str, Enum):
 class FileType(str, Enum):
     csv = "csv"
     parquet = "parquet"
+
+
+def _module_path_from_dir(py_tasks_dir: str) -> str:
+    """Convert a directory path to a Python module path (e.g., 'src' -> 'src', 'py_tasks/foo' -> 'py_tasks.foo')"""
+    parts = [part for part in Path(py_tasks_dir).parts if part and part != "."]
+    module_path = ".".join(parts)
+    if not module_path:
+        raise ValueError("Unable to derive module path from py-tasks-dir setting")
+    return module_path
+
+
+def _read_py_tasks_dir_from_config(tasks_config_path: str) -> str | None:
+    """Read the py-tasks-dir setting from the kapten.yaml config file"""
+    try:
+        config_path = Path(tasks_config_path)
+        if not config_path.exists():
+            return None
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        return config.get('settings', {}).get('py-tasks-dir')
+    except Exception:
+        return None
 
 
 def get_scratch_dir(pipeline_config) -> Path:
@@ -37,6 +60,15 @@ class PipelineConfig(BaseModel):
     PY_MODULE_PATH: str = ""
     TASKS_CONFIG_PATH: str = "/code/tests/mock_pipeline/tasks.yaml"
     R_TASKS_DIR_PATH: str = "/code/tests/mock_pipeline/r_tasks"
+
+    @model_validator(mode='after')
+    def _derive_py_module_path(self):
+        """Auto-derive PY_MODULE_PATH from py-tasks-dir in kapten.yaml if not explicitly set"""
+        if not self.PY_MODULE_PATH and self.TASKS_CONFIG_PATH:
+            py_tasks_dir = _read_py_tasks_dir_from_config(self.TASKS_CONFIG_PATH)
+            if py_tasks_dir:
+                self.PY_MODULE_PATH = _module_path_from_dir(py_tasks_dir)
+        return self
 
     @computed_field
     def scratch_dir(self) -> str:

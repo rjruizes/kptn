@@ -66,7 +66,6 @@ if __name__ == "__main__":
     pipeline_config = PipelineConfig(
         TASKS_CONFIG_PATH=str(tasks_config_path),
         PIPELINE_NAME="basic",
-        PY_MODULE_PATH=tasks.__name__,
     )
     raw_task_list = args.tasks
     task_list = (
