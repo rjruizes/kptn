@@ -56,7 +56,7 @@ class PipelineConfig(BaseModel):
     SUBSET_MODE: bool = False
     OUTPUT_STORETYPE: StoreType = "fs"
     OUTPUT_FILETYPE: FileType = "csv"
-    PIPELINE_NAME: str
+    PIPELINE_NAME: str = ""
     PY_MODULE_PATH: str = ""
     TASKS_CONFIG_PATH: str = "/code/tests/mock_pipeline/tasks.yaml"
     R_TASKS_DIR_PATH: str = "/code/tests/mock_pipeline/r_tasks"
@@ -68,6 +68,32 @@ class PipelineConfig(BaseModel):
             py_tasks_dir = _read_py_tasks_dir_from_config(self.TASKS_CONFIG_PATH)
             if py_tasks_dir:
                 self.PY_MODULE_PATH = _module_path_from_dir(py_tasks_dir)
+        return self
+
+    @model_validator(mode='after')
+    def _derive_pipeline_name(self):
+        """Auto-derive PIPELINE_NAME from kapten.yaml if not explicitly set"""
+        if not self.PIPELINE_NAME and self.TASKS_CONFIG_PATH:
+            try:
+                config_path = Path(self.TASKS_CONFIG_PATH)
+                if not config_path.exists():
+                    return self
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                graphs = config.get('graphs', {})
+                if len(graphs) == 1:
+                    self.PIPELINE_NAME = next(iter(graphs))
+                elif len(graphs) > 1:
+                    graph_names = ", ".join(sorted(graphs.keys()))
+                    raise ValueError(
+                        f"Multiple graphs found ({graph_names}) in {self.TASKS_CONFIG_PATH}. "
+                        "Please specify PIPELINE_NAME explicitly."
+                    )
+            except Exception as e:
+                if "Multiple graphs found" in str(e):
+                    raise
+                # If we can't read the config, just continue without auto-deriving
+                pass
         return self
 
     @computed_field
