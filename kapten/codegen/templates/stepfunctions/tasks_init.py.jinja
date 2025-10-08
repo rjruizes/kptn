@@ -1,0 +1,6 @@
+{% for task_name in python_task_names -%}
+{%- set import_spec = python_task_specs[task_name] -%}
+{%- set module_path = import_spec.module -%}
+{%- set function_name = import_spec.function -%}
+from .{{ module_path }} import {{ function_name }}{% if function_name != task_name %} as {{ task_name }}{% endif %}
+{% endfor %}

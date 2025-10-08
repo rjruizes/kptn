@@ -1,14 +1,42 @@
 import subprocess
 from os import path
 from pathlib import Path
+from typing import Any, Callable
 import jinja2
+from jinja2 import TemplateNotFound
 
 from kapten.read_config import read_config
 from kapten.codegen.lib.setup_jinja_env import debug
+from kapten.codegen.lib.stepfunctions import build_stepfunctions_flow_context
 from kapten.util.filepaths import py_dir, codegen_dir
 from kapten.util.read_tasks_config import read_tasks_config
 
 PYTHON_FILE_SUFFIXES = {".py", ".pyw"}
+
+DEFAULT_FLOW_CONFIG: dict[str, Any] = {
+    "flow_template": "flows.py.jinja",
+    "tasks_init_template": "tasks_init.py.jinja",
+    "flow_extension": ".py",
+}
+
+FLOW_TYPE_CONFIG: dict[str, dict[str, Any]] = {
+    "prefect": {
+        "flow_template": "flows.py.jinja",
+        "tasks_init_template": "tasks_init.py.jinja",
+        "flow_extension": ".py",
+    },
+    "vanilla": {
+        "flow_template": "flows.py.jinja",
+        "tasks_init_template": "tasks_init.py.jinja",
+        "flow_extension": ".py",
+    },
+    "stepfunctions": {
+        "flow_template": None,
+        "tasks_init_template": "tasks_init.py.jinja",
+        "flow_extension": ".json",
+        "context_builder": build_stepfunctions_flow_context,
+    },
+}
 
 
 def is_python_task(task_config: dict) -> bool:
@@ -81,7 +109,13 @@ def generate_files(graph: str = None):
     # flows_dir = path.join(py_dir, 'flows')
     root_dir = Path('.')
     flows_dir = root_dir / kap_conf['flows-dir']
-    flow_type = kap_conf.get('flow-type')
+    flow_type = kap_conf.get('flow-type', 'vanilla')
+    if flow_type not in FLOW_TYPE_CONFIG:
+        flow_type = 'vanilla'
+    flow_config = FLOW_TYPE_CONFIG.get(
+        flow_type,
+        DEFAULT_FLOW_CONFIG,
+    )
     templates_path = path.join(codegen_dir, 'templates', flow_type)
     environment = jinja2.Environment(
         loader=jinja2.FileSystemLoader(templates_path),
@@ -104,35 +138,64 @@ def generate_files(graph: str = None):
     for graph_name in graphs:
         deps_lookup = graphs[graph_name]["tasks"]
         task_names = list(deps_lookup.keys())
-        rendered = environment.get_template('flows.py.jinja').render(
-            pipeline_name=graph_name,
-            task_names=task_names,
-            tasks_dict=tasks_dict,
-            deps_lookup=deps_lookup,
-            py_tasks_dir=kap_conf['py-tasks-dir'],
-            r_tasks_dir=kap_conf['r-tasks-dir'] if 'r-tasks-dir' in kap_conf else None,
-            rel_tasks_conf_path=relative_path_from_flows_dir_to_tasks_conf_path(kap_conf),
-            rel_py_tasks_dir=relative_path_from_flows_dir_to_py_tasks_dir(kap_conf),
-            rel_r_tasks_dir=relative_path_from_flows_dir_to_r_tasks_dir(kap_conf),
-            python_task_names=python_task_names,
-            python_task_specs=python_task_specs,
-        )
-        output_file = path.join(flows_dir, f'{graph_name}.py')
+        render_context: dict[str, Any] = {
+            "pipeline_name": graph_name,
+            "task_names": task_names,
+            "tasks_dict": tasks_dict,
+            "deps_lookup": deps_lookup,
+            "py_tasks_dir": kap_conf['py-tasks-dir'],
+            "r_tasks_dir": kap_conf['r-tasks-dir'] if 'r-tasks-dir' in kap_conf else None,
+            "rel_tasks_conf_path": relative_path_from_flows_dir_to_tasks_conf_path(kap_conf),
+            "rel_py_tasks_dir": relative_path_from_flows_dir_to_py_tasks_dir(kap_conf),
+            "rel_r_tasks_dir": relative_path_from_flows_dir_to_r_tasks_dir(kap_conf),
+            "python_task_names": python_task_names,
+            "python_task_specs": python_task_specs,
+        }
+
+        context_builder: Callable[..., dict[str, Any]] | None = flow_config.get('context_builder')
+        if context_builder:
+            extra_context = context_builder(
+                pipeline_name=graph_name,
+                task_names=task_names,
+                deps_lookup=deps_lookup,
+                kap_conf=kap_conf,
+            )
+            render_context.update(extra_context)
+
+        flow_template_name = flow_config.get('flow_template')
+        if flow_template_name:
+            rendered = environment.get_template(flow_template_name).render(
+                **render_context
+            )
+        else:
+            state_machine_json = render_context.get('state_machine_json')
+            if state_machine_json is None:
+                raise ValueError(
+                    "Step Functions context builder did not supply 'state_machine_json'"
+                )
+            rendered = f"{state_machine_json}\n"
+        flow_extension = flow_config.get('flow_extension', '.py')
+        output_file = path.join(flows_dir, f'{graph_name}{flow_extension}')
         with open(output_file, 'w') as f:
             f.write(rendered)
 
     # Write tasks/__init__.py file
     task_names = list(tasks_dict.keys())
-    rendered = environment.get_template('tasks_init.py.jinja').render(
-        task_names=task_names,
-        tasks_dict=tasks_dict,
-        python_task_names=python_task_names,
-        python_task_specs=python_task_specs,
-    )
-    # output_file = path.join(py_dir, 'tasks', '__init__.py')
-    output_file = root_dir / kap_conf['py-tasks-dir'] / '__init__.py'
-    with open(output_file, 'w') as f:
-        f.write(rendered)
+    tasks_init_template_name = flow_config.get('tasks_init_template')
+    if tasks_init_template_name:
+        try:
+            rendered = environment.get_template(tasks_init_template_name).render(
+                task_names=task_names,
+                tasks_dict=tasks_dict,
+                python_task_names=python_task_names,
+                python_task_specs=python_task_specs,
+            )
+        except TemplateNotFound:
+            rendered = None
+        if rendered is not None:
+            output_file = root_dir / kap_conf['py-tasks-dir'] / '__init__.py'
+            with open(output_file, 'w') as f:
+                f.write(rendered)
 
     # print("Formatting code...")
     # subprocess.run(["black", "-q", "."], cwd=flows_dir)

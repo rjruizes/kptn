@@ -19,24 +19,74 @@ VALID_TASKS: set[str] = { "raw_numbers", "fruit_metrics", "fruit_summary" }
 
 def duckdb_example(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
     
-    _raw_numbers = submit(
+    _raw_numbers = submit( # file://./src/raw_numbers.sql
         "raw_numbers",
         pipeline_config,
         task_list,
         ignore_cache
     )
-    _fruit_metrics = submit(
+    _fruit_metrics = submit( # file://./src/fruit_metrics.sql
         "fruit_metrics",
         pipeline_config,
         task_list,
         ignore_cache
     )
-    _fruit_summary = submit(
+    _fruit_summary = submit( # file://./src/fruit_tasks.py
         "fruit_summary",
         pipeline_config,
         task_list,
         ignore_cache,
         tasks.fruit_summary
+    )
+
+
+def run_pipeline(task_names: str | list[str] = None, force: bool = False, config_path: str = None) -> None:
+    """Run the pipeline programmatically
+
+    Args:
+        task_names: Specific task(s) to run. Can be:
+            - Single task name: "fruit_summary"
+            - Comma-separated string: "fruit_metrics,fruit_summary"
+            - List of task names: ["fruit_metrics", "fruit_summary"]
+            - None: Run all tasks (default)
+        force: Ignore cached results and force all tasks to run (default: False)
+        config_path: Path to kapten.yaml config file. If None, uses default relative path.
+
+    Example:
+        run_pipeline("fruit_summary")
+        run_pipeline(["fruit_metrics", "fruit_summary"], force=True)
+    """
+    if config_path is None:
+        tasks_config_path = Path(__file__).parent / "kapten.yaml"
+    else:
+        tasks_config_path = Path(config_path)
+
+    pipeline_config = PipelineConfig(
+        TASKS_CONFIG_PATH=str(tasks_config_path),
+        PIPELINE_NAME="duckdb_example",
+    )
+
+    # Parse task_names into a list
+    if task_names is None:
+        task_list = []
+    elif isinstance(task_names, str):
+        task_list = [task.strip() for task in task_names.split(",") if task.strip()]
+    else:
+        task_list = list(task_names)
+
+    # Validate task names
+    if task_list:
+        invalid_tasks = [task for task in task_list if task not in VALID_TASKS]
+        if invalid_tasks:
+            raise ValueError(
+                f"Invalid task(s): {', '.join(invalid_tasks)}. "
+                f"Expected one of: {', '.join(sorted(VALID_TASKS))}"
+            )
+
+    duckdb_example(
+        pipeline_config,
+        task_list=task_list,
+        ignore_cache=force,
     )
 
 
@@ -59,27 +109,8 @@ if __name__ == "__main__":
         ),
     )
     args, _ = parser.parse_known_args()
-    
-    tasks_config_path = Path(__file__).parent / "kapten.yaml"
-    pipeline_config = PipelineConfig(
-        TASKS_CONFIG_PATH=str(tasks_config_path),
-        PIPELINE_NAME="duckdb_example",
-    )
-    raw_task_list = args.tasks
-    task_list = (
-        [task.strip() for task in raw_task_list.split(",") if task.strip()]
-        if raw_task_list
-        else []
-    )
-    if task_list:
-        invalid_tasks = [task for task in task_list if task not in VALID_TASKS]
-        if invalid_tasks:
-            parser.error(
-                "Invalid task(s): " + ", ".join(invalid_tasks) + ". "
-                "Expected one of: " + ", ".join(sorted(VALID_TASKS))
-            )
-    duckdb_example(
-        pipeline_config,
-        task_list=task_list,
-        ignore_cache=args.force,
+
+    run_pipeline(
+        task_names=args.tasks or None,
+        force=args.force,
     )

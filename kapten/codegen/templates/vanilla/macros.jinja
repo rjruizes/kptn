@@ -6,8 +6,15 @@
 {%- endfor %}
 {%- endmacro %}
 
-{% macro submit(name, deps, python_task_names) -%}
+{% macro submit(name, deps, python_task_names, tasks_dict, rel_py_tasks_dir) -%}
+{%- set task_config = tasks_dict.get(name, {}) -%}
+{%- set file_value = task_config.get('file', '') -%}
+{%- if file_value -%}
+{%- set file_path = file_value.split(':')[0] -%}
+_{{name}} = submit( # file://./{{ rel_py_tasks_dir }}/{{ file_path }}
+{%- else -%}
 _{{name}} = submit(
+{%- endif %}
         "{{name}}",
         pipeline_config,
         task_list,

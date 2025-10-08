@@ -5,6 +5,7 @@ from typing import Any, Optional
 import json
 import yaml
 from kapten.caching.TaskStateDbClient import TaskStateDbClient
+from kapten.cli.infra_commands import register_infra_commands
 from kapten.codegen.codegen import generate_files
 from kapten.read_config import read_config
 from kapten.util.pipeline_config import PipelineConfig, _module_path_from_dir
@@ -15,6 +16,9 @@ except ImportError:  # pragma: no cover - optional dependency
     NoCredentialsError = NoRegionError = None
 
 app = typer.Typer()
+
+# Register infrastructure commands
+register_infra_commands(app)
 
 
 def _infer_language(task_spec: dict[str, Any]) -> str:
