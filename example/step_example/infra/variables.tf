@@ -18,7 +18,7 @@ variable "state_machine_definition" {
 variable "state_machine_definition_file" {
   type        = string
   description = "Relative path to the generated Kapten Step Functions JSON definition"
-  default     = "../../basic.json.tpl"
+  default     = "../basic.json.tpl"
 }
 
 variable "create_networking" {

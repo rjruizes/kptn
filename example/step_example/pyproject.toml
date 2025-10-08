@@ -1,0 +1,40 @@
+[project]
+name = "kapten"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12.5",
+    "pyyaml",
+    "jinja2",
+    "requests",
+    "pydantic",
+]
+
+[project.optional-dependencies]
+aws = ["boto3", "terraform-local"]
+prefect = ["prefect"]
+web = [
+    "watchfiles",
+    "fastapi>=0.116.2",
+    "uvicorn>=0.35.0"]
+duckdb = ["duckdb"]
+
+[project.scripts]
+kapten = "kapten.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["kapten"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
