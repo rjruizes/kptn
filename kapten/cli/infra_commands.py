@@ -555,7 +555,7 @@ def register_infra_commands(app: typer.Typer):
             help="Specific pipeline/graph name to scaffold infrastructure for",
         ),
         output_dir: Path = typer.Option(
-            Path("infra/stepfunctions"),
+            Path("infra"),
             "--output-dir",
             "-o",
             help="Directory where Terraform files will be written",
