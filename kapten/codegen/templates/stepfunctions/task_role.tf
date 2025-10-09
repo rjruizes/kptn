@@ -52,3 +52,34 @@ resource "aws_iam_role_policy_attachment" "kapten_task_managed" {
   role       = aws_iam_role.kapten_task["main"].name
   policy_arn = each.value
 }
+
+resource "aws_iam_role_policy" "kapten_task_efs" {
+  for_each = var.create_task_role && var.enable_efs ? { main = true } : {}
+
+  name = "${var.task_role_name_prefix}-efs"
+  role = aws_iam_role.kapten_task["main"].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:ClientMount",
+          "elasticfilesystem:ClientWrite",
+          "elasticfilesystem:ClientRootAccess"
+        ]
+        Resource = var.create_efs ? aws_efs_file_system.kapten["main"].arn : var.efs_file_system_arn
+        Condition = var.create_efs ? {
+          StringEquals = {
+            "elasticfilesystem:AccessPointArn" = aws_efs_access_point.kapten["main"].arn
+          }
+        } : (var.efs_access_point_arn != null ? {
+          StringEquals = {
+            "elasticfilesystem:AccessPointArn" = var.efs_access_point_arn
+          }
+        } : null)
+      }
+    ]
+  })
+}

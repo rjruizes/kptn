@@ -57,3 +57,23 @@ output "dynamodb_table_arn" {
   description = "ARN of the DynamoDB table used by Kapten tasks"
   value       = aws_dynamodb_table.kapten.arn
 }
+
+output "efs_file_system_id_effective" {
+  description = "ID of the EFS file system used by Kapten tasks (existing or provisioned)"
+  value       = var.enable_efs ? local.efs_file_system_id_effective : null
+}
+
+output "efs_access_point_id_effective" {
+  description = "ID of the EFS access point used by Kapten tasks (existing or provisioned)"
+  value       = var.enable_efs ? local.efs_access_point_id_effective : null
+}
+
+output "efs_file_system_arn" {
+  description = "ARN of the EFS file system used by Kapten tasks"
+  value       = var.create_efs ? aws_efs_file_system.kapten["main"].arn : var.efs_file_system_arn
+}
+
+output "efs_access_point_arn" {
+  description = "ARN of the EFS access point used by Kapten tasks"
+  value       = var.create_efs ? aws_efs_access_point.kapten["main"].arn : var.efs_access_point_arn
+}

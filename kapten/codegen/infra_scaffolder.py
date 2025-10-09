@@ -108,6 +108,7 @@ def scaffold_stepfunctions_infra(
         "task_execution_role.tf": _load_template("task_execution_role.tf"),
         "task_role.tf": _load_template("task_role.tf"),
         "dynamodb.tf": _load_template("dynamodb.tf"),
+        "efs.tf": _load_template("efs.tf"),
         "locals.tf": _load_template("locals.tf"),
         "variables.tf": _load_template("variables.tf.tpl"),
         "outputs.tf": _load_template("outputs.tf"),

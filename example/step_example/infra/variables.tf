@@ -274,3 +274,105 @@ variable "dynamodb_table_name" {
   type        = string
   description = "Name for the DynamoDB table used by Kapten tasks"
 }
+
+variable "create_efs" {
+  type        = bool
+  description = "Set to true to provision an EFS file system"
+  default     = false
+}
+
+variable "enable_efs" {
+  type        = bool
+  description = "Set to true to mount EFS in the task definition"
+  default     = false
+}
+
+variable "efs_file_system_id" {
+  type        = string
+  description = "Existing EFS file system ID to reuse when not creating one"
+  default     = null
+}
+
+variable "efs_access_point_id" {
+  type        = string
+  description = "Existing EFS access point ID to reuse when not creating one"
+  default     = null
+}
+
+variable "efs_file_system_arn" {
+  type        = string
+  description = "ARN of the EFS file system (required for IAM policies when reusing existing EFS)"
+  default     = null
+}
+
+variable "efs_access_point_arn" {
+  type        = string
+  description = "ARN of the EFS access point (required for IAM policies when reusing existing EFS)"
+  default     = null
+}
+
+variable "efs_container_mount_path" {
+  type        = string
+  description = "Container path where EFS will be mounted"
+  default     = "/mnt/efs"
+}
+
+variable "efs_root_directory_path" {
+  type        = string
+  description = "Root directory path for the EFS access point"
+  default     = "/data"
+}
+
+variable "efs_owner_gid" {
+  type        = number
+  description = "Group ID for the EFS root directory owner"
+  default     = 1000
+}
+
+variable "efs_owner_uid" {
+  type        = number
+  description = "User ID for the EFS root directory owner"
+  default     = 1000
+}
+
+variable "efs_posix_gid" {
+  type        = number
+  description = "Group ID for POSIX user when accessing EFS"
+  default     = 1000
+}
+
+variable "efs_posix_uid" {
+  type        = number
+  description = "User ID for POSIX user when accessing EFS"
+  default     = 1000
+}
+
+variable "efs_permissions" {
+  type        = string
+  description = "Permissions for the EFS root directory"
+  default     = "755"
+}
+
+variable "efs_transition_to_ia" {
+  type        = string
+  description = "Transition to Infrequent Access storage class"
+  default     = "AFTER_30_DAYS"
+}
+
+variable "create_efs_security_group" {
+  type        = bool
+  description = "Set to true to provision a security group for EFS"
+  default     = true
+}
+
+variable "efs_security_group_ids" {
+  type        = list(string)
+  description = "Security group IDs to attach to EFS mount targets when not creating one"
+  default     = []
+}
+
+variable "efs_security_group_description" {
+  type        = string
+  description = "Description for the generated EFS security group"
+  default     = "Security group for Kapten EFS mount targets"
+}

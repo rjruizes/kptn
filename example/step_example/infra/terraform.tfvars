@@ -1,6 +1,7 @@
 assign_public_ip = false
 create_ecr_repository = true
 create_ecs_cluster = true
+create_efs = false
 create_networking = true
 create_security_group = true
 create_task_definition = true
@@ -9,6 +10,7 @@ create_task_role = true
 dynamodb_table_name = "basic-table"
 ecr_repository_name = "basic"
 ecs_launch_type = "FARGATE"
+enable_efs = false
 new_security_group_description = "Kapten Step Functions tasks"
 new_security_group_egress_cidr_blocks = ["0.0.0.0/0"]
 new_security_group_ingress_cidr_blocks = ["0.0.0.0/0"]

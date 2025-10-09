@@ -18,6 +18,8 @@ class InfraInputs:
     create_task_execution_role: bool
     create_task_role: bool
     create_ecs_cluster: bool
+    create_efs: bool
+    enable_efs: bool
     tfvars: Dict[str, Any]
     warnings: List[str]
 
@@ -62,28 +64,6 @@ def _parse_env_pairs(pairs: List[str]) -> Dict[str, str]:
     return env
 
 
-def _choose_pipeline(kap_conf: dict[str, Any], requested: Optional[str]) -> str:
-    graphs = kap_conf.get("graphs", {})
-    if not graphs:
-        raise ValueError("No graphs defined in kapten.yaml")
-
-    if requested:
-        if requested not in graphs:
-            available = ", ".join(sorted(graphs))
-            raise ValueError(
-                f"Pipeline '{requested}' not found; available pipelines: {available}"
-            )
-        return requested
-
-    if len(graphs) == 1:
-        return next(iter(graphs))
-
-    available = ", ".join(sorted(graphs))
-    raise ValueError(
-        f"Multiple pipelines found ({available}); please specify --pipeline"
-    )
-
-
 def _collect_infra_inputs(
     *,
     pipeline_name: str,
@@ -96,6 +76,8 @@ def _collect_infra_inputs(
     provision_task_execution_role: Optional[bool],
     provision_task_role: Optional[bool],
     provision_ecs_cluster: Optional[bool],
+    provision_efs: Optional[bool],
+    enable_efs: Optional[bool],
     subnet_ids: List[str],
     security_group_ids: List[str],
     ecs_cluster_arn: Optional[str],
@@ -130,6 +112,10 @@ def _collect_infra_inputs(
     task_role_name_prefix: Optional[str],
     task_role_managed_policies: List[str],
     dynamodb_table_name: Optional[str],
+    efs_file_system_id: Optional[str],
+    efs_access_point_id: Optional[str],
+    efs_container_mount_path: Optional[str],
+    efs_root_directory_path: Optional[str],
 ) -> InfraInputs:
     create_networking = provision_networking
     if create_networking is None:
@@ -417,6 +403,74 @@ def _collect_infra_inputs(
     tfvars["assign_public_ip"] = assign_public_ip if assign_public_ip is not None else False
     tfvars["ecs_launch_type"] = (ecs_launch_type or "FARGATE").upper()
 
+    # EFS configuration
+    create_efs = provision_efs
+    if create_efs is None:
+        create_efs = False if auto_approve or not interactive else typer.confirm(
+            "Provision a new EFS file system?",
+            default=False,
+        )
+
+    efs_enabled = enable_efs
+    if efs_enabled is None:
+        efs_enabled = create_efs if auto_approve or not interactive else typer.confirm(
+            "Enable EFS mounting in task definition?",
+            default=create_efs,
+        )
+
+    tfvars["create_efs"] = create_efs
+    tfvars["enable_efs"] = efs_enabled
+
+    if efs_enabled:
+        if not create_efs:
+            # Reusing existing EFS
+            file_system_id = efs_file_system_id
+            if not file_system_id and interactive:
+                file_system_id = _prompt_required(
+                    "Existing EFS file system ID to reuse"
+                )
+            if file_system_id:
+                tfvars["efs_file_system_id"] = file_system_id
+            else:
+                warnings.append(
+                    "No EFS file system ID provided; update terraform.tfvars before applying."
+                )
+
+            access_point_id = efs_access_point_id
+            if not access_point_id and interactive:
+                access_point_id = _prompt_required(
+                    "Existing EFS access point ID to reuse"
+                )
+            if access_point_id:
+                tfvars["efs_access_point_id"] = access_point_id
+            else:
+                warnings.append(
+                    "No EFS access point ID provided; update terraform.tfvars before applying."
+                )
+
+        # EFS mount configuration
+        mount_path = efs_container_mount_path or "/mnt/efs"
+        if interactive and not efs_container_mount_path:
+            mount_path = typer.prompt(
+                "Container path where EFS will be mounted",
+                default=mount_path,
+            )
+        tfvars["efs_container_mount_path"] = mount_path
+
+        if create_efs:
+            # EFS creation parameters
+            root_dir = efs_root_directory_path or "/data"
+            if interactive and not efs_root_directory_path:
+                root_dir = typer.prompt(
+                    "EFS root directory path",
+                    default=root_dir,
+                )
+            tfvars["efs_root_directory_path"] = root_dir
+            tfvars["efs_owner_gid"] = 1000
+            tfvars["efs_owner_uid"] = 1000
+            tfvars["efs_posix_gid"] = 1000
+            tfvars["efs_posix_uid"] = 1000
+
     return InfraInputs(
         create_networking=create_networking,
         create_security_group=create_security_group,
@@ -425,6 +479,8 @@ def _collect_infra_inputs(
         create_task_execution_role=create_task_execution_role,
         create_task_role=create_task_role,
         create_ecs_cluster=create_ecs_cluster,
+        create_efs=create_efs,
+        enable_efs=efs_enabled,
         tfvars=tfvars,
         warnings=warnings,
     )
@@ -432,7 +488,6 @@ def _collect_infra_inputs(
 
 def _run_codegen_infra(
     *,
-    pipeline: Optional[str],
     output_dir: Path,
     force: bool,
     interactive: bool,
@@ -444,6 +499,8 @@ def _run_codegen_infra(
     provision_task_execution_role: Optional[bool],
     provision_task_role: Optional[bool],
     provision_ecs_cluster: Optional[bool],
+    provision_efs: Optional[bool],
+    enable_efs: Optional[bool],
     subnet_ids: List[str],
     security_group_ids: List[str],
     ecs_cluster_arn: Optional[str],
@@ -476,28 +533,21 @@ def _run_codegen_infra(
     task_role_name_prefix: Optional[str],
     task_role_managed_policies: List[str],
     dynamodb_table_name: Optional[str],
+    efs_file_system_id: Optional[str],
+    efs_access_point_id: Optional[str],
+    efs_container_mount_path: Optional[str],
+    efs_root_directory_path: Optional[str],
 ) -> None:
     kap_conf = read_config()
 
-    # Get all graph names or filter by pipeline option
+    # Get all graph names from configuration
     graphs = kap_conf.get("graphs", {})
     if not graphs:
         raise ValueError("No graphs defined in kapten.yaml")
 
-    if pipeline:
-        # Filter to just the specified pipeline
-        if pipeline not in graphs:
-            available = ", ".join(sorted(graphs))
-            raise ValueError(
-                f"Pipeline '{pipeline}' not found; available pipelines: {available}"
-            )
-        graph_names = [pipeline]
-        pipeline_name = pipeline
-    else:
-        # Use all graphs
-        graph_names = sorted(graphs.keys())
-        # Use first graph name as pipeline_name for resource naming
-        pipeline_name = graph_names[0]
+    # Scaffold infrastructure for all graphs; use the first graph name for resource defaults
+    graph_names = sorted(graphs.keys())
+    pipeline_name = graph_names[0]
 
     settings = kap_conf.get("settings", {})
     flows_dir_setting = settings.get("flows-dir", "flows")
@@ -514,6 +564,8 @@ def _run_codegen_infra(
         provision_task_execution_role=provision_task_execution_role,
         provision_task_role=provision_task_role,
         provision_ecs_cluster=provision_ecs_cluster,
+        provision_efs=provision_efs,
+        enable_efs=enable_efs,
         subnet_ids=subnet_ids,
         security_group_ids=security_group_ids,
         ecs_cluster_arn=ecs_cluster_arn,
@@ -546,6 +598,10 @@ def _run_codegen_infra(
         task_role_name_prefix=task_role_name_prefix,
         task_role_managed_policies=task_role_managed_policies,
         dynamodb_table_name=dynamodb_table_name,
+        efs_file_system_id=efs_file_system_id,
+        efs_access_point_id=efs_access_point_id,
+        efs_container_mount_path=efs_container_mount_path,
+        efs_root_directory_path=efs_root_directory_path,
     )
 
     report = scaffold_stepfunctions_infra(
@@ -616,12 +672,6 @@ def register_infra_commands(app: typer.Typer):
             "--project-dir",
             "-p",
             help="Project directory containing kapten configuration",
-        ),
-        pipeline: Optional[str] = typer.Option(
-            None,
-            "--pipeline",
-            "-n",
-            help="Specific pipeline/graph name to scaffold infrastructure for",
         ),
         output_dir: Path = typer.Option(
             Path("infra"),
@@ -840,6 +890,36 @@ def register_infra_commands(app: typer.Typer):
             "--dynamodb-table-name",
             help="Name for the DynamoDB table used by Kapten tasks",
         ),
+        provision_efs: Optional[bool] = typer.Option(
+            None,
+            "--provision-efs/--reuse-efs",
+            help="Provision a new EFS file system (default: prompt)",
+        ),
+        enable_efs: Optional[bool] = typer.Option(
+            None,
+            "--enable-efs/--disable-efs",
+            help="Enable EFS mounting in the task definition (default: prompt)",
+        ),
+        efs_file_system_id: Optional[str] = typer.Option(
+            None,
+            "--efs-file-system-id",
+            help="Existing EFS file system ID to reuse",
+        ),
+        efs_access_point_id: Optional[str] = typer.Option(
+            None,
+            "--efs-access-point-id",
+            help="Existing EFS access point ID to reuse",
+        ),
+        efs_container_mount_path: Optional[str] = typer.Option(
+            None,
+            "--efs-container-mount-path",
+            help="Container path where EFS will be mounted (default: /mnt/efs)",
+        ),
+        efs_root_directory_path: Optional[str] = typer.Option(
+            None,
+            "--efs-root-directory-path",
+            help="Root directory path for the EFS access point (default: /data)",
+        ),
     ):
         """Scaffold Terraform IaC for running Kapten Step Functions on ECS."""
 
@@ -850,7 +930,6 @@ def register_infra_commands(app: typer.Typer):
                 raise typer.BadParameter(str(exc), param_hint="--task-definition-env") from exc
 
             _run_codegen_infra(
-                pipeline=pipeline,
                 output_dir=output_dir,
                 force=force,
                 interactive=interactive and not yes,
@@ -862,6 +941,8 @@ def register_infra_commands(app: typer.Typer):
                 provision_task_execution_role=provision_task_execution_role,
                 provision_task_role=provision_task_role,
                 provision_ecs_cluster=provision_ecs_cluster,
+                provision_efs=provision_efs,
+                enable_efs=enable_efs,
                 subnet_ids=list(subnet_id),
                 security_group_ids=list(security_group_id),
                 ecs_cluster_arn=ecs_cluster_arn,
@@ -894,6 +975,10 @@ def register_infra_commands(app: typer.Typer):
                 task_role_name_prefix=task_role_name_prefix,
                 task_role_managed_policies=list(task_role_managed_policy),
                 dynamodb_table_name=dynamodb_table_name,
+                efs_file_system_id=efs_file_system_id,
+                efs_access_point_id=efs_access_point_id,
+                efs_container_mount_path=efs_container_mount_path,
+                efs_root_directory_path=efs_root_directory_path,
             )
 
         _resolve_project_call(project_dir, _action)

@@ -16,6 +16,29 @@ resource "aws_ecs_task_definition" "kapten" {
       essential   = true
       command     = var.task_definition_container_command
       environment = [for k, v in var.task_definition_container_environment : { name = k, value = v }]
+      mountPoints = var.enable_efs ? [
+        {
+          sourceVolume  = "efs"
+          containerPath = var.efs_container_mount_path
+          readOnly      = false
+        }
+      ] : []
     }
   ])
+
+  dynamic "volume" {
+    for_each = var.enable_efs ? [1] : []
+    content {
+      name = "efs"
+
+      efs_volume_configuration {
+        file_system_id     = local.efs_file_system_id_effective
+        transit_encryption = "ENABLED"
+        authorization_config {
+          access_point_id = local.efs_access_point_id_effective
+          iam             = "ENABLED"
+        }
+      }
+    }
+  }
 }
