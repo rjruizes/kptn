@@ -16,6 +16,7 @@ class InfraInputs:
     create_task_definition: bool
     create_ecr_repository: bool
     create_task_execution_role: bool
+    create_task_role: bool
     create_ecs_cluster: bool
     tfvars: Dict[str, Any]
     warnings: List[str]
@@ -93,12 +94,14 @@ def _collect_infra_inputs(
     provision_ecr_repository: Optional[bool],
     provision_task_definition: Optional[bool],
     provision_task_execution_role: Optional[bool],
+    provision_task_role: Optional[bool],
     provision_ecs_cluster: Optional[bool],
     subnet_ids: List[str],
     security_group_ids: List[str],
     ecs_cluster_arn: Optional[str],
     ecs_task_definition_arn: Optional[str],
     ecs_task_execution_role_arn: Optional[str],
+    task_role_arn: Optional[str],
     new_vpc_cidr_block: Optional[str],
     new_subnet_cidr: List[str],
     new_subnet_az: List[str],
@@ -124,6 +127,9 @@ def _collect_infra_inputs(
     task_definition_task_role_arn: Optional[str],
     task_execution_role_name: Optional[str],
     task_execution_role_managed_policies: List[str],
+    task_role_name_prefix: Optional[str],
+    task_role_managed_policies: List[str],
+    dynamodb_table_name: Optional[str],
 ) -> InfraInputs:
     create_networking = provision_networking
     if create_networking is None:
@@ -161,6 +167,13 @@ def _collect_infra_inputs(
             default=True,
         )
 
+    create_task_role = provision_task_role
+    if create_task_role is None:
+        create_task_role = True if auto_approve or not interactive else typer.confirm(
+            "Provision a new IAM task role with DynamoDB permissions?",
+            default=True,
+        )
+
     create_ecs_cluster = provision_ecs_cluster
     if create_ecs_cluster is None:
         create_ecs_cluster = True if auto_approve or not interactive else typer.confirm(
@@ -174,6 +187,7 @@ def _collect_infra_inputs(
         "create_ecr_repository": create_ecr_repository,
         "create_task_definition": create_task_definition,
         "create_task_execution_role": create_task_execution_role,
+        "create_task_role": create_task_role,
         "create_ecs_cluster": create_ecs_cluster,
     }
     warnings: List[str] = []
@@ -376,6 +390,30 @@ def _collect_infra_inputs(
                 )
         tfvars["ecs_task_execution_role_arn"] = execution_role_arn
 
+    if create_task_role:
+        role_prefix = task_role_name_prefix or f"{pipeline_name}-task-role"
+        tfvars["task_role_name_prefix"] = role_prefix
+        if task_role_managed_policies:
+            tfvars["task_role_managed_policies"] = task_role_managed_policies
+    else:
+        if task_role_arn:
+            tfvars["task_role_arn"] = task_role_arn
+        elif interactive:
+            task_role_value = typer.prompt(
+                "IAM task role ARN (optional, press Enter to skip)",
+                default="",
+            ).strip()
+            if task_role_value:
+                tfvars["task_role_arn"] = task_role_value
+
+    table_name = dynamodb_table_name or f"{pipeline_name}-table"
+    if interactive and not dynamodb_table_name:
+        table_name = typer.prompt(
+            "DynamoDB table name",
+            default=table_name,
+        )
+    tfvars["dynamodb_table_name"] = table_name
+
     tfvars["assign_public_ip"] = assign_public_ip if assign_public_ip is not None else False
     tfvars["ecs_launch_type"] = (ecs_launch_type or "FARGATE").upper()
 
@@ -385,6 +423,7 @@ def _collect_infra_inputs(
         create_task_definition=create_task_definition,
         create_ecr_repository=create_ecr_repository,
         create_task_execution_role=create_task_execution_role,
+        create_task_role=create_task_role,
         create_ecs_cluster=create_ecs_cluster,
         tfvars=tfvars,
         warnings=warnings,
@@ -403,12 +442,14 @@ def _run_codegen_infra(
     provision_ecr_repository: Optional[bool],
     provision_task_definition: Optional[bool],
     provision_task_execution_role: Optional[bool],
+    provision_task_role: Optional[bool],
     provision_ecs_cluster: Optional[bool],
     subnet_ids: List[str],
     security_group_ids: List[str],
     ecs_cluster_arn: Optional[str],
     ecs_task_definition_arn: Optional[str],
     ecs_task_execution_role_arn: Optional[str],
+    task_role_arn: Optional[str],
     new_vpc_cidr_block: Optional[str],
     new_subnet_cidr: List[str],
     new_subnet_az: List[str],
@@ -432,9 +473,32 @@ def _run_codegen_infra(
     task_definition_task_role_arn: Optional[str],
     task_execution_role_name: Optional[str],
     task_execution_role_managed_policies: List[str],
+    task_role_name_prefix: Optional[str],
+    task_role_managed_policies: List[str],
+    dynamodb_table_name: Optional[str],
 ) -> None:
     kap_conf = read_config()
-    pipeline_name = _choose_pipeline(kap_conf, pipeline)
+
+    # Get all graph names or filter by pipeline option
+    graphs = kap_conf.get("graphs", {})
+    if not graphs:
+        raise ValueError("No graphs defined in kapten.yaml")
+
+    if pipeline:
+        # Filter to just the specified pipeline
+        if pipeline not in graphs:
+            available = ", ".join(sorted(graphs))
+            raise ValueError(
+                f"Pipeline '{pipeline}' not found; available pipelines: {available}"
+            )
+        graph_names = [pipeline]
+        pipeline_name = pipeline
+    else:
+        # Use all graphs
+        graph_names = sorted(graphs.keys())
+        # Use first graph name as pipeline_name for resource naming
+        pipeline_name = graph_names[0]
+
     settings = kap_conf.get("settings", {})
     flows_dir_setting = settings.get("flows-dir", "flows")
     flows_dir = Path(flows_dir_setting)
@@ -448,12 +512,14 @@ def _run_codegen_infra(
         provision_ecr_repository=provision_ecr_repository,
         provision_task_definition=provision_task_definition,
         provision_task_execution_role=provision_task_execution_role,
+        provision_task_role=provision_task_role,
         provision_ecs_cluster=provision_ecs_cluster,
         subnet_ids=subnet_ids,
         security_group_ids=security_group_ids,
         ecs_cluster_arn=ecs_cluster_arn,
         ecs_task_definition_arn=ecs_task_definition_arn,
         ecs_task_execution_role_arn=ecs_task_execution_role_arn,
+        task_role_arn=task_role_arn,
         new_vpc_cidr_block=new_vpc_cidr_block,
         new_subnet_cidr=new_subnet_cidr,
         new_subnet_az=new_subnet_az,
@@ -477,11 +543,15 @@ def _run_codegen_infra(
         task_definition_task_role_arn=task_definition_task_role_arn,
         task_execution_role_name=task_execution_role_name,
         task_execution_role_managed_policies=task_execution_role_managed_policies,
+        task_role_name_prefix=task_role_name_prefix,
+        task_role_managed_policies=task_role_managed_policies,
+        dynamodb_table_name=dynamodb_table_name,
     )
 
     report = scaffold_stepfunctions_infra(
         output_dir=output_dir,
         pipeline_name=pipeline_name,
+        graph_names=graph_names,
         flows_dir=flows_dir,
         force=force,
         tfvars_values=inputs.tfvars,
@@ -504,20 +574,19 @@ def _run_codegen_infra(
             f"{_display_path(report.terraform_tfvars_path)}"
         )
 
-    if not report.state_machine_file_exists:
+    if report.state_machine_files_missing:
         typer.secho(
-            (
-                "Warning: Step Functions definition file not found at "
-                f"{_display_path(report.state_machine_file)}. "
-                "Run 'kapten codegen' first."
-            ),
+            "Warning: Step Functions definition files not found for: "
+            f"{', '.join(report.state_machine_files_missing)}. "
+            "Run 'kapten codegen' first.",
             fg=typer.colors.YELLOW,
         )
-    else:
-        typer.echo(
-            "State machine definition referenced at "
-            f"{_display_path(report.state_machine_file)}"
-        )
+
+    if report.state_machine_files:
+        typer.echo("State machine definitions referenced:")
+        for graph_name, file_path in report.state_machine_files.items():
+            status = "✓" if graph_name not in report.state_machine_files_missing else "✗"
+            typer.echo(f"  {status} {graph_name}: {_display_path(file_path)}")
 
     combined_warnings = report.warnings
     if combined_warnings:
@@ -746,6 +815,31 @@ def register_infra_commands(app: typer.Typer):
             "--task-execution-role-managed-policy",
             help="Managed policy ARN to attach to a generated task execution role (repeatable)",
         ),
+        provision_task_role: Optional[bool] = typer.Option(
+            None,
+            "--provision-task-role/--reuse-task-role",
+            help="Provision a new IAM task role with DynamoDB permissions (default: prompt)",
+        ),
+        task_role_arn: Optional[str] = typer.Option(
+            None,
+            "--task-role-arn",
+            help="Existing IAM task role ARN to reuse",
+        ),
+        task_role_name_prefix: Optional[str] = typer.Option(
+            None,
+            "--task-role-name-prefix",
+            help="Name prefix for a generated IAM task role",
+        ),
+        task_role_managed_policy: List[str] = typer.Option(
+            [],
+            "--task-role-managed-policy",
+            help="Managed policy ARN to attach to a generated task role (repeatable)",
+        ),
+        dynamodb_table_name: Optional[str] = typer.Option(
+            None,
+            "--dynamodb-table-name",
+            help="Name for the DynamoDB table used by Kapten tasks",
+        ),
     ):
         """Scaffold Terraform IaC for running Kapten Step Functions on ECS."""
 
@@ -766,12 +860,14 @@ def register_infra_commands(app: typer.Typer):
                 provision_ecr_repository=provision_ecr_repository,
                 provision_task_definition=provision_task_definition,
                 provision_task_execution_role=provision_task_execution_role,
+                provision_task_role=provision_task_role,
                 provision_ecs_cluster=provision_ecs_cluster,
                 subnet_ids=list(subnet_id),
                 security_group_ids=list(security_group_id),
                 ecs_cluster_arn=ecs_cluster_arn,
                 ecs_task_definition_arn=ecs_task_definition_arn,
                 ecs_task_execution_role_arn=ecs_task_execution_role_arn,
+                task_role_arn=task_role_arn,
                 new_vpc_cidr_block=new_vpc_cidr_block,
                 new_subnet_cidr=list(new_subnet_cidr),
                 new_subnet_az=list(new_subnet_az),
@@ -795,6 +891,9 @@ def register_infra_commands(app: typer.Typer):
                 task_definition_task_role_arn=task_definition_task_role_arn,
                 task_execution_role_name=task_execution_role_name,
                 task_execution_role_managed_policies=list(task_execution_role_managed_policy),
+                task_role_name_prefix=task_role_name_prefix,
+                task_role_managed_policies=list(task_role_managed_policy),
+                dynamodb_table_name=dynamodb_table_name,
             )
 
         _resolve_project_call(project_dir, _action)

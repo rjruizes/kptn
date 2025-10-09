@@ -6,19 +6,14 @@ variable "region" {
 
 variable "pipeline_name" {
   type        = string
-  description = "Kapten pipeline name represented by this state machine"
+  description = "Kapten pipeline name used as prefix for all resources"
 }
 
-variable "state_machine_definition" {
-  type        = string
-  description = "Optional raw JSON definition override for the state machine"
-  default     = ""
-}
-
-variable "state_machine_definition_file" {
-  type        = string
-  description = "Relative path to the generated Kapten Step Functions JSON definition"
-  default     = "__STATE_MACHINE_DEFINITION_FILE__"
+variable "state_machines" {
+  type = map(object({
+    definition_file = string
+  }))
+  description = "Map of state machine configurations where key is the graph name and value contains the definition file path"
 }
 
 variable "create_networking" {
@@ -171,9 +166,27 @@ variable "task_definition_requires_compatibilities" {
   default     = ["FARGATE"]
 }
 
-variable "task_definition_task_role_arn" {
+variable "create_task_role" {
+  type        = bool
+  description = "Set to true to provision an IAM task role with DynamoDB permissions"
+  default     = false
+}
+
+variable "task_role_name_prefix" {
   type        = string
-  description = "IAM task role ARN used by containers in the ECS task definition"
+  description = "Name prefix applied to a generated IAM task role"
+  default     = "kapten-task-role"
+}
+
+variable "task_role_managed_policies" {
+  type        = list(string)
+  description = "Managed policy ARNs attached to a generated task role"
+  default     = []
+}
+
+variable "task_role_arn" {
+  type        = string
+  description = "Existing IAM task role ARN to reuse when not creating one"
   default     = null
 }
 
@@ -255,4 +268,9 @@ variable "tags" {
   type        = map(string)
   description = "Common tags applied to created resources"
   default     = {}
+}
+
+variable "dynamodb_table_name" {
+  type        = string
+  description = "Name for the DynamoDB table used by Kapten tasks"
 }

@@ -11,6 +11,10 @@ graphs:
       b: a
       c:
       d: [b, c]
+  basic2:
+    tasks:
+      a:
+      b: a
 
 tasks:
   a:

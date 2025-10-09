@@ -5,6 +5,8 @@ create_networking = true
 create_security_group = true
 create_task_definition = true
 create_task_execution_role = true
+create_task_role = true
+dynamodb_table_name = "basic-table"
 ecr_repository_name = "basic"
 ecs_launch_type = "FARGATE"
 new_security_group_description = "Kapten Step Functions tasks"
@@ -12,6 +14,14 @@ new_security_group_egress_cidr_blocks = ["0.0.0.0/0"]
 new_security_group_ingress_cidr_blocks = ["0.0.0.0/0"]
 new_subnet_cidr_blocks = ["10.0.1.0/24", "10.0.2.0/24"]
 new_vpc_cidr_block = "10.0.0.0/16"
+state_machines = {
+  basic = {
+  definition_file = "../basic.json.tpl"
+},
+  basic2 = {
+  definition_file = "../basic2.json.tpl"
+}
+}
 task_definition_container_image = "public.ecr.aws/amazonlinux/amazonlinux:latest"
 task_definition_container_name = "basic"
 task_definition_cpu = "512"
@@ -20,3 +30,4 @@ task_definition_memory = "1024"
 task_definition_network_mode = "awsvpc"
 task_definition_requires_compatibilities = ["FARGATE"]
 task_execution_role_name_prefix = "basic-task-execution-role"
+task_role_name_prefix = "basic-task-role"

@@ -19,32 +19,40 @@ data "aws_partition" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  pipeline_name      = var.pipeline_name
-  state_machine_name = "${var.pipeline_name}-state-machine"
-  state_machine_definition = length(trimspace(var.state_machine_definition)) > 0 ? var.state_machine_definition : templatefile(
-    "${path.module}/${var.state_machine_definition_file}",
-    {
-      ecs_cluster_arn             = local.ecs_cluster_arn_effective
-      ecs_task_definition_arn     = local.ecs_task_definition_arn_effective
-      ecs_task_execution_role_arn = local.ecs_task_execution_role_arn_effective
-      subnet_ids                  = jsonencode(local.subnet_ids_effective)
-      security_group_ids          = jsonencode(local.security_group_ids_effective)
-      assign_public_ip            = var.assign_public_ip ? "ENABLED" : "DISABLED"
-      launch_type                 = var.ecs_launch_type
-      container_name              = var.task_definition_container_name
-      pipeline_name               = var.pipeline_name
-    }
-  )
+  pipeline_name = var.pipeline_name
+
+  # Generate state machine definitions for each graph
+  state_machine_definitions = {
+    for graph_name, config in var.state_machines : graph_name => templatefile(
+      "${path.module}/${config.definition_file}",
+      {
+        ecs_cluster_arn             = local.ecs_cluster_arn_effective
+        ecs_task_definition_arn     = local.ecs_task_definition_arn_effective
+        ecs_task_execution_role_arn = local.ecs_task_execution_role_arn_effective
+        subnet_ids                  = jsonencode(local.subnet_ids_effective)
+        security_group_ids          = jsonencode(local.security_group_ids_effective)
+        assign_public_ip            = var.assign_public_ip ? "ENABLED" : "DISABLED"
+        launch_type                 = var.ecs_launch_type
+        container_name              = var.task_definition_container_name
+        pipeline_name               = var.pipeline_name
+        dynamodb_table_name         = aws_dynamodb_table.kapten.name
+      }
+    )
+  }
 }
 
 resource "aws_cloudwatch_log_group" "step_function" {
-  name              = "/aws/vendedlogs/states/${local.pipeline_name}"
+  for_each = var.state_machines
+
+  name              = "/aws/vendedlogs/states/${local.pipeline_name}-${each.key}"
   retention_in_days = var.log_retention_in_days
   tags              = var.tags
 }
 
 resource "aws_iam_role" "step_function" {
-  name_prefix = "${local.pipeline_name}-sfn-"
+  for_each = var.state_machines
+
+  name_prefix = "${local.pipeline_name}-${each.key}-sfn-"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -63,8 +71,10 @@ resource "aws_iam_role" "step_function" {
 }
 
 resource "aws_iam_role_policy" "step_function" {
-  name = "${local.pipeline_name}-sfn-policy"
-  role = aws_iam_role.step_function.id
+  for_each = var.state_machines
+
+  name = "${local.pipeline_name}-${each.key}-sfn-policy"
+  role = aws_iam_role.step_function[each.key].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -107,7 +117,7 @@ resource "aws_iam_role_policy" "step_function" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "${aws_cloudwatch_log_group.step_function.arn}:*"
+        Resource = "${aws_cloudwatch_log_group.step_function[each.key].arn}:*"
       },
       {
         Effect = "Allow"
@@ -126,12 +136,14 @@ resource "aws_iam_role_policy" "step_function" {
 }
 
 resource "aws_sfn_state_machine" "this" {
-  name       = local.state_machine_name
-  role_arn   = aws_iam_role.step_function.arn
-  definition = local.state_machine_definition
+  for_each = var.state_machines
+
+  name       = "${local.pipeline_name}-${each.key}"
+  role_arn   = aws_iam_role.step_function[each.key].arn
+  definition = local.state_machine_definitions[each.key]
 
   logging_configuration {
-    log_destination        = "${aws_cloudwatch_log_group.step_function.arn}:*"
+    log_destination        = "${aws_cloudwatch_log_group.step_function[each.key].arn}:*"
     include_execution_data = true
     level                  = var.logging_level
   }

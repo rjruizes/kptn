@@ -108,6 +108,7 @@ def _make_task_state(
                     "Environment": [
                         {"Name": "KAPTEN_PIPELINE", "Value": pipeline_name},
                         {"Name": "KAPTEN_TASK", "Value": task_name},
+                        {"Name": "DYNAMODB_TABLE_NAME", "Value": "${dynamodb_table_name}"},
                     ],
                 }
             ]

@@ -33,7 +33,7 @@ FLOW_TYPE_CONFIG: dict[str, dict[str, Any]] = {
     "stepfunctions": {
         "flow_template": None,
         "tasks_init_template": "tasks_init.py.jinja",
-        "flow_extension": ".json",
+        "flow_extension": ".json.tpl",
         "context_builder": build_stepfunctions_flow_context,
     },
 }

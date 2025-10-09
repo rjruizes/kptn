@@ -7,7 +7,7 @@ resource "aws_ecs_task_definition" "kapten" {
   network_mode             = var.task_definition_network_mode
   requires_compatibilities = var.task_definition_requires_compatibilities
   execution_role_arn       = local.ecs_task_execution_role_arn_effective
-  task_role_arn            = var.task_definition_task_role_arn
+  task_role_arn            = local.task_role_arn_effective
 
   container_definitions = jsonencode([
     {

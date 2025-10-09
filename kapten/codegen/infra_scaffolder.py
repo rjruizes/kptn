@@ -20,8 +20,8 @@ class ScaffoldReport:
     created: list[Path]
     skipped: list[Path]
     output_dir: Path
-    state_machine_file: Path
-    state_machine_file_exists: bool
+    state_machine_files: dict[str, Path]  # graph_name -> file path
+    state_machine_files_missing: list[str]  # graph names with missing files
     terraform_tfvars_path: Path | None
     warnings: list[str]
 
@@ -30,10 +30,10 @@ def _ensure_trailing_newline(content: str) -> str:
     return content if content.endswith("\n") else f"{content}\n"
 
 
-def _relative_definition_path(flows_dir: Path, pipeline_name: str, output_dir: Path) -> tuple[str, Path]:
+def _relative_definition_path(flows_dir: Path, graph_name: str, output_dir: Path) -> tuple[str, Path]:
     # Check for .json.tpl first (template file), then .json
-    tpl_path = flows_dir / f"{pipeline_name}.json.tpl"
-    json_path = flows_dir / f"{pipeline_name}.json"
+    tpl_path = flows_dir / f"{graph_name}.json.tpl"
+    json_path = flows_dir / f"{graph_name}.json"
     definition_path = tpl_path if tpl_path.exists() else json_path
     rel_path = os.path.relpath(definition_path, output_dir)
     return Path(rel_path).as_posix(), definition_path
@@ -74,6 +74,7 @@ def scaffold_stepfunctions_infra(
     *,
     output_dir: Path,
     pipeline_name: str,
+    graph_names: list[str],
     flows_dir: Path,
     force: bool = False,
     tfvars_values: dict[str, Any] | None = None,
@@ -84,9 +85,19 @@ def scaffold_stepfunctions_infra(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    rel_definition_path, definition_abs_path = _relative_definition_path(
-        flows_dir, pipeline_name, output_dir
-    )
+    # Build state_machines map for terraform
+    state_machines_map: dict[str, dict[str, str]] = {}
+    state_machine_files: dict[str, Path] = {}
+    state_machine_files_missing: list[str] = []
+
+    for graph_name in graph_names:
+        rel_definition_path, definition_abs_path = _relative_definition_path(
+            flows_dir, graph_name, output_dir
+        )
+        state_machines_map[graph_name] = {"definition_file": rel_definition_path}
+        state_machine_files[graph_name] = definition_abs_path
+        if not definition_abs_path.exists():
+            state_machine_files_missing.append(graph_name)
 
     files: dict[str, str] = {
         "main.tf": _load_template("main.tf"),
@@ -95,11 +106,10 @@ def scaffold_stepfunctions_infra(
         "task_definition.tf": _load_template("task_definition.tf"),
         "ecr.tf": _load_template("ecr.tf"),
         "task_execution_role.tf": _load_template("task_execution_role.tf"),
+        "task_role.tf": _load_template("task_role.tf"),
+        "dynamodb.tf": _load_template("dynamodb.tf"),
         "locals.tf": _load_template("locals.tf"),
-        "variables.tf": _load_template("variables.tf.tpl").replace(
-            "__STATE_MACHINE_DEFINITION_FILE__",
-            rel_definition_path,
-        ),
+        "variables.tf": _load_template("variables.tf.tpl"),
         "outputs.tf": _load_template("outputs.tf"),
         "README.md": _load_template("README.md.tpl").format(pipeline_name=pipeline_name),
         ".gitignore": _load_template(".gitignore"),
@@ -121,8 +131,10 @@ def scaffold_stepfunctions_infra(
 
     tfvars_path: Path | None = None
     if tfvars_values:
+        # Add state_machines to tfvars
+        tfvars_with_machines = {**tfvars_values, "state_machines": state_machines_map}
         tfvars_path = output_dir / "terraform.tfvars"
-        tfvars_content = _ensure_trailing_newline(_format_tfvars(tfvars_values))
+        tfvars_content = _ensure_trailing_newline(_format_tfvars(tfvars_with_machines))
         if tfvars_path.exists() and not force:
             skipped.append(tfvars_path)
         else:
@@ -133,8 +145,8 @@ def scaffold_stepfunctions_infra(
         created=created,
         skipped=skipped,
         output_dir=output_dir,
-        state_machine_file=definition_abs_path,
-        state_machine_file_exists=definition_abs_path.exists(),
+        state_machine_files=state_machine_files,
+        state_machine_files_missing=state_machine_files_missing,
         terraform_tfvars_path=tfvars_path,
         warnings=list(warnings or []),
     )

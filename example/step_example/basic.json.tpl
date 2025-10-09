@@ -34,6 +34,10 @@
                         {
                           "Name": "KAPTEN_TASK",
                           "Value": "a"
+                        },
+                        {
+                          "Name": "DYNAMODB_TABLE_NAME",
+                          "Value": "${dynamodb_table_name}"
                         }
                       ]
                     }
@@ -80,6 +84,10 @@
                         {
                           "Name": "KAPTEN_TASK",
                           "Value": "b"
+                        },
+                        {
+                          "Name": "DYNAMODB_TABLE_NAME",
+                          "Value": "${dynamodb_table_name}"
                         }
                       ]
                     }
@@ -131,6 +139,10 @@
                         {
                           "Name": "KAPTEN_TASK",
                           "Value": "c"
+                        },
+                        {
+                          "Name": "DYNAMODB_TABLE_NAME",
+                          "Value": "${dynamodb_table_name}"
                         }
                       ]
                     }
@@ -182,6 +194,10 @@
                 {
                   "Name": "KAPTEN_TASK",
                   "Value": "d"
+                },
+                {
+                  "Name": "DYNAMODB_TABLE_NAME",
+                  "Value": "${dynamodb_table_name}"
                 }
               ]
             }
