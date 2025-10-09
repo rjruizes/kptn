@@ -33,6 +33,7 @@ FLOW_TYPE_CONFIG: dict[str, dict[str, Any]] = {
     "stepfunctions": {
         "flow_template": None,
         "tasks_init_template": "tasks_init.py.jinja",
+        "run_template": "run.py.jinja",
         "flow_extension": ".json.tpl",
         "context_builder": build_stepfunctions_flow_context,
     },
@@ -178,6 +179,19 @@ def generate_files(graph: str = None):
         output_file = path.join(flows_dir, f'{graph_name}{flow_extension}')
         with open(output_file, 'w') as f:
             f.write(rendered)
+
+    # Write run.py file for stepfunctions (once, not per graph)
+    run_template_name = flow_config.get('run_template')
+    if run_template_name:
+        run_context = {
+            "rel_tasks_conf_path": relative_path_from_flows_dir_to_tasks_conf_path(kap_conf),
+        }
+        run_rendered = environment.get_template(run_template_name).render(
+            **run_context
+        )
+        run_output_file = path.join(flows_dir, 'run.py')
+        with open(run_output_file, 'w') as f:
+            f.write(run_rendered)
 
     # Write tasks/__init__.py file
     task_names = list(tasks_dict.keys())
