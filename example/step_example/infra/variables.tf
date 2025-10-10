@@ -214,6 +214,36 @@ variable "task_definition_container_environment" {
   default     = {}
 }
 
+variable "task_definition_enable_awslogs" {
+  type        = bool
+  description = "Enable the awslogs log driver for the ECS task container"
+  default     = true
+}
+
+variable "task_definition_create_log_group" {
+  type        = bool
+  description = "Create a CloudWatch log group for the ECS task when awslogs is enabled"
+  default     = true
+}
+
+variable "task_definition_log_group_name" {
+  type        = string
+  description = "Override the CloudWatch log group name used by the ECS task when awslogs is enabled"
+  default     = null
+}
+
+variable "task_definition_log_stream_prefix" {
+  type        = string
+  description = "Log stream prefix applied to awslogs streams for the ECS task container"
+  default     = null
+}
+
+variable "task_definition_log_retention_in_days" {
+  type        = number
+  description = "Retention period (days) for the ECS task CloudWatch log group that Terraform manages"
+  default     = 30
+}
+
 variable "create_task_execution_role" {
   type        = bool
   description = "Set to true to provision an ECS task execution role"
@@ -229,7 +259,7 @@ variable "task_execution_role_name_prefix" {
 variable "task_execution_role_managed_policies" {
   type        = list(string)
   description = "Managed policy ARNs attached to a generated task execution role"
-  default     = [
+  default = [
     "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
   ]
 }
@@ -375,4 +405,40 @@ variable "efs_security_group_description" {
   type        = string
   description = "Description for the generated EFS security group"
   default     = "Security group for Kapten EFS mount targets"
+}
+
+variable "build_and_push_image" {
+  type        = bool
+  description = "Set to true to build and push Docker image to ECR using Terraform"
+  default     = true
+}
+
+variable "docker_image_tag" {
+  type        = string
+  description = "Tag to apply to the built Docker image"
+  default     = "latest"
+}
+
+variable "docker_build_context" {
+  type        = string
+  description = "Path to the Docker build context (directory containing Dockerfile)"
+  default     = ".."
+}
+
+variable "docker_build_dockerfile" {
+  type        = string
+  description = "Name of the Dockerfile (relative to build context)"
+  default     = "Dockerfile"
+}
+
+variable "docker_build_platform" {
+  type        = string
+  description = "Platform to build the Docker image for (e.g., linux/amd64, linux/arm64)"
+  default     = "linux/amd64"
+}
+
+variable "docker_keep_remotely" {
+  type        = bool
+  description = "Keep the Docker image in ECR when destroying the Terraform resource"
+  default     = true
 }

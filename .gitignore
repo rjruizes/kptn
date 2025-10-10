@@ -334,3 +334,4 @@ shared-local-instance.db
 # Local .terraform directories
 **/.terraform/*
 **/.terraform
+*.whl

@@ -27,4 +27,4 @@ COPY kapten.yaml run.py ./
 ENV PYTHONPATH=/app
 
 # Default command (can be overridden)
-CMD ["uv", "run", "run.py"]
+CMD [".venv/bin/python", "run.py"]

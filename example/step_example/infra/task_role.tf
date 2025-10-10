@@ -74,10 +74,10 @@ resource "aws_iam_role_policy" "kapten_task_efs" {
           StringEquals = {
             "elasticfilesystem:AccessPointArn" = aws_efs_access_point.kapten["main"].arn
           }
-        } : (var.efs_access_point_arn != null ? {
-          StringEquals = {
-            "elasticfilesystem:AccessPointArn" = var.efs_access_point_arn
-          }
+          } : (var.efs_access_point_arn != null ? {
+            StringEquals = {
+              "elasticfilesystem:AccessPointArn" = var.efs_access_point_arn
+            }
         } : null)
       }
     ]

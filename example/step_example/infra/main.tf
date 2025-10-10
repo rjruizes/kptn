@@ -5,11 +5,32 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    docker = {
+      source  = "kreuzwerker/docker"
+      version = "~> 3.0"
+    }
   }
 }
 
 provider "aws" {
   region = var.region
+}
+
+# Get ECR authorization token for Docker provider
+data "aws_ecr_authorization_token" "token" {
+  count = var.build_and_push_image ? 1 : 0
+}
+
+# Configure Docker provider with ECR authentication
+provider "docker" {
+  dynamic "registry_auth" {
+    for_each = var.build_and_push_image ? [1] : []
+    content {
+      address  = data.aws_ecr_authorization_token.token[0].proxy_endpoint
+      username = data.aws_ecr_authorization_token.token[0].user_name
+      password = data.aws_ecr_authorization_token.token[0].password
+    }
+  }
 }
 
 data "aws_region" "current" {}
@@ -93,9 +114,19 @@ resource "aws_iam_role_policy" "step_function" {
       {
         Effect = "Allow"
         Action = [
+          "ecs:TagResource"
+        ]
+        Resource = "arn:${data.aws_partition.current.partition}:ecs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:task/${local.ecs_cluster_name_effective}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "iam:PassRole"
         ]
-        Resource = local.ecs_task_execution_role_arn_effective
+        Resource = [
+          local.ecs_task_execution_role_arn_effective,
+          local.task_role_arn_effective
+        ]
       },
       {
         Effect = "Allow"

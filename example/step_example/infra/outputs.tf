@@ -77,3 +77,13 @@ output "efs_access_point_arn" {
   description = "ARN of the EFS access point used by Kapten tasks"
   value       = var.create_efs ? aws_efs_access_point.kapten["main"].arn : var.efs_access_point_arn
 }
+
+output "container_image_effective" {
+  description = "Container image URI used by the ECS task definition (built or provided)"
+  value       = local.container_image_effective
+}
+
+output "docker_image_name" {
+  description = "Full name of the built and pushed Docker image (only when build_and_push_image is true)"
+  value       = var.build_and_push_image ? docker_registry_image.kapten[0].name : null
+}
