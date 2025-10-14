@@ -11,16 +11,8 @@
 {%- set file_value = task_config.get('file', '') -%}
 {%- if file_value -%}
 {%- set file_path = file_value.split(':')[0] -%}
-_{{name}} = submit( # file://./{{ rel_py_tasks_dir }}/{{ file_path }}
+    submit("{{name}}", opts)  # file://./{{ rel_py_tasks_dir }}/{{ file_path }}
 {%- else -%}
-_{{name}} = submit(
+    submit("{{name}}", opts)
 {%- endif %}
-        "{{name}}",
-        pipeline_config,
-        task_list,
-        ignore_cache
-        {%- if name in python_task_names %},
-        tasks.{{name}}
-        {%- endif %}
-    )
 {%- endmacro %}

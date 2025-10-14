@@ -1,87 +1,35 @@
 
-import argparse
-import sys
 from pathlib import Path
-from typing import Literal, Never
-
 from kapten.caching.submit import submit
+from kapten.runner import cli_parser, parse_and_validate_tasks
+from kapten.util.pipeline_config import PipelineConfig
 
-from kapten.util.pipeline_config import PipelineConfig, get_storage_key
 
-# Add the tasks directory to sys.path to enable imports
-tasks_path = Path(__file__).parent / "src"
-if tasks_path.parent not in [Path(p) for p in sys.path]:
-    sys.path.insert(0, str(tasks_path.parent))
-import src as tasks
-
-TaskListChoices = list[Literal["a","b","c",]]|list[Never]
 VALID_TASKS: set[str] = { "a", "b", "c" }
 
-def basic(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
+def basic(task_list: list[str] = [], ignore_cache: bool = False):
+    pipeline_config = PipelineConfig(
+        TASKS_CONFIG_PATH=str(Path(__file__).parent / "kapten.yaml"),
+        PIPELINE_NAME="basic",
+    )
+
+    task_list = parse_and_validate_tasks(task_list, VALID_TASKS)
+
+    opts = (
+        pipeline_config,
+        set(task_list),
+        ignore_cache,
+    )
     
-    _a = submit(
-        "a",
-        pipeline_config,
-        task_list,
-        ignore_cache,
-        tasks.a
-    )
-    _b = submit(
-        "b",
-        pipeline_config,
-        task_list,
-        ignore_cache,
-        tasks.b
-    )
-    _c = submit(
-        "c",
-        pipeline_config,
-        task_list,
-        ignore_cache,
-        tasks.c
-    )
+    submit("a", opts)  # file://./src/a.py
+    submit("b", opts)  # file://./src/b.py
+    submit("c", opts)  # file://./src/c.py
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the pipeline")
-    parser.add_argument(
-        "-f",
-        "--force",
-        action="store_true",
-        dest="force",
-        help="Ignore cached results and force all tasks to run",
-    )
-    parser.add_argument(
-        "tasks",
-        nargs="?",
-        default="",
-        help=(
-            "Optional comma-separated list of task names to run; "
-            "runs all tasks when omitted"
-        ),
-    )
-    args, _ = parser.parse_known_args()
-    
-    tasks_config_path = Path(__file__).parent / "kapten.yaml"
-    pipeline_config = PipelineConfig(
-        TASKS_CONFIG_PATH=str(tasks_config_path),
-        PIPELINE_NAME="basic",
-    )
-    raw_task_list = args.tasks
-    task_list = (
-        [task.strip() for task in raw_task_list.split(",") if task.strip()]
-        if raw_task_list
-        else []
-    )
-    if task_list:
-        invalid_tasks = [task for task in task_list if task not in VALID_TASKS]
-        if invalid_tasks:
-            parser.error(
-                "Invalid task(s): " + ", ".join(invalid_tasks) + ". "
-                "Expected one of: " + ", ".join(sorted(VALID_TASKS))
-            )
+    args, _ = cli_parser().parse_known_args()
+
     basic(
-        pipeline_config,
-        task_list=task_list,
+        task_list=args.tasks or None,
         ignore_cache=args.force,
     )

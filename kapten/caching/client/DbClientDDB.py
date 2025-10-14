@@ -261,7 +261,7 @@ class DbClientDDB(DbClientBase):
         single_task = get_single_task(
             self.client, self.table_name, self.storage_key, self.pipeline, task_name
         )
-        if single_task and include_data:
+        if single_task and include_data and "taskdata_count" in single_task:
             bin_ids = calculate_bin_ids(single_task["taskdata_count"])
             # if subset mode, try to get subset data; if it doesn't exist, get task data
             if subset_mode:
