@@ -68,3 +68,66 @@ def test_runtime_config_delegates_to_fallback():
     runtime = RuntimeConfig.from_config({}, fallback=fallback)
 
     assert runtime.answer == 42
+
+
+def test_runtime_config_supports_duckdb_mapping_alias():
+    config = {
+        "duckdb": {
+            "function": "tests.runtime_config_fixtures:build_engine()",
+            "parameter_name": "engine",
+        }
+    }
+
+    runtime = RuntimeConfig.from_config(config)
+
+    assert runtime.duckdb == {"url": "sqlite://example"}
+    assert runtime.engine == {"url": "sqlite://example"}
+
+
+def test_runtime_config_rejects_invalid_duckdb_alias():
+    config = {
+        "duckdb": {
+            "function": "tests.runtime_config_fixtures:build_engine()",
+            "parameter_name": "not valid",
+        }
+    }
+
+    with pytest.raises(RuntimeConfigError):
+        RuntimeConfig.from_config(config)
+
+
+def test_runtime_config_requires_duckdb_function_when_mapping():
+    config = {
+        "duckdb": {
+            "parameter_name": "engine",
+        }
+    }
+
+    with pytest.raises(RuntimeConfigError):
+        RuntimeConfig.from_config(config)
+
+
+def test_runtime_config_supports_nested_include(tmp_path):
+    nested_path = tmp_path / "config.json"
+    nested_path.write_text(json.dumps({"hello": "world"}), encoding="utf-8")
+
+    config = {
+        "nested": {
+            "include": "config.json",
+            "extra": 99,
+        }
+    }
+
+    runtime = RuntimeConfig.from_config(config, base_dir=tmp_path)
+
+    assert runtime.nested == {"hello": "world", "extra": 99}
+
+
+def test_runtime_config_nested_include_requires_mapping(tmp_path):
+    nested_path = tmp_path / "config.json"
+    nested_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+
+    config = {"nested": {"include": "config.json"}}
+
+    with pytest.raises(RuntimeConfigError):
+        RuntimeConfig.from_config(config, base_dir=tmp_path)

@@ -25,7 +25,7 @@ class RuntimeConfigError(RuntimeError):
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    """Runtime configuration resolved from the ``config`` block in ``tasks.yaml``.
+    """Runtime configuration resolved from the ``config`` block in ``kapten.yaml``.
 
     The configuration is resolved as follows:
 
@@ -97,15 +97,42 @@ class RuntimeConfig:
             if key != "include"
         }
 
-        return cls._deep_merge(merged, current)
+        resolved = cls._deep_merge(merged, current)
+        cls._apply_duckdb_overrides(resolved)
+        return resolved
+
+    @classmethod
+    def _apply_duckdb_overrides(cls, resolved: dict[str, Any]) -> None:
+        """Normalise duckdb config entries to maintain backwards compatibility."""
+        duckdb_entry = resolved.get("duckdb")
+        if not isinstance(duckdb_entry, Mapping):
+            return
+
+        connection = duckdb_entry.get("function")
+        if connection is None:
+            raise RuntimeConfigError(
+                "DuckDB config mapping must define a 'function' entry"
+            )
+
+        alias = duckdb_entry.get("parameter_name")
+        if isinstance(alias, str):
+            alias = alias.strip()
+            if alias and not alias.isidentifier():
+                raise RuntimeConfigError(
+                    f"DuckDB config alias '{alias}' is not a valid identifier"
+                )
+        else:
+            alias = None
+
+        resolved["duckdb"] = connection
+
+        if alias:
+            resolved[alias] = connection
 
     @classmethod
     def _resolve_value(cls, value: Any, base_path: Path) -> Any:
         if isinstance(value, Mapping):
-            return {
-                key: cls._resolve_value(inner_value, base_path)
-                for key, inner_value in value.items()
-            }
+            return cls._resolve_mapping(dict(value), base_path)
         if isinstance(value, list):
             return [cls._resolve_value(item, base_path) for item in value]
         if isinstance(value, str):
@@ -114,6 +141,29 @@ class RuntimeConfig:
                 return callable_result
             return value
         return value
+
+    @classmethod
+    def _resolve_mapping(cls, mapping: dict[str, Any], base_path: Path) -> dict[str, Any]:
+        include_value = mapping.pop("include", None)
+
+        merged: dict[str, Any] = {}
+        if include_value is not None:
+            for include_path in cls._normalise_includes(include_value):
+                include_data_raw = cls._load_include(base_path, include_path)
+                include_data = cls._resolve_value(include_data_raw, base_path)
+                if not isinstance(include_data, Mapping):
+                    raise RuntimeConfigError(
+                        f"Included file '{include_path}' did not decode to a mapping"
+                    )
+                merged = cls._deep_merge(merged, dict(include_data))
+
+        current = {
+            key: cls._resolve_value(value, base_path)
+            for key, value in mapping.items()
+            if key != "include"
+        }
+
+        return cls._deep_merge(merged, current)
 
     @classmethod
     def _maybe_call_callable(cls, candidate: str) -> Any:

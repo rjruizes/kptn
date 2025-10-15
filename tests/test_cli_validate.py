@@ -199,3 +199,24 @@ def test_validate_python_tasks_imports_modules_from_project(tmp_path):
     errors = _validate_python_tasks(tmp_path, kap_conf)
 
     assert errors == []
+
+
+def test_validate_python_tasks_uses_duckdb_alias(tmp_path):
+    kap_conf = _base_config(
+        tmp_path,
+        """
+        def consumer(engine):
+            return engine
+        """,
+        config_block={
+            "duckdb": {
+                "function": "tests.runtime_config_fixtures:build_engine()",
+                "parameter_name": "engine",
+            }
+        },
+        consumer_dependencies=[],
+    )
+
+    errors = _validate_python_tasks(tmp_path, kap_conf)
+
+    assert errors == []

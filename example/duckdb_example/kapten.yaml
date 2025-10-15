@@ -7,7 +7,11 @@ settings:
 
 config:
   my_global: 42
-  duckdb: src.utils:get_engine()
+  duckdb: 
+    function: src.utils:get_engine()
+    parameter_name: engine
+  config:
+    include: config.json
 
 graphs:
   duckdb_example:

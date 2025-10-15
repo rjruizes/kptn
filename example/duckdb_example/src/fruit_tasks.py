@@ -1,9 +1,10 @@
 from kapten.util.runtime_config import RuntimeConfig
 
 
-def fruit_summary(runtime_config: RuntimeConfig) -> None:
+def fruit_summary(engine, config) -> None:
     """Create summary table from fruit_metrics."""
-    con = runtime_config.duckdb
+    con = engine
+    print(f"Running fruit_summary with config: {config}")
     con.execute(
         """
         create or replace table fruit_summary as
