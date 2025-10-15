@@ -2,9 +2,58 @@
 __version__ = "0.1.0"
 
 import importlib.util
-import yaml
+import inspect
+import sys
 from pathlib import Path
 from typing import Union
+
+import yaml
+
+from kapten.util.pipeline_config import PipelineConfig, _module_path_from_dir
+
+
+def _coerce_task_list(task_names: Union[str, list[str], None]) -> list[str]:
+    """Normalise task input into a list for flow execution."""
+    if task_names is None:
+        return []
+    if isinstance(task_names, str):
+        return [task.strip() for task in task_names.split(",") if task.strip()]
+    return list(task_names)
+
+
+def _build_pipeline_config_for_run(
+    config: dict,
+    pipeline_name: str,
+    project_path: Path,
+) -> PipelineConfig:
+    """Construct a PipelineConfig from kapten.yaml for flow execution."""
+    settings = config.get("settings", {})
+    py_tasks_dir = settings.get("py-tasks-dir")
+    if not py_tasks_dir:
+        raise RuntimeError("Missing 'py-tasks-dir' in kapten.yaml settings")
+
+    module_path = _module_path_from_dir(py_tasks_dir)
+    tasks_config_path = (project_path / "kapten.yaml").resolve()
+    r_tasks_dir_setting = settings.get("r-tasks-dir", ".")
+    r_tasks_dir_path = (project_path / r_tasks_dir_setting).resolve()
+
+    pipeline_kwargs: dict[str, Union[str, bool]] = {
+        "PIPELINE_NAME": pipeline_name,
+        "PY_MODULE_PATH": module_path,
+        "TASKS_CONFIG_PATH": str(tasks_config_path),
+        "R_TASKS_DIR_PATH": str(r_tasks_dir_path),
+        "SUBSET_MODE": False,
+    }
+
+    storage_key = settings.get("storage-key") or settings.get("storage_key")
+    if storage_key:
+        pipeline_kwargs["STORAGE_KEY"] = str(storage_key)
+
+    branch = settings.get("branch")
+    if branch:
+        pipeline_kwargs["BRANCH"] = str(branch)
+
+    return PipelineConfig(**pipeline_kwargs)
 
 
 def run(
@@ -88,16 +137,55 @@ def run(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    # Execute the run_pipeline function
-    if not hasattr(module, 'run_pipeline'):
+    flow_func = getattr(module, pipeline_name, None)
+    if flow_func is None and hasattr(module, "run_pipeline"):
+        run_pipeline_func = getattr(module, "run_pipeline")
+        run_pipeline_func(
+            task_names=task_names,
+            force=force,
+            config_path=str(config_path)
+        )
+        return
+
+    if flow_func is None:
         raise ImportError(
-            f"Generated flow file {flow_file} does not have a run_pipeline function. "
+            f"Generated flow file {flow_file} does not define a '{pipeline_name}' function "
+            "and no legacy run_pipeline fallback was found. "
             "Please regenerate it with 'kapten codegen'."
         )
 
-    run_pipeline_func = getattr(module, 'run_pipeline')
-    run_pipeline_func(
-        task_names=task_names,
-        force=force,
-        config_path=str(config_path)
-    )
+    task_list = _coerce_task_list(task_names)
+    signature = inspect.signature(flow_func)
+    kwargs = {}
+
+    if "task_list" in signature.parameters:
+        kwargs["task_list"] = task_list
+    elif "tasks" in signature.parameters:
+        kwargs["tasks"] = task_list
+
+    if "ignore_cache" in signature.parameters:
+        kwargs["ignore_cache"] = force
+    elif "force" in signature.parameters:
+        kwargs["force"] = force
+
+    if "pipeline_config" in signature.parameters:
+        pipeline_config = _build_pipeline_config_for_run(config, pipeline_name, project_path)
+        kwargs["pipeline_config"] = pipeline_config
+
+    if "config_path" in signature.parameters:
+        kwargs["config_path"] = str(config_path)
+
+    sys_path_added = False
+    project_dir_str = str(project_path)
+    if project_dir_str not in sys.path:
+        sys.path.insert(0, project_dir_str)
+        sys_path_added = True
+
+    try:
+        flow_func(**kwargs)
+    finally:
+        if sys_path_added:
+            try:
+                sys.path.remove(project_dir_str)
+            except ValueError:
+                pass

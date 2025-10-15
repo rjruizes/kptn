@@ -10,6 +10,7 @@ from typing import Callable, Optional, Union
 import requests
 import time
 from pathlib import Path
+import inspect
 
 from kapten.caching.Hasher import Hasher
 from kapten.caching.models import TaskState
@@ -21,6 +22,7 @@ from kapten.util.runtime_config import RuntimeConfig
 from kapten.util.rscript import r_script
 from kapten.util.read_tasks_config import read_tasks_config
 from kapten.util.hash import hash_file, hash_obj
+from kapten.util.task_args import plan_python_call
 
 class TaskStateCache():
     """
@@ -681,7 +683,19 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
                 kwargs[arg_name] = arg_value
     runtime_config = tscache.build_runtime_config()
     task_callable = tscache.get_python_callable(task_name)
-    result = task_callable(runtime_config, **kwargs)
+    signature = inspect.signature(task_callable)
+    call_args, call_kwargs, missing = plan_python_call(
+        signature,
+        kwargs,
+        runtime_config,
+    )
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise TypeError(
+            f"Task '{task_name}' callable '{task_callable.__name__}' is missing required arguments: {missing_list}"
+        )
+
+    result = task_callable(*call_args, **call_kwargs)
     if key:
         tscache.db_client.set_subtask_ended(task_name, idx)
     else:

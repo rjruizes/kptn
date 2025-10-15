@@ -1,3 +1,3 @@
 
-def a(pipeline_config):
+def a():
   print("This is _a_")

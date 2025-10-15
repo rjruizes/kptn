@@ -12,7 +12,10 @@ from kapten.cli.config_validation import (
 )
 from kapten.codegen.codegen import generate_files
 from kapten.read_config import read_config
-from kapten.util.pipeline_config import PipelineConfig, _module_path_from_dir
+from kapten.cli.task_validation import (
+    _build_pipeline_config,
+    _validate_python_tasks,
+)
 
 try:
     from botocore.exceptions import NoCredentialsError, NoRegionError
@@ -67,42 +70,6 @@ def _choose_pipeline(kap_conf: dict[str, Any], requested: Optional[str]) -> str:
     raise ValueError(
         f"Multiple pipelines found ({available}); please specify --pipeline"
     )
-
-
-def _build_pipeline_config(
-    kap_conf: dict[str, Any],
-    pipeline_name: str,
-    project_root: Path,
-    subset_mode: bool,
-) -> PipelineConfig:
-    settings = kap_conf.get("settings", {})
-    py_tasks_dir = settings.get("py-tasks-dir")
-    if not py_tasks_dir:
-        raise RuntimeError("Missing 'py-tasks-dir' in kapten.yaml settings")
-
-    module_path = _module_path_from_dir(py_tasks_dir)
-    project_root = project_root.resolve()
-    tasks_config_path = (project_root / "kapten.yaml").resolve()
-    r_tasks_dir_setting = settings.get("r-tasks-dir", ".")
-    r_tasks_dir_path = (project_root / Path(r_tasks_dir_setting)).resolve()
-
-    pipeline_kwargs: dict[str, Any] = {
-        "PIPELINE_NAME": pipeline_name,
-        "PY_MODULE_PATH": module_path,
-        "TASKS_CONFIG_PATH": str(tasks_config_path),
-        "R_TASKS_DIR_PATH": str(r_tasks_dir_path),
-        "SUBSET_MODE": subset_mode,
-    }
-
-    storage_key = settings.get("storage-key") or settings.get("storage_key")
-    if storage_key:
-        pipeline_kwargs["STORAGE_KEY"] = str(storage_key)
-
-    branch = settings.get("branch")
-    if branch:
-        pipeline_kwargs["BRANCH"] = str(branch)
-
-    return PipelineConfig(**pipeline_kwargs)
 
 
 @app.command()
@@ -237,6 +204,20 @@ def validate(
         typer.echo("kapten.yaml does not conform to kapten-schema.json:")
         for issue in issues:
             typer.echo(f"- {issue.path}: {issue.message}")
+        raise typer.Exit(1)
+
+    try:
+        with config_path.open("r", encoding="utf-8") as config_file:
+            kap_conf = yaml.safe_load(config_file) or {}
+    except yaml.YAMLError as exc:  # pragma: no cover - already parsed during validation
+        typer.echo(f"Failed to parse kapten.yaml: {exc}")
+        raise typer.Exit(1) from exc
+
+    python_issues = _validate_python_tasks(base_dir, kap_conf)
+    if python_issues:
+        typer.echo("kapten.yaml contains task configuration errors:")
+        for issue in python_issues:
+            typer.echo(f"- {issue}")
         raise typer.Exit(1)
 
     typer.echo("kapten.yaml conforms to kapten-schema.json.")

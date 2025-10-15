@@ -1,9 +1,9 @@
-
 import functools
 
 from kapten.caching.TaskStateCache import TaskStateCache, rscript_task, py_task
 from kapten.util.pipeline_config import PipelineConfig
 from kapten.util.flow_type import is_flow_prefect
+from kapten.util.task_args import build_task_argument_plan, resolve_dependency_key
 
 
 def fetch_cached_dep_data(tscache: TaskStateCache, task_name: str):
@@ -13,26 +13,28 @@ def fetch_cached_dep_data(tscache: TaskStateCache, task_name: str):
     value_list: a list of values for the keys of the dependencies; used for mapping tasks
     """
     deps = tscache.get_dep_list(task_name)
-    data_args = {}
-    arg_lookup = {}
-    value_list = []
-    # Build a lookup table to map ref keys (task names) to arg names
     task = tscache.get_task(task_name)
-    if "args" in task:
-        for arg_name, arg_value in tscache.get_task(task_name)["args"].items():
-            if type(arg_value) == dict and "ref" in arg_value:
-                arg_lookup[arg_value["ref"]] = arg_name
+    tasks_def = tscache.tasks_config.get("tasks", {})
+    plan = build_task_argument_plan(task_name, task, deps, tasks_def)
+    if plan.errors:
+        for message in plan.errors:
+            tscache.logger.warning(
+                "Task %s configuration issue during argument resolution: %s",
+                task_name,
+                message,
+            )
+
+    data_args = {}
+    value_list = []
+
     for dep_name in deps:
         if tscache.should_cache_result(dep_name):
             resp = tscache.fetch_state(dep_name)
             if resp != None and resp.data != "":
                 dep = tscache.get_task(dep_name)
-                if "map_over" in task and "iterable_item" in dep:
-                    key = dep["iterable_item"]
-                elif dep_name in arg_lookup:
-                    key = arg_lookup[dep_name]
-                else:
-                    key = dep_name
+                key = resolve_dependency_key(task, dep_name, dep, plan.alias_lookup)
+                if not key:
+                    continue
                 if "map_over" in task and "," in key:
                     keys = key.split(",")
                     data: list[tuple] = resp.data
