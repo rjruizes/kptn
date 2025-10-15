@@ -6,6 +6,10 @@ import json
 import yaml
 from kapten.caching.TaskStateDbClient import TaskStateDbClient
 from kapten.cli.infra_commands import register_infra_commands
+from kapten.cli.config_validation import (
+    SchemaValidationError,
+    validate_kapten_config,
+)
 from kapten.codegen.codegen import generate_files
 from kapten.read_config import read_config
 from kapten.util.pipeline_config import PipelineConfig, _module_path_from_dir
@@ -195,6 +199,47 @@ def config(
             typer.echo(f"{key:<20}: {value}")
     else:  # default to yaml
         typer.echo(yaml.dump(kap_conf, default_flow_style=False))
+
+
+@app.command()
+def validate(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-p", help="Project directory containing kapten configuration")
+):
+    """Validate kapten.yaml against kapten-schema.json."""
+
+    base_dir = Path(project_dir).resolve() if project_dir else Path.cwd()
+    if project_dir and not base_dir.exists():
+        typer.echo(f"Provided project directory does not exist: {base_dir}")
+        raise typer.Exit(1)
+
+    config_path = base_dir / "kapten.yaml"
+    module_root = Path(__file__).resolve()
+    schema_path = module_root.parents[2] / "kapten-schema.json"
+    if not schema_path.exists():
+        schema_path = module_root.parents[1] / "kapten-schema.json"
+
+    try:
+        issues = validate_kapten_config(config_path, schema_path)
+    except FileNotFoundError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1)
+    except yaml.YAMLError as exc:
+        typer.echo(f"Failed to parse kapten.yaml: {exc}")
+        raise typer.Exit(1) from exc
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Failed to parse kapten-schema.json: {exc}")
+        raise typer.Exit(1) from exc
+    except SchemaValidationError as exc:  # pragma: no cover - schema should be valid
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+
+    if issues:
+        typer.echo("kapten.yaml does not conform to kapten-schema.json:")
+        for issue in issues:
+            typer.echo(f"- {issue.path}: {issue.message}")
+        raise typer.Exit(1)
+
+    typer.echo("kapten.yaml conforms to kapten-schema.json.")
 
 
 @app.command()

@@ -10,6 +10,7 @@ dependencies = [
     "jinja2",
     "requests",
     "pydantic",
+    "jsonschema>=4.25.1",
 ]
 
 [project.optional-dependencies]

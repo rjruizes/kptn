@@ -748,6 +748,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
+    { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -781,6 +782,7 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'duckdb'" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.116.2" },
     { name = "jinja2" },
+    { name = "jsonschema", specifier = ">=4.25.1" },
     { name = "prefect", marker = "extra == 'prefect'" },
     { name = "pydantic" },
     { name = "pyyaml" },
