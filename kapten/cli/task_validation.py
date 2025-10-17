@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import ast
 import inspect
-import sys
-from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 from kapten.util.pipeline_config import PipelineConfig, _module_path_from_dir
-from kapten.util.runtime_config import RuntimeConfig
+from kapten.util.runtime_config import RuntimeConfig, ensure_pythonpath
 from kapten.util.task_args import (
     build_task_argument_plan,
     normalise_dependency_spec,
@@ -17,21 +15,6 @@ from kapten.util.task_args import (
 )
 
 _AST_DEFAULT = object()
-
-
-@contextmanager
-def _temporary_sys_path(path: str):
-    """Temporarily insert ``path`` at the front of ``sys.path``."""
-    inserted = False
-    if path not in sys.path:
-        sys.path.insert(0, path)
-        inserted = True
-    try:
-        yield
-    finally:
-        if inserted:
-            with suppress(ValueError):
-                sys.path.remove(path)
 
 
 def _build_pipeline_config(
@@ -201,12 +184,12 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
             continue
 
         try:
-            with _temporary_sys_path(str(base_dir)):
-                runtime_config = RuntimeConfig.from_tasks_config(
-                    kap_conf,
-                    base_dir=base_dir,
-                    fallback=pipeline_config,
-                )
+            ensure_pythonpath(base_dir, pipeline_config.PY_MODULE_PATH or None)
+            runtime_config = RuntimeConfig.from_tasks_config(
+                kap_conf,
+                base_dir=base_dir,
+                fallback=pipeline_config,
+            )
         except Exception as exc:
             errors.append(
                 f"Graph '{pipeline_name}': unable to build runtime configuration: {exc}"

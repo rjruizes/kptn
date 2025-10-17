@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import re
+import sys
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,40 @@ import yaml
 
 class RuntimeConfigError(RuntimeError):
     """Raised when runtime configuration cannot be interpreted."""
+
+
+def ensure_pythonpath(
+    base_dir: str | Path | None,
+    module_path: str | None = None,
+) -> None:
+    """Ensure the Python import system can locate project and task modules."""
+    if base_dir is None:
+        base_path: Path | None = None
+    else:
+        base_path = Path(base_dir).resolve()
+    candidates: list[Path] = []
+    if base_path and base_path.is_dir():
+        candidates.append(base_path)
+        if module_path:
+            module_parts = [part for part in module_path.split(".") if part]
+            if module_parts:
+                module_dir = base_path.joinpath(*module_parts).resolve()
+                module_parent = module_dir.parent
+                if module_parent.is_dir():
+                    candidates.append(module_parent)
+                if module_dir.is_dir():
+                    candidates.append(module_dir)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or not candidate.is_dir():
+            continue
+        candidate_str = str(candidate)
+        if candidate_str in seen:
+            continue
+        seen.add(candidate_str)
+        if candidate_str not in sys.path:
+            sys.path.insert(0, candidate_str)
 
 
 @dataclass(frozen=True)
@@ -53,6 +88,8 @@ class RuntimeConfig:
         """Create a runtime config from a full tasks configuration mapping."""
 
         config_block = deepcopy(tasks_config.get("config", {}) if tasks_config else {})
+        module_path = getattr(fallback, "PY_MODULE_PATH", None) if fallback else None
+        ensure_pythonpath(base_dir, module_path)
         resolved = cls._resolve_config_block(config_block, base_dir)
         return cls(resolved, fallback)
 
@@ -67,6 +104,8 @@ class RuntimeConfig:
         """Alternate constructor when only the ``config`` block is available."""
 
         config_block = deepcopy(config or {})
+        module_path = getattr(fallback, "PY_MODULE_PATH", None) if fallback else None
+        ensure_pythonpath(base_dir, module_path)
         resolved = cls._resolve_config_block(config_block, base_dir)
         return cls(resolved, fallback)
 
