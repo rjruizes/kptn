@@ -149,7 +149,7 @@ def _load_python_function_signature(
 
 
 def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str]:
-    """Validate that Python tasks accept the arguments Kapten will provide."""
+    """Validate Kapten tasks, including Python signatures and required files."""
     settings = kap_conf.get("settings") or {}
     py_tasks_dir_entry = settings.get("py-tasks-dir")
     tasks_def = kap_conf.get("tasks") or {}
@@ -169,6 +169,7 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
         )
 
     runtime_configs: dict[str, RuntimeConfig] = {}
+    r_task_roots: dict[str, Path] = {}
     pipelines_to_skip: set[str] = set()
 
     for pipeline_name in graphs:
@@ -182,6 +183,8 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
             )
             pipelines_to_skip.add(pipeline_name)
             continue
+
+        r_task_roots[pipeline_name] = Path(pipeline_config.R_TASKS_DIR_PATH).resolve()
 
         try:
             ensure_pythonpath(base_dir, pipeline_config.PY_MODULE_PATH or None)
@@ -219,7 +222,26 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
             if not isinstance(file_entry, str):
                 continue
             file_path_str, func_name = parse_task_file_spec(file_entry)
-            if Path(file_path_str).suffix.lower() != ".py":
+            file_suffix = Path(file_path_str).suffix.lower()
+
+            if file_suffix == ".r":
+                script_path = Path(file_path_str)
+                if not script_path.is_absolute():
+                    r_root = r_task_roots.get(pipeline_name)
+                    if r_root is not None:
+                        script_path = (r_root / script_path).resolve()
+                    else:
+                        script_path = (base_dir / script_path).resolve()
+                else:
+                    script_path = script_path.resolve()
+
+                if not script_path.exists():
+                    errors.append(
+                        f"Graph '{pipeline_name}' task '{task_name}': R file '{file_path_str}' not found (expected at {script_path})"
+                    )
+                continue
+
+            if file_suffix != ".py":
                 continue
             function_name = func_name or task_name
 

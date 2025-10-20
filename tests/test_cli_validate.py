@@ -21,6 +21,7 @@ def _base_config(
     consumer_overrides: dict | None = None,
     config_block: dict | None = None,
     consumer_dependencies: list[str] | None = None,
+    create_r_script: bool = True,
 ) -> dict:
     if consumer_dependencies is None:
         consumer_dependencies = ["producer"]
@@ -28,7 +29,16 @@ def _base_config(
     py_tasks_dir = tmp_path / "py_tasks"
     _write_task(py_tasks_dir, "__init__.py", "")
     _write_task(py_tasks_dir, consumer_filename, consumer_source)
-    (tmp_path / "r_tasks").mkdir(exist_ok=True)
+    r_tasks_dir = tmp_path / "r_tasks"
+    r_tasks_dir.mkdir(exist_ok=True)
+    if create_r_script:
+        _write_task(
+            r_tasks_dir,
+            "producer.R",
+            """
+            # placeholder producer
+            """,
+        )
 
     tasks: dict[str, dict] = {
         "producer": {
@@ -81,6 +91,21 @@ def test_validate_python_tasks_passes_with_matching_signature(tmp_path):
     errors = _validate_python_tasks(tmp_path, kap_conf)
 
     assert errors == []
+
+
+def test_validate_python_tasks_flags_missing_r_script(tmp_path):
+    kap_conf = _base_config(
+        tmp_path,
+        """
+        def consumer(runtime_config, producer):
+            return producer
+        """,
+        create_r_script=False,
+    )
+
+    errors = _validate_python_tasks(tmp_path, kap_conf)
+
+    assert any("R file 'producer.R' not found" in message for message in errors)
 
 
 def test_validate_python_tasks_defaults_to_task_name(tmp_path):
