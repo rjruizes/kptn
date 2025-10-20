@@ -57,6 +57,8 @@ locals {
         container_name              = var.task_definition_container_name
         pipeline_name               = var.pipeline_name
         dynamodb_table_name         = aws_dynamodb_table.kapten.name
+        batch_job_queue_arn         = coalesce(local.batch_job_queue_arn_effective, "")
+        batch_job_definition_arn    = coalesce(local.batch_job_definition_arn_effective, "")
       }
     )
   }
@@ -157,10 +159,28 @@ resource "aws_iam_role_policy" "step_function" {
           "events:PutRule",
           "events:DescribeRule"
         ]
-        Resource = [
-          "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule",
-          "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+        Resource = "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctions*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "batch:SubmitJob"
         ]
+        Resource = length(local.batch_submit_job_resource_arns) > 0 ? local.batch_submit_job_resource_arns : ["*"]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "batch:TagResource"
+        ]
+        Resource = length(local.batch_submit_job_resource_arns) > 0 ? local.batch_submit_job_resource_arns : ["*"]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "batch:DescribeJobs"
+        ]
+        Resource = "*"
       }
     ]
   })

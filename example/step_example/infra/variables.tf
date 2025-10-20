@@ -442,3 +442,98 @@ variable "docker_keep_remotely" {
   description = "Keep the Docker image in ECR when destroying the Terraform resource"
   default     = true
 }
+
+variable "create_batch_resources" {
+  type        = bool
+  description = "Set to true to provision AWS Batch compute environment, job queue, and job definition"
+  default     = true
+}
+
+variable "create_batch_service_role" {
+  type        = bool
+  description = "Set to true to create an IAM service role for AWS Batch"
+  default     = true
+}
+
+variable "batch_service_role_arn" {
+  type        = string
+  description = "Existing IAM role ARN for AWS Batch to assume when not creating one"
+  default     = null
+}
+
+variable "batch_compute_resources_type" {
+  type        = string
+  description = "Compute resource type for the AWS Batch compute environment"
+  default     = "FARGATE"
+
+  validation {
+    condition     = contains(["FARGATE", "FARGATE_SPOT"], var.batch_compute_resources_type)
+    error_message = "batch_compute_resources_type must be FARGATE or FARGATE_SPOT."
+  }
+}
+
+variable "batch_compute_environment_name_prefix" {
+  type        = string
+  description = "Name prefix applied to the generated AWS Batch compute environment"
+  default     = "kapten-batch-ce"
+}
+
+variable "batch_max_vcpus" {
+  type        = number
+  description = "Maximum number of vCPUs for the AWS Batch compute environment"
+  default     = 32
+}
+
+variable "batch_subnet_ids" {
+  type        = list(string)
+  description = "Subnet IDs dedicated to AWS Batch; falls back to ECS subnets when empty"
+  default     = []
+}
+
+variable "batch_security_group_ids" {
+  type        = list(string)
+  description = "Security group IDs dedicated to AWS Batch; falls back to ECS security groups when empty"
+  default     = []
+}
+
+variable "batch_job_queue_name" {
+  type        = string
+  description = "Name override for the AWS Batch job queue"
+  default     = ""
+}
+
+variable "batch_job_queue_priority" {
+  type        = number
+  description = "Priority assigned to the AWS Batch job queue"
+  default     = 1
+}
+
+variable "batch_job_definition_name" {
+  type        = string
+  description = "Name override for the AWS Batch job definition"
+  default     = ""
+}
+
+variable "batch_container_command" {
+  type        = list(string)
+  description = "Command override for AWS Batch jobs; defaults to the ECS task command"
+  default     = []
+}
+
+variable "batch_container_environment" {
+  type        = map(string)
+  description = "Environment variables for AWS Batch jobs; defaults to the ECS task environment"
+  default     = {}
+}
+
+variable "batch_container_vcpu" {
+  type        = string
+  description = "vCPU setting for AWS Batch jobs; defaults to the ECS task CPU converted to vCPUs"
+  default     = ""
+}
+
+variable "batch_container_memory" {
+  type        = string
+  description = "Memory (MiB) setting for AWS Batch jobs; defaults to the ECS task memory"
+  default     = ""
+}

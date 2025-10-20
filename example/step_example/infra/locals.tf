@@ -18,4 +18,35 @@ locals {
   task_definition_log_group_name_effective = var.task_definition_enable_awslogs ? coalesce(var.task_definition_log_group_name, "/aws/ecs/${var.pipeline_name}/${var.task_definition_container_name}") : null
 
   task_definition_log_stream_prefix_effective = var.task_definition_enable_awslogs ? coalesce(var.task_definition_log_stream_prefix, var.task_definition_container_name) : null
+
+  batch_service_role_arn_effective = var.create_batch_resources ? (var.create_batch_service_role ? aws_iam_role.batch_service["main"].arn : var.batch_service_role_arn) : null
+
+  batch_subnet_ids_effective = length(var.batch_subnet_ids) > 0 ? var.batch_subnet_ids : local.subnet_ids_effective
+
+  batch_security_group_ids_effective = length(var.batch_security_group_ids) > 0 ? var.batch_security_group_ids : local.security_group_ids_effective
+
+  batch_container_command_effective = length(var.batch_container_command) > 0 ? var.batch_container_command : var.task_definition_container_command
+
+  batch_container_environment_effective = length(var.batch_container_environment) > 0 ? var.batch_container_environment : var.task_definition_container_environment
+
+  batch_container_vcpu_effective = var.batch_container_vcpu != "" ? var.batch_container_vcpu : (var.task_definition_cpu != "" ? tostring(tonumber(var.task_definition_cpu) / 1024) : null)
+
+  batch_container_memory_effective = var.batch_container_memory != "" ? var.batch_container_memory : var.task_definition_memory
+
+  batch_compute_environment_name_effective = "${var.batch_compute_environment_name_prefix}-${var.pipeline_name}"
+
+  batch_job_queue_name_effective = var.batch_job_queue_name != "" ? var.batch_job_queue_name : "${var.pipeline_name}-batch-queue"
+
+  batch_job_definition_name_effective = var.batch_job_definition_name != "" ? var.batch_job_definition_name : "${var.pipeline_name}-batch-job"
+
+  batch_job_queue_arn_effective = try(aws_batch_job_queue.kapten["main"].arn, null)
+
+  batch_job_definition_arn_effective = try(aws_batch_job_definition.kapten["main"].arn, null)
+
+  batch_submit_job_resource_arns = [
+    for arn in [
+      local.batch_job_queue_arn_effective,
+      local.batch_job_definition_arn_effective
+    ] : arn if arn != null && arn != ""
+  ]
 }

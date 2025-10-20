@@ -87,3 +87,23 @@ output "docker_image_name" {
   description = "Full name of the built and pushed Docker image (only when build_and_push_image is true)"
   value       = var.build_and_push_image ? docker_registry_image.kapten[0].name : null
 }
+
+output "batch_compute_environment_arn" {
+  description = "ARN of the AWS Batch compute environment (when enabled)"
+  value       = var.create_batch_resources ? aws_batch_compute_environment.kapten["main"].arn : null
+}
+
+output "batch_job_queue_arn" {
+  description = "ARN of the AWS Batch job queue (when enabled)"
+  value       = var.create_batch_resources ? aws_batch_job_queue.kapten["main"].arn : null
+}
+
+output "batch_job_definition_arn" {
+  description = "ARN of the AWS Batch job definition (when enabled)"
+  value       = var.create_batch_resources ? aws_batch_job_definition.kapten["main"].arn : null
+}
+
+output "batch_service_role_arn_effective" {
+  description = "ARN of the IAM service role used by AWS Batch (created or supplied)"
+  value       = local.batch_service_role_arn_effective
+}
