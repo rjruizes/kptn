@@ -202,7 +202,7 @@ def run_deployment_task(deployment_name: str, task_name: str, pipeline_config: P
     from prefect.states import raise_state_exception
 
     logger.info(f"Running deployment for '{task_name}'")
-    job_variables = task["aws_vars"] if "aws_vars" in task else {}
+    job_variables = task["compute"] if "compute" in task else {}
     flow_run = run_deployment(
         name=deployment_name,
         # task_name-flow_name-hh:mm:ss

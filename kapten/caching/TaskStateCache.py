@@ -129,10 +129,10 @@ class TaskStateCache():
     def get_task_dask_worker_vars(self, name: str) -> dict:
         """Return task-specific worker_cpu, worker_mem kwargs to the Dask"""
         task = self.get_task(name)
-        if "dask_worker" not in task:
+        if "compute" not in task:
             return {}
-        cpu = task["dask_worker"]["cpu"]
-        mem = task["dask_worker"]["memory"]
+        cpu = task["compute"]["cpu"]
+        mem = task["compute"]["memory"]
         return {"worker_cpu": cpu, "worker_mem": mem}
 
     def get_task_rscript_path(self, name: str):

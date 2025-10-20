@@ -102,8 +102,7 @@ Create a file, `tasks.yaml` that contains definitions of the graphs of tasks and
   <tr><td>tasks.[task_id].bundle_size</td><td>If `map_over` is set, an integer defining the number of subtasks sent to the Dask worker at one time. Default is 1. For a large number of subtasks, increasing this number can speedup the run time.</td><td>No</td></tr>
   <tr><td>tasks.[task_id].group_size</td><td>If `map_over` is set, an integer defining the number of subtasks sent to the Dask scheduler at one time. Default is infinity. For a large number of subtasks, setting a max on this number can prevent the scheduler from getting overwhelmed.</td><td>No</td></tr>
   <tr><td>tasks.[task_id].outputs</td><td>A list of files that the script outputs</td><td>No</td></tr>
-  <tr><td>tasks.[task_id].aws_vars</td><td>A dictionary that can contain two fields, cpu and memory, corresponding to the <a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#task_size">Fargate task definition values</a></td><td>No</td></tr>
-  <tr><td>tasks.[task_id].dask_worker</td><td>When the task is a mapped task (map_over is set), a dictionary that can contain two fields, cpu and memory, which will be used for each dask worker</td><td>No</td></tr>
+  <tr><td>tasks.[task_id].compute</td><td>A dictionary that can contain two fields, cpu and memory, corresponding to the <a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#task_size">Fargate task definition values</a></td><td>No</td></tr>
   <tr><td>tasks.[task_id].tags</td><td>A list of strings, which will be used as the Prefect task's <a href="https://docs.prefect.io/v3/develop/write-tasks#tags">tags</a>; useful for <a href="https://docs.prefect.io/v3/develop/task-run-limits#limit-concurrent-task-runs-with-tags">concurrency limits</a></td><td>No</td></tr>
   </tbody>
 </table>
@@ -122,7 +121,7 @@ tasks:
     py_script: true
     cache_result: true
     iterable_item: US_STATE
-    aws_vars:
+    compute:
       cpu: 256
       memory: 512
   B:

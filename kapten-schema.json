@@ -123,9 +123,9 @@
             "type": "string",
             "description": "Template for log file paths. Supports variable interpolation (e.g., '${item1}_${item2}.log')"
           },
-          "aws_vars": {
+          "compute": {
             "type": "object",
-            "description": "AWS-specific task configuration for ECS/Fargate deployments",
+            "description": "Required compute resources for running the task",
             "properties": {
               "cpu": {
                 "type": "integer",
