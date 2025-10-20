@@ -105,6 +105,14 @@
             "type": "string",
             "description": "Variable name(s) that this task yields for iteration. Use comma-separated for multiple (e.g., 'item1,item2')"
           },
+          "prefix_args": {
+            "type": "string",
+            "description": "Arguments inserted before the `Rscript` invocation (e.g., 'timeout --verbose 1h')"
+          },
+          "cli_args": {
+            "type": "string",
+            "description": "Arguments appended after the script path when running the task (supports templating like '${EST_NUM}')"
+          },
           "map_over": {
             "type": "string",
             "description": "Variable name(s) to map this task over from a previous task. Use comma-separated for multiple (e.g., 'item1,item2')"
