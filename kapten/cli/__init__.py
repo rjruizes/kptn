@@ -170,7 +170,8 @@ def config(
 
 @app.command()
 def validate(
-    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-p", help="Project directory containing kapten configuration")
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-p", help="Project directory containing kapten configuration"),
+    graph: Optional[str] = typer.Option(None, "--graph", "-g", help="Graph name to validate"),
 ):
     """Validate kapten.yaml against kapten-schema.json."""
 
@@ -212,6 +213,19 @@ def validate(
     except yaml.YAMLError as exc:  # pragma: no cover - already parsed during validation
         typer.echo(f"Failed to parse kapten.yaml: {exc}")
         raise typer.Exit(1) from exc
+
+    if graph:
+        graphs_block = kap_conf.get("graphs")
+        if not isinstance(graphs_block, dict) or not graphs_block:
+            typer.echo("No graphs defined in kapten.yaml.")
+            raise typer.Exit(1)
+        if graph not in graphs_block:
+            available = ", ".join(sorted(graphs_block))
+            typer.echo(
+                f"Graph '{graph}' not found; available graphs: {available}"
+            )
+            raise typer.Exit(1)
+        kap_conf = {**kap_conf, "graphs": {graph: graphs_block[graph]}}
 
     python_issues = _validate_python_tasks(base_dir, kap_conf)
     if python_issues:
