@@ -64,33 +64,33 @@ tasks:
   A:
     file: "A/run.R"
     outputs: ["A_${year}"]
-    aws_vars:
+    compute:
       cpu: 256
       memory: 512
   B:
     file: B.py
     outputs: ["B_${year}"]
-    aws_vars:
+    compute:
       cpu: 256
       memory: 512
   C:
     file: C.py
     cache_result: true
     iterable_item: C_VAL
-    aws_vars:
+    compute:
       cpu: 256
       memory: 512
   D:
     file: "D/run.R"
     outputs: ["D_${year}"]
     map_over: C_VAL
-    aws_vars:
+    compute:
       cpu: 256
       memory: 512
   E:
     file: E.py
     outputs: ["E_${year}"]
-    aws_vars:
+    compute:
       cpu: 256
       memory: 512
 
@@ -98,14 +98,14 @@ tasks:
     file: subtask_list.py
     cache_result: true
     iterable_item: item
-    aws_vars:
+    compute:
       cpu: 256
       memory: 512
 
   subtask_process:
     file: subtask_process.py
     map_over: item
-    aws_vars:
+    compute:
       cpu: 256
       memory: 512
 
