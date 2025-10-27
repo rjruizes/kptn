@@ -41,8 +41,8 @@ if __name__ == "__main__":
         BRANCH=branch,
         STORAGE_KEY=possible_storage_key,
         PIPELINE_NAME="{{pipeline_name}}",
-        TASKS_CONFIG_PATH="/code/py_src/tasks.yaml",
-        R_TASKS_DIR_PATH="/code",
+        TASKS_CONFIG_PATH="/code/py_src/kapten.yaml",
+        R_TASKS_DIRS=("/code",),
     )
     pipeline_config_dict = pipeline_config.model_dump()
 

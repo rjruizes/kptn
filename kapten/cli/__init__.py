@@ -77,7 +77,7 @@ def codegen(
     project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-p", help="Project directory containing kapten configuration")
 ):
     """
-    Generate Prefect flows (Python files) from the tasks.yaml file
+    Generate Prefect flows (Python files) from the kapten.yaml file
     """
     if project_dir:
         original_dir = os.getcwd()

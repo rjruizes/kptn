@@ -62,40 +62,40 @@ graphs:
 
 tasks:
   A:
-    file: "A/run.R"
+    file: "r_tasks/A/run.R"
     outputs: ["A_${year}"]
     compute:
       cpu: 256
       memory: 512
   B:
-    file: B.py
+    file: py_tasks/B.py
     outputs: ["B_${year}"]
     compute:
       cpu: 256
       memory: 512
   C:
-    file: C.py
+    file: py_tasks/C.py
     cache_result: true
     iterable_item: C_VAL
     compute:
       cpu: 256
       memory: 512
   D:
-    file: "D/run.R"
+    file: "r_tasks/D/run.R"
     outputs: ["D_${year}"]
     map_over: C_VAL
     compute:
       cpu: 256
       memory: 512
   E:
-    file: E.py
+    file: py_tasks/E.py
     outputs: ["E_${year}"]
     compute:
       cpu: 256
       memory: 512
 
   subtask_list:
-    file: subtask_list.py
+    file: py_tasks/subtask_list.py
     cache_result: true
     iterable_item: item
     compute:
@@ -103,67 +103,67 @@ tasks:
       memory: 512
 
   subtask_process:
-    file: subtask_process.py
+    file: py_tasks/subtask_process.py
     map_over: item
     compute:
       cpu: 256
       memory: 512
 
   combo_list:
-    file: combo_list.py
+    file: py_tasks/combo_list.py
     cache_result: true
     iterable_item: item1,item2
 
   combo_process:
-    file: combo_process.py
+    file: py_tasks/combo_process.py
     map_over: item1,item2
 
   combo50_list:
-    file: combo50_list.py
+    file: py_tasks/combo50_list.py
     cache_result: true
     iterable_item: item1,item2
 
   combo_process_bundle:
-    file: combo_process.py:combo_process
+    file: py_tasks/combo_process.py:combo_process
     map_over: item1,item2
     bundle_size: 10
 
   combo_process_group:
-    file: combo_process.py:combo_process
+    file: py_tasks/combo_process.py:combo_process
     map_over: item1,item2
     group_size: 25
 
   combo_process_bundle_group:
-    file: combo_process.py:combo_process
+    file: py_tasks/combo_process.py:combo_process
     map_over: item1,item2
     bundle_size: 3
     group_size: 10
 
   combo_process_bundle_group_R:
-    file: "combo_process_bundle_group/run.R"
+    file: "r_tasks/combo_process_bundle_group/run.R"
     logs: "${item1}_${item2}.log"
     map_over: item1,item2
     bundle_size: 3
     group_size: 10
 
   do_nothing:
-    file: do_nothing.py
+    file: py_tasks/do_nothing.py
     map_over: item
 
   do_nothing_bundle_group_R:
-    file: "do_nothing/run.R"
+    file: "r_tasks/do_nothing/run.R"
     map_over: item1,item2
     bundle_size: 3
     group_size: 10
   
   write_param:
-    file: write_param.R
+    file: r_tasks/write_param.R
     map_over: item
     outputs:
     - my_output/${item}-${some.var}.txt
 
   static_params:
-    file: static_params.R
+    file: r_tasks/static_params.R
     outputs:
     - my_output/dummy1-${some.var}.txt
     - my_output/dummy2-${some.var}.txt

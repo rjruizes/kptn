@@ -11,7 +11,7 @@ from kapten.deploy.storage_key import read_branch_storage_key
 from kapten.util.hash import hash_obj
 from kapten.util.logger import get_logger
 from kapten.util.pipeline_config import generateConfig, get_scratch_dir, get_storage_key
-from kapten.util.read_tasks_config import all_tasks_configs
+from kapten.util.read_tasks_config import all_tasks_configs_with_paths
 from kapten.util.filepaths import test_r_tasks_dir, test_py_module_path, project_root
 from kapten.util.rscript import r_script_log_path
 from kapten.watcher.util import is_mock
@@ -94,7 +94,7 @@ def _infer_code_kind(task: dict) -> str | None:
         return "Python"
     return None
 
-def setup_clients(stack: str, pipeline_name: str, tasks_conf, authproxy_endpoint: str):
+def setup_clients(stack: str, pipeline_name: str, tasks_conf, tasks_config_paths, authproxy_endpoint: str):
     branch = get_active_branch_name()
     possible_storage_key = read_branch_storage_key(branch)
     if is_mock(pipeline_name):
@@ -107,6 +107,7 @@ def setup_clients(stack: str, pipeline_name: str, tasks_conf, authproxy_endpoint
         pipeline_name,
         r_tasks_dir_path = r_tasks_dir,
         py_module_path = py_module_path,
+        tasks_config_path = str(tasks_config_paths[0]) if tasks_config_paths else "",
         authproxy_endpoint = authproxy_endpoint,
         storage_key = possible_storage_key
     )
@@ -129,7 +130,7 @@ def setup_clients(stack: str, pipeline_name: str, tasks_conf, authproxy_endpoint
         cache_client = DbClientDDB(table_name=table, storage_key=storage_key, pipeline=pipeline_name, region=region, aws_auth = aws_auth)
     else:
         cache_client = -1
-    tscache = TaskStateCache(pipeline_config, cache_client, tasks_conf)
+    tscache = TaskStateCache(pipeline_config, cache_client, tasks_conf, tasks_config_paths=tasks_config_paths)
     return tscache, cache_client, pipeline_config
 
 def get_db_state_for_local(cache_client):
@@ -167,21 +168,52 @@ def get_duration(start_time: str, end_time: str) -> str:
 
 def enrich_tasks(stack: str, graph: str, authproxy_endpoint: str = None):
     """Enrich the task data with additional information"""
-    tasks_conf = all_tasks_configs()
+    tasks_conf, tasks_config_paths = all_tasks_configs_with_paths()
     if not stack or not graph:
         return tasks_conf
-    tscache, cache_client, pipeline_config = setup_clients(stack, graph, tasks_conf, authproxy_endpoint)
+    tscache, cache_client, pipeline_config = setup_clients(
+        stack, graph, tasks_conf, tasks_config_paths, authproxy_endpoint
+    )
     task_db_states, taskdata, subtasks = get_db_state_for_local(cache_client)
     tasks_dict = tasks_conf["tasks"]
+    project_root_path = Path(project_root).resolve()
+    base_dir_env = os.getenv("BASE_DIR")
+    base_dir_override = Path(base_dir_env) if base_dir_env else None
     for task_name, task in tasks_dict.items():
         # First set YAML-based values
-        if is_mock(graph):
-            scriptpath = Path("r_tasks") / task["r_script"] if "r_script" in task else Path("py_tasks") / f"{task_name}.py"
-            fpath = Path(os.getenv("BASE_DIR")) / "tests" / "mock_pipeline" / scriptpath
+        resolved_path: Path | None = None
+        if "r_script" in task:
+            try:
+                script_candidates, _ = tscache.hasher.get_full_r_script_paths(task_name, task["r_script"])
+                if script_candidates:
+                    resolved_path = script_candidates[0]
+            except FileNotFoundError:
+                resolved_path = None
+        elif "py_script" in task:
+            py_spec = task.get("py_script")
+            py_filename = py_spec if isinstance(py_spec, str) else f"{task_name}.py"
+            try:
+                resolved_path = tscache.hasher.get_full_py_script_path(task_name, py_filename)
+            except FileNotFoundError:
+                resolved_path = None
+
+        if resolved_path is None:
+            raw_spec = task.get("r_script") or task.get("py_script")
+            if isinstance(raw_spec, str):
+                resolved_path = (project_root_path / raw_spec).resolve() if not Path(raw_spec).is_absolute() else Path(raw_spec)
+
+        if resolved_path is not None:
+            if base_dir_override:
+                try:
+                    relative_script = resolved_path.relative_to(project_root_path)
+                    final_path = base_dir_override / relative_script
+                except ValueError:
+                    final_path = resolved_path
+            else:
+                final_path = resolved_path
+            tasks_dict[task_name]["filepath"] = str(final_path)
         else:
-            scriptpath = task["r_script"] if "r_script" in task else Path("py_src") / "tasks" / f"{task_name}.py"
-            fpath = Path(os.getenv("BASE_DIR")) / scriptpath
-        tasks_dict[task_name]["filepath"] = str(fpath)
+            tasks_dict[task_name]["filepath"] = None
         
         # Now set cache-based values
         local_code_hashes, code_kind = tscache.build_task_code_hashes(task_name, task)
@@ -262,14 +294,15 @@ def enrich_tasks(stack: str, graph: str, authproxy_endpoint: str = None):
     return tasks_conf
 
 def hash_code_for_tasks(task_names: list[str]):
-    tasks_conf = all_tasks_configs()
+    tasks_conf, tasks_config_paths = all_tasks_configs_with_paths()
     hasher = Hasher(
         py_dirs=[
             "py_src/tasks",
             "tests/mock_pipeline/py_tasks"
         ],
         r_dirs=[".", test_r_tasks_dir],
-        tasks_config=tasks_conf
+        tasks_config=tasks_conf,
+        tasks_config_paths=[str(path) for path in tasks_config_paths],
     )
     updates = []
     for task_name in task_names:

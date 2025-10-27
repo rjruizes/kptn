@@ -4,7 +4,7 @@ from kapten.caching.submit import submit
 {#- from kapten.deploy.storage_key import read_branch_storage_key #}
 from kapten.runner import cli_parser, parse_and_validate_tasks
 from kapten.util.pipeline_config import PipelineConfig
-from kapten.util.runtime_config import ensure_pythonpath
+{# from kapten.util.runtime_config import ensure_pythonpath #}
 
 
 VALID_TASKS: set[str] = { {% for name in task_names %}"{{ name }}"{% if not loop.last %}, {% endif %}{% endfor %} }
@@ -13,12 +13,7 @@ def {{pipeline_name}}(task_list: list[str] = [], ignore_cache: bool = False):
     pipeline_config = PipelineConfig(
         TASKS_CONFIG_PATH=str(Path(__file__).parent / "{{ rel_tasks_conf_path }}"),
         PIPELINE_NAME="{{pipeline_name}}",{% if r_tasks_dir %}
-        R_TASKS_DIR_PATH=str(Path(__file__).parent / "{{ rel_r_tasks_dir }}"),{% endif %}
-    )
-
-    ensure_pythonpath(
-        Path(pipeline_config.TASKS_CONFIG_PATH).parent,
-        pipeline_config.PY_MODULE_PATH or None,
+        R_TASKS_DIRS=(str(Path(__file__).parent / "{{ rel_r_tasks_dir }}"),),{% endif %}
     )
 
     task_list = parse_and_validate_tasks(task_list, VALID_TASKS)
@@ -29,8 +24,7 @@ def {{pipeline_name}}(task_list: list[str] = [], ignore_cache: bool = False):
         ignore_cache,
     )
     {% for name in task_names -%}
-    {# {{ macros.submit(name, deps_lookup[name], python_task_names, tasks_dict, rel_py_tasks_dir) }} #}
-    {{ macros.submit(name, deps_lookup[name], python_task_names, tasks_dict, rel_py_tasks_dir) }}
+    {{ macros.submit(name, deps_lookup[name], python_task_names, tasks_dict) }}
     {%- endfor %}
 
 

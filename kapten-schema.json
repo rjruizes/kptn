@@ -15,12 +15,34 @@
           "description": "Directory where generated workflow files (.py) will be placed"
         },
         "py-tasks-dir": {
-          "type": "string",
-          "description": "Directory containing Python task code (.py files)"
+          "description": "Directory or directories containing Python task code (.py files)",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            }
+          ]
         },
         "r-tasks-dir": {
-          "type": "string",
-          "description": "Directory containing R task code (.R files)"
+          "description": "Directory or directories containing R task code (.R files)",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            }
+          ]
         },
         "duckdb-tasks-dir": {
           "type": "string",

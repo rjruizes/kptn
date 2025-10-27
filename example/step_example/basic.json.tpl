@@ -56,54 +56,52 @@
                 ]
               },
               "ResultPath": null,
+              "Next": "PrepareBItems"
+            },
+            "PrepareBItems": {
+              "Type": "Pass",
+              "Parameters": {
+                "jobQueue": "${batch_job_queue_arn}",
+                "jobDefinition": "${batch_job_definition_arn}",
+                "arraySize": 3
+              },
+              "ResultPath": "$.b_batch",
               "Next": "b"
             },
             "b": {
               "Type": "Task",
-              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "Cluster": "${ecs_cluster_arn}",
-                "TaskDefinition": "${ecs_task_definition_arn}",
-                "LaunchType": "${launch_type}",
-                "NetworkConfiguration": {
-                  "AwsvpcConfiguration": {
-                    "AssignPublicIp": "${assign_public_ip}",
-                    "Subnets": ${subnet_ids},
-                    "SecurityGroups": ${security_group_ids}
-                  }
+                "JobName.$": "States.Format('${pipeline_name}-b-array-{}', $$.Execution.Name)",
+                "JobQueue.$": "$.b_batch.jobQueue",
+                "JobDefinition.$": "$.b_batch.jobDefinition",
+                "ArrayProperties": {
+                  "Size.$": "$.b_batch.arraySize"
                 },
-                "Overrides": {
-                  "ContainerOverrides": [
+                "ContainerOverrides": {
+                  "Environment": [
                     {
-                      "Name": "${container_name}",
-                      "Environment": [
-                        {
-                          "Name": "KAPTEN_PIPELINE",
-                          "Value": "basic"
-                        },
-                        {
-                          "Name": "KAPTEN_TASK",
-                          "Value": "b"
-                        },
-                        {
-                          "Name": "DYNAMODB_TABLE_NAME",
-                          "Value": "${dynamodb_table_name}"
-                        }
-                      ]
+                      "Name": "KAPTEN_PIPELINE",
+                      "Value": "basic"
+                    },
+                    {
+                      "Name": "KAPTEN_TASK",
+                      "Value": "b"
+                    },
+                    {
+                      "Name": "DYNAMODB_TABLE_NAME",
+                      "Value": "${dynamodb_table_name}"
+                    },
+                    {
+                      "Name": "ARRAY_SIZE",
+                      "Value.$": "States.Format('{}', $.b_batch.arraySize)"
                     }
                   ]
                 },
-                "EnableExecuteCommand": true,
-                "Tags": [
-                  {
-                    "Key": "KaptenPipeline",
-                    "Value": "basic"
-                  },
-                  {
-                    "Key": "KaptenTask",
-                    "Value": "b"
-                  }
-                ]
+                "Tags": {
+                  "KaptenPipeline": "basic",
+                  "KaptenTask": "b"
+                }
               },
               "ResultPath": null,
               "End": true

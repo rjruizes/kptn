@@ -22,14 +22,14 @@ graphs:
 
 tasks:
   raw_numbers:
-    file: raw_numbers.sql
+    file: src/raw_numbers.sql
     outputs:
     - duckdb://main.raw_numbers
   fruit_metrics:
-    file: fruit_metrics.sql
+    file: src/fruit_metrics.sql
     outputs:
     - duckdb://main.fruit_metrics
   fruit_summary:
-    file: fruit_tasks.py
+    file: src/fruit_tasks.py
     outputs:
     - duckdb://main.fruit_summary

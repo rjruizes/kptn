@@ -49,7 +49,7 @@ The `r_script` and `py_script` fields define the location of the script to run. 
 
 ## Configuration
 
-There are two main configuration files: pyproject.toml and tasks.yaml
+There are two main configuration files: pyproject.toml and kapten.yaml
 
 ### pyproject.toml
 
@@ -61,8 +61,8 @@ Your project is expected to use a pyproject.toml and contain a `tool.kapten` sec
   </thead>
   <tbody>
   <tr><td>flows-dir</td><td>The output directory where kapten will render your flow files to</td><td>Yes</td></tr>
-  <tr><td>py-tasks-dir</td><td>The directory where any Python task code exists</td><td>Yes</td></tr>
-  <tr><td>tasks-conf-path</td><td>The filepath to the tasks.yaml file defining your pipeline</td><td>Yes</td></tr>
+  <tr><td>py-tasks-dir</td><td>The directory (or list of directories) where Python task code exists</td><td>Yes</td></tr>
+  <tr><td>tasks-conf-path</td><td>The filepath to the kapten.yaml file defining your pipeline</td><td>Yes</td></tr>
   <tr><td>docker-image</td><td>The name of the Docker image to build and push to Prefect</td><td>Yes</td></tr>
   </tbody>
 </table>
@@ -73,13 +73,13 @@ Example:
 [tool.kapten]
 flows-dir = "py_src/flows"
 py-tasks-dir = "py_src/tasks"
-tasks-conf-path = "py_src/tasks.yaml"
+tasks-conf-path = "py_src/kapten.yaml"
 docker-image = "nibrs-estimation-pipeline:latest"
 ```
 
-### tasks.yaml
+### kapten.yaml
 
-Create a file, `tasks.yaml` that contains definitions of the graphs of tasks and the tasks themselves.
+Create a file, `kapten.yaml` that contains definitions of the graphs of tasks and the tasks themselves.
 
 <table>
   <thead>
@@ -92,10 +92,10 @@ Create a file, `tasks.yaml` that contains definitions of the graphs of tasks and
   <tr><td>graphs.[id].tasks.[task_id]</td><td>A list of dependency task IDs. If no dependencies, leave blank or use an empty list `[]`.</td><td>Yes</td></tr>
   <tr><td>tasks</td><td>A dictionary of task names and task objects</td><td>Yes</td></tr>
   <tr><td>tasks.[task_id]</td><td>A dictionary representing a task</td><td>Yes</td></tr>
-  <tr><td>tasks.[task_id].r_script</td><td>A string with the filepath to the R script relative to the `r-tasks-dir`</td><td>No</td></tr>
+  <tr><td>tasks.[task_id].r_script</td><td>A string with the filepath to the R script; Kapten searches each directory listed in `r-tasks-dir`</td><td>No</td></tr>
   <tr><td>tasks.[task_id].prefix_args</td><td>A string that will be inserted before the `Rscript` command-line call</td><td>No</td></tr>
   <tr><td>tasks.[task_id].cli_args</td><td>A string that will be inserted at the end of the `Rscript` command-line call</td><td>No</td></tr>
-  <tr><td>tasks.[task_id].py_script</td><td>If a string, the filepath to the Python script relative to the `py-tasks-dir`; if simply `true`, the filename is assumed to be the task_id.</td><td>No</td></tr>
+  <tr><td>tasks.[task_id].py_script</td><td>If a string, the filepath to the Python script relative to any entry in `py-tasks-dir`; if simply `true`, the filename is assumed to be the task_id.</td><td>No</td></tr>
   <tr><td>tasks.[task_id].cache_result</td><td>A boolean, if `true`, the Python script return value will be saved in the cache database, DynamoDB. If this value is a large list (e.g. 50k items), it will be sharded across DynamoDB items for scalability.</td><td>No</td></tr>
   <tr><td>tasks.[task_id].iterable_item</td><td>If `cache_result` is true and the result is a list, `iterable_item` is a string naming each item. The iterable item can also be a combination of values delimited by commas, e.g. US_STATE,ZIP_CODE</td><td>No</td></tr>
   <tr><td>tasks.[task_id].map_over</td><td>A string that corresponds to an `iterable_item` in a dependency. Setting `map_over` will call this task for each item in the dependency result list. If this task is a Python task, the `iterable_item` will be passed as a function argument. If this task is an R task, the `iterable_item` will be passed as an environment variable to the R script. If the `iterable_item` is a comma-delimited combo, the values will be split and passed in separately.</td><td>No</td></tr>

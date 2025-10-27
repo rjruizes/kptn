@@ -53,7 +53,7 @@ if __name__ == "__main__":
         TASKS_CONFIG_PATH=str(tasks_config_path),
         PIPELINE_NAME="subset_bundlegroup_R",
         PY_MODULE_PATH=tasks.__name__,
-        R_TASKS_DIR_PATH=str(Path(__file__).parent / "../r_tasks"),
+        R_TASKS_DIRS=(str(Path(__file__).parent / "../r_tasks"),),
     )
     subset_bundlegroup_R(pipeline_config, ignore_cache=args.force)
     

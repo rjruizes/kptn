@@ -59,7 +59,7 @@ if __name__ == "__main__":
         TASKS_CONFIG_PATH=str(tasks_config_path),
         PIPELINE_NAME="output_hashing",
         PY_MODULE_PATH=tasks.__name__,
-        R_TASKS_DIR_PATH=str(Path(__file__).parent / "../r_tasks"),
+        R_TASKS_DIRS=(str(Path(__file__).parent / "../r_tasks"),),
     )
     output_hashing(pipeline_config, ignore_cache=args.force)
     
