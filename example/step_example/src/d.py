@@ -1,2 +1,2 @@
-def d(pipeline_config):
+def d():
   print("This is _d_")

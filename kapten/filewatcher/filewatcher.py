@@ -3,7 +3,7 @@ from watchfiles import DefaultFilter, watch, Change
 import requests
 from kapten.caching.Hasher import Hasher
 from kapten.util.filepaths import project_root
-from kapten.util.read_tasks_config import all_tasks_configs
+from kapten.util.read_tasks_config import all_tasks_configs_with_paths
 from kapten.util.filepaths import test_r_tasks_dir
 from kapten.util.logger import get_logger
 
@@ -52,25 +52,36 @@ def watch_files(index):
 
 def build_reverse_index():
     logger = get_logger()
-    tasks_config = all_tasks_configs()
+    tasks_config, config_paths = all_tasks_configs_with_paths()
+    config_path_strings = [str(path) for path in config_paths]
     index = {}
-    h = Hasher(py_dirs=["py_src/tasks", "tests/mock_pipeline/py_tasks"], r_dirs=[".", test_r_tasks_dir], tasks_config=tasks_config)
+    h = Hasher(
+        py_dirs=["py_src/tasks", "tests/mock_pipeline/py_tasks"],
+        r_dirs=[".", test_r_tasks_dir],
+        tasks_config=tasks_config,
+        tasks_config_paths=config_path_strings,
+    )
     for name, task in tasks_config["tasks"].items():
         # print(name)
         if "py_script" in task:
             filename = task["py_script"] if type(task["py_script"]) == str else f"{name}.py"
-            # Check if file exists at py_src/tasks/{filename}
-            if os.path.exists(f"py_src/tasks/{filename}"):
-                # Using dict.setdefault()
-                index.setdefault(f"py_src/tasks/{filename}", []).append(name)
-            elif os.path.exists(f"tests/mock_pipeline/py_tasks/{filename}"):
-                index.setdefault(f"tests/mock_pipeline/py_tasks/{filename}", []).append(name)
-            else:
-                logger.warning(f"Task {name} has no associated Python script")
+            try:
+                script_path = h.get_full_py_script_path(name, filename)
+                rel_path = os.path.relpath(script_path, project_root)
+                index.setdefault(rel_path, []).append(name)
+            except FileNotFoundError:
+                logger.warning(f"Task {name} has no associated Python script at {filename}")
         if "r_script" in task:
-            filelist = h.get_task_filelist(task)
-            filelist = [f.replace(f"{project_root}/", '') for f in filelist]
-            for file in filelist:
+            try:
+                filelist = h.get_task_filelist(name, task)
+            except FileNotFoundError:
+                logger.warning(f"Task {name} has no associated R script at {task['r_script']}")
+                continue
+            normalized = []
+            for file_path in filelist:
+                rel_path = os.path.relpath(file_path, project_root)
+                normalized.append(rel_path)
+            for file in normalized:
                 index.setdefault(file, []).append(name)
                 
             # elif os.path.exists(f"tests/mock_pipeline/r_tasks/{task["r_script"]}"):

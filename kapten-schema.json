@@ -8,7 +8,7 @@
     "settings": {
       "type": "object",
       "description": "Project settings and directories",
-      "required": ["flows-dir", "py-tasks-dir", "flow-type"],
+      "required": ["flows-dir", "flow-type"],
       "properties": {
         "flows-dir": {
           "type": "string",

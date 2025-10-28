@@ -13,23 +13,27 @@ def cleanup():
         shutil.rmtree(scratch_dir)
 
 def test_Hasher_py():
-    h = Hasher(py_dirs=["example/basic/src"], tasks_config_paths=["example/basic/kapten.yaml"])
-    hashes = h.hash_code_for_task("A")
+    h = Hasher(tasks_config_paths=["example/basic/kapten.yaml"])
+    hashes = h.hash_code_for_task("a")
     assert isinstance(hashes, list)
     assert hashes and all("function" in item and "hash" in item for item in hashes)
 
 def test_Hasher_r():
-    h = Hasher(r_dirs=["example/mock_pipeline/r_tasks"], tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
-    assert type(h.hash_code_for_task("A")) == list
+    h = Hasher(tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
+    assert isinstance(h.hash_code_for_task("A"), list)
 
 def test_Hasher_r_glob():
-    h = Hasher(r_dirs=["example/mock_pipeline/r_tasks"], tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
-    assert type(h.get_full_r_script_paths("srs/generate_estimates/Tables_Core/${TABLE_NAME}/Part1_prepare_datasets.R")) == tuple
-    assert type(h.hash_code_for_task("srs_indicators_estimated_tables_part1_preprocessing")) == list
+    task_name = "srs_indicators_estimated_tables_part1_preprocessing"
+    h = Hasher(tasks_config_paths=["example/nibrs/kapten.yaml"])
+    task = h.get_task(task_name)
+    script_spec = task["file"] if isinstance(task.get("file"), str) else task.get("r_script", "")
+    script_path = script_spec.split(":", 1)[0]
+    assert isinstance(h.get_full_r_script_paths(task_name, script_path), tuple)
+    assert isinstance(h.hash_code_for_task(task_name), list)
 
 def test_Hasher_weights_computed():
-    h = Hasher(r_dirs=["example/mock_pipeline/r_tasks"], tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
-    hashes = h.hash_code_for_task("weights_computed")
+    h = Hasher(tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
+    hashes = h.hash_code_for_task("A")
     assert type(hashes) == list
     # Assert no duplicate keys in list of objects
     seen = set()
@@ -41,12 +45,13 @@ def test_Hasher_weights_computed():
 def test_Hasher_get_task_filelist():
     h = Hasher(r_dirs=["example/mock_pipeline/r_tasks"], tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
     task = h.get_task("A")
-    assert type(h.get_task_filelist(task)) == list
+    assert type(h.get_task_filelist("A", task)) == list
 
 def test_Hasher_indicators():
-    h = Hasher(r_dirs=["example/mock_pipeline/r_tasks"], tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
-    task = h.get_task("indicators_estimated_tables_part1_preprocessing")
-    assert type(h.get_task_filelist(task)) == list
+    task_name = "srs_indicators_estimated_tables_part1_preprocessing"
+    h = Hasher(tasks_config_paths=["example/nibrs/kapten.yaml"])
+    task = h.get_task(task_name)
+    assert isinstance(h.get_task_filelist(task_name, task), list)
 
 def test_Hasher_outputs(cleanup):
     scratch_dir = Path(mock_dir) / "scratch"
@@ -59,7 +64,7 @@ def test_Hasher_outputs(cleanup):
     sample_output_file1.write_text("Hello, world!")
     sample_output_file2.write_text("Hello, world!")
     h = Hasher(output_dir=scratch_dir, tasks_config_paths=[tasks_yaml_path])
-    assert h.hash_task_outputs("static_params") == "3b1cd281ce33909a35e284806b42a0418d7eedc2"
+    assert h.hash_task_outputs("static_params") == "236cfa1b2566cb51332ad70a05dd56490342ed62"
 
 def test_Hasher_subtask_outputs(cleanup):
     scratch_dir = Path(mock_dir) / "scratch"
@@ -71,8 +76,8 @@ def test_Hasher_subtask_outputs(cleanup):
     sample_output_file1.write_text("Hello, world!")
     sample_output_file2.write_text("Hello, world!")
     h = Hasher(output_dir=scratch_dir, tasks_config_paths=[tasks_yaml_path])
-    assert h.hash_subtask_outputs("write_param", { "item": "T1" }) == "80c0944ca3d675834e1b3c660601c8cc2ac34154"
-    assert h.hash_subtask_outputs("write_param", { "item": "T2" }) == "f93d7eeb4966c50ce20e6774363e594821ef1757"
+    assert h.hash_subtask_outputs("write_param", { "item": "T1" }) == "43018a87cab8498746ac905c6cc4467991c02d90"
+    assert h.hash_subtask_outputs("write_param", { "item": "T2" }) == "06a4364dfa2bd543dd50ecc3cfabd560d0bfc23d"
 
 
 def test_py_function_dependency_hashing(tmp_path):

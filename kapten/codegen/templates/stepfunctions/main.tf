@@ -5,11 +5,32 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    docker = {
+      source  = "kreuzwerker/docker"
+      version = "~> 3.0"
+    }
   }
 }
 
 provider "aws" {
   region = var.region
+}
+
+# Get ECR authorization token for Docker provider
+data "aws_ecr_authorization_token" "token" {
+  count = var.build_and_push_image ? 1 : 0
+}
+
+# Configure Docker provider with ECR authentication
+provider "docker" {
+  dynamic "registry_auth" {
+    for_each = var.build_and_push_image ? [1] : []
+    content {
+      address  = data.aws_ecr_authorization_token.token[0].proxy_endpoint
+      username = data.aws_ecr_authorization_token.token[0].user_name
+      password = data.aws_ecr_authorization_token.token[0].password
+    }
+  }
 }
 
 data "aws_region" "current" {}
@@ -36,6 +57,8 @@ locals {
         container_name              = var.task_definition_container_name
         pipeline_name               = var.pipeline_name
         dynamodb_table_name         = aws_dynamodb_table.kapten.name
+        batch_job_queue_arn         = coalesce(local.batch_job_queue_arn_effective, "")
+        batch_job_definition_arn    = coalesce(local.batch_job_definition_arn_effective, "")
       }
     )
   }
@@ -93,9 +116,19 @@ resource "aws_iam_role_policy" "step_function" {
       {
         Effect = "Allow"
         Action = [
+          "ecs:TagResource"
+        ]
+        Resource = "arn:${data.aws_partition.current.partition}:ecs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:task/${local.ecs_cluster_name_effective}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "iam:PassRole"
         ]
-        Resource = local.ecs_task_execution_role_arn_effective
+        Resource = [
+          local.ecs_task_execution_role_arn_effective,
+          local.task_role_arn_effective
+        ]
       },
       {
         Effect = "Allow"
@@ -126,10 +159,28 @@ resource "aws_iam_role_policy" "step_function" {
           "events:PutRule",
           "events:DescribeRule"
         ]
-        Resource = [
-          "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule",
-          "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+        Resource = "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctions*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "batch:SubmitJob"
         ]
+        Resource = length(local.batch_submit_job_resource_arns) > 0 ? local.batch_submit_job_resource_arns : ["*"]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "batch:TagResource"
+        ]
+        Resource = length(local.batch_submit_job_resource_arns) > 0 ? local.batch_submit_job_resource_arns : ["*"]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "batch:DescribeJobs"
+        ]
+        Resource = "*"
       }
     ]
   })

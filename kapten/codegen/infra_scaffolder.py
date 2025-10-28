@@ -107,12 +107,15 @@ def scaffold_stepfunctions_infra(
         "ecr.tf": _load_template("ecr.tf"),
         "task_execution_role.tf": _load_template("task_execution_role.tf"),
         "task_role.tf": _load_template("task_role.tf"),
+        "docker_image.tf": _load_template("docker_image.tf"),
         "dynamodb.tf": _load_template("dynamodb.tf"),
         "efs.tf": _load_template("efs.tf"),
+        "batch.tf": _load_template("batch.tf"),
         "locals.tf": _load_template("locals.tf"),
         "variables.tf": _load_template("variables.tf.tpl"),
         "outputs.tf": _load_template("outputs.tf"),
         "README.md": _load_template("README.md.tpl").format(pipeline_name=pipeline_name),
+        "DOCKER_BUILD.md": _load_template("DOCKER_BUILD.md"),
         ".gitignore": _load_template(".gitignore"),
     }
 

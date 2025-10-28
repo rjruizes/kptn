@@ -6,12 +6,12 @@
 {%- endfor %}
 {%- endmacro %}
 
-{% macro submit(name, deps, python_task_names, tasks_dict, rel_py_tasks_dir) -%}
+{% macro submit(name, deps, python_task_names, tasks_dict) -%}
 {%- set task_config = tasks_dict.get(name, {}) -%}
 {%- set file_value = task_config.get('file', '') -%}
 {%- if file_value -%}
-{%- set file_path = file_value.split(':')[0] -%}
-    submit("{{name}}", opts)  # file://./{{ rel_py_tasks_dir }}/{{ file_path }}
+{%- set file_path = file_value.split(':')[0] %}
+    submit("{{name}}", opts)  # file://./{{ file_path }}
 {%- else -%}
     submit("{{name}}", opts)
 {%- endif %}

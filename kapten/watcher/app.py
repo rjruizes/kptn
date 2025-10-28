@@ -124,7 +124,7 @@ def api_deploy(payload: DeployPayload):
         image = kap_conf["docker-image"]
     if is_mock(payload.graph):
         py_tasks_module_path = "tests.mock_pipeline.py_tasks"
-        tasks_config_path = "tests/mock_pipeline/tasks.yaml"
+        tasks_config_path = "tests/mock_pipeline/kapten.yaml"
         r_tasks_dir_path = "/code/tests/mock_pipeline/r_tasks"
         module_path = f"tests.mock_pipeline.flows.{payload.graph}"
         module = importlib.import_module(module_path)
@@ -132,7 +132,7 @@ def api_deploy(payload: DeployPayload):
     else:
         generate_files(payload.graph) # codegen
         py_tasks_module_path = "py_src.tasks"
-        tasks_config_path = "/code/py_src/tasks.yaml"
+        tasks_config_path = "/code/py_src/kapten.yaml"
         r_tasks_dir_path = "/code"
         module_path = f"py_src.flows.{payload.graph}"
         module = importlib.import_module(module_path)
@@ -143,7 +143,7 @@ def api_deploy(payload: DeployPayload):
         PIPELINE_NAME=payload.graph,
         PY_MODULE_PATH=py_tasks_module_path,
         TASKS_CONFIG_PATH=tasks_config_path,
-        R_TASKS_DIR_PATH=r_tasks_dir_path,
+        R_TASKS_DIRS=(r_tasks_dir_path,) if r_tasks_dir_path else (),
         STORAGE_KEY=possible_storage_key,
     )
     storage_key = get_storage_key(pipeline_config)

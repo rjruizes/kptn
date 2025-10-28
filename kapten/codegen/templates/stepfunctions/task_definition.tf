@@ -1,3 +1,11 @@
+resource "aws_cloudwatch_log_group" "ecs_task" {
+  for_each = var.create_task_definition && var.task_definition_enable_awslogs && var.task_definition_create_log_group ? { main = true } : {}
+
+  name              = local.task_definition_log_group_name_effective
+  retention_in_days = var.task_definition_log_retention_in_days
+  tags              = var.tags
+}
+
 resource "aws_ecs_task_definition" "kapten" {
   for_each = var.create_task_definition ? { main = true } : {}
 
@@ -10,20 +18,32 @@ resource "aws_ecs_task_definition" "kapten" {
   task_role_arn            = local.task_role_arn_effective
 
   container_definitions = jsonencode([
-    {
-      name        = var.task_definition_container_name
-      image       = var.task_definition_container_image
-      essential   = true
-      command     = var.task_definition_container_command
-      environment = [for k, v in var.task_definition_container_environment : { name = k, value = v }]
-      mountPoints = var.enable_efs ? [
-        {
-          sourceVolume  = "efs"
-          containerPath = var.efs_container_mount_path
-          readOnly      = false
+    merge(
+      {
+        name        = var.task_definition_container_name
+        image       = local.container_image_effective
+        essential   = true
+        command     = var.task_definition_container_command
+        environment = [for k, v in var.task_definition_container_environment : { name = k, value = v }]
+        mountPoints = var.enable_efs ? [
+          {
+            sourceVolume  = "efs"
+            containerPath = var.efs_container_mount_path
+            readOnly      = false
+          }
+        ] : []
+      },
+      var.task_definition_enable_awslogs ? {
+        logConfiguration = {
+          logDriver = "awslogs"
+          options = {
+            "awslogs-group"         = local.task_definition_log_group_name_effective
+            "awslogs-region"        = var.region
+            "awslogs-stream-prefix" = local.task_definition_log_stream_prefix_effective
+          }
         }
-      ] : []
-    }
+      } : {}
+    )
   ])
 
   dynamic "volume" {

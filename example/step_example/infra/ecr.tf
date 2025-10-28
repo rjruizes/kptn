@@ -1,6 +1,8 @@
 resource "aws_ecr_repository" "kapten" {
   for_each = var.create_ecr_repository ? { main = true } : {}
 
+  force_delete = true
+
   name                 = var.ecr_repository_name
   image_tag_mutability = var.ecr_repository_image_tag_mutability
 

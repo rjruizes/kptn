@@ -18,10 +18,10 @@ graphs:
 
 tasks:
   a:
-    file: a.py
+    file: src/a.py
   b:
-    file: b.py
+    file: src/b.py
   c:
-    file: c.py
+    file: src/c.py
   d:
-    file: d.py
+    file: src/d.py

@@ -4,7 +4,7 @@ from kapten.caching.submit import submit
 {#- from kapten.deploy.storage_key import read_branch_storage_key #}
 from kapten.runner import cli_parser, parse_and_validate_tasks
 from kapten.util.pipeline_config import PipelineConfig
-{# from kapten.util.runtime_config import ensure_pythonpath #}
+{#- from kapten.util.runtime_config import ensure_pythonpath #}
 
 
 VALID_TASKS: set[str] = { {% for name in task_names %}"{{ name }}"{% if not loop.last %}, {% endif %}{% endfor %} }
