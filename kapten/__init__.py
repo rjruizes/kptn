@@ -9,7 +9,11 @@ from typing import Union
 
 import yaml
 
-from kapten.util.pipeline_config import PipelineConfig, _module_path_from_dir
+from kapten.util.pipeline_config import (
+    PipelineConfig,
+    _module_path_from_dir,
+    normalise_dir_setting,
+)
 
 
 def _coerce_task_list(task_names: Union[str, list[str], None]) -> list[str]:
@@ -28,22 +32,42 @@ def _build_pipeline_config_for_run(
 ) -> PipelineConfig:
     """Construct a PipelineConfig from kapten.yaml for flow execution."""
     settings = config.get("settings", {})
-    py_tasks_dir = settings.get("py-tasks-dir")
-    if not py_tasks_dir:
+    py_tasks_dir_setting = normalise_dir_setting(
+        settings.get("py-tasks-dir"),
+        setting_name="py-tasks-dir",
+    )
+    if not py_tasks_dir_setting:
         raise RuntimeError("Missing 'py-tasks-dir' in kapten.yaml settings")
 
-    module_path = _module_path_from_dir(py_tasks_dir)
+    module_path = _module_path_from_dir(py_tasks_dir_setting[0])
     tasks_config_path = (project_path / "kapten.yaml").resolve()
-    r_tasks_dir_setting = settings.get("r-tasks-dir", ".")
-    r_tasks_dir_path = (project_path / r_tasks_dir_setting).resolve()
+    resolved_py_dirs = []
+    for entry in py_tasks_dir_setting:
+        entry_path = Path(entry)
+        resolved_py_dirs.append(str((project_path / entry_path).resolve() if not entry_path.is_absolute() else entry_path.resolve()))
 
-    pipeline_kwargs: dict[str, Union[str, bool]] = {
+    r_tasks_dir_setting_raw = settings.get("r-tasks-dir", ".")
+    r_tasks_dir_setting = normalise_dir_setting(
+        r_tasks_dir_setting_raw,
+        setting_name="r-tasks-dir",
+    )
+    if not r_tasks_dir_setting:
+        r_tasks_dir_setting = ["."]
+
+    resolved_r_dirs = []
+    for entry in r_tasks_dir_setting:
+        entry_path = Path(entry)
+        resolved_r_dirs.append(str((project_path / entry_path).resolve() if not entry_path.is_absolute() else entry_path.resolve()))
+
+    pipeline_kwargs: dict[str, Union[str, bool, list[str]]] = {
         "PIPELINE_NAME": pipeline_name,
         "PY_MODULE_PATH": module_path,
         "TASKS_CONFIG_PATH": str(tasks_config_path),
-        "R_TASKS_DIR_PATH": str(r_tasks_dir_path),
         "SUBSET_MODE": False,
     }
+
+    pipeline_kwargs["PY_TASKS_DIRS"] = list(resolved_py_dirs)
+    pipeline_kwargs["R_TASKS_DIRS"] = list(resolved_r_dirs)
 
     storage_key = settings.get("storage-key") or settings.get("storage_key")
     if storage_key:

@@ -1,7 +1,10 @@
 import os
 from enum import Enum
 from pathlib import Path
+from typing import Iterable, Sequence
+
 from pydantic import BaseModel, computed_field, model_validator
+
 from kapten.deploy.ecr_image import get_full_image_and_branch
 from kapten.util.filepaths import project_root
 import yaml
@@ -26,17 +29,54 @@ def _module_path_from_dir(py_tasks_dir: str) -> str:
     return module_path
 
 
-def _read_py_tasks_dir_from_config(tasks_config_path: str) -> str | None:
+def normalise_dir_setting(
+    value: str | Sequence[str] | None,
+    *,
+    setting_name: str,
+) -> list[str]:
+    """Normalise directory settings that can be a string or list of strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items: Iterable[str] = [value]
+    elif isinstance(value, Sequence):
+        raw_items = value
+    else:  # pragma: no cover - defensive guard for unexpected types
+        raise TypeError(
+            f"Configuration setting '{setting_name}' must be a string or list of strings"
+        )
+
+    normalised: list[str] = []
+    for item in raw_items:
+        if not isinstance(item, str):
+            raise TypeError(
+                f"Configuration setting '{setting_name}' contains non-string entry: {item!r}"
+            )
+        cleaned = item.strip()
+        if not cleaned:
+            raise ValueError(
+                f"Configuration setting '{setting_name}' contains an empty directory entry"
+            )
+        normalised.append(cleaned)
+    if not normalised:
+        raise ValueError(
+            f"Configuration setting '{setting_name}' must contain at least one directory"
+        )
+    return normalised
+
+
+def _read_py_tasks_dir_from_config(tasks_config_path: str) -> list[str]:
     """Read the py-tasks-dir setting from the kapten.yaml config file"""
     try:
         config_path = Path(tasks_config_path)
         if not config_path.exists():
-            return None
+            return []
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
-        return config.get('settings', {}).get('py-tasks-dir')
+        setting = config.get('settings', {}).get('py-tasks-dir')
+        return normalise_dir_setting(setting, setting_name='py-tasks-dir')
     except Exception:
-        return None
+        return []
 
 
 def get_scratch_dir(pipeline_config) -> Path:
@@ -58,16 +98,27 @@ class PipelineConfig(BaseModel):
     OUTPUT_FILETYPE: FileType = "csv"
     PIPELINE_NAME: str = ""
     PY_MODULE_PATH: str = ""
-    TASKS_CONFIG_PATH: str = "/code/tests/mock_pipeline/tasks.yaml"
-    R_TASKS_DIR_PATH: str = "/code/tests/mock_pipeline/r_tasks"
+    TASKS_CONFIG_PATH: str = "/code/tests/mock_pipeline/kapten.yaml"
+    PY_TASKS_DIRS: tuple[str, ...] = ()
+    R_TASKS_DIRS: tuple[str, ...] = ()
 
     @model_validator(mode='after')
     def _derive_py_module_path(self):
         """Auto-derive PY_MODULE_PATH from py-tasks-dir in kapten.yaml if not explicitly set"""
-        if not self.PY_MODULE_PATH and self.TASKS_CONFIG_PATH:
-            py_tasks_dir = _read_py_tasks_dir_from_config(self.TASKS_CONFIG_PATH)
-            if py_tasks_dir:
-                self.PY_MODULE_PATH = _module_path_from_dir(py_tasks_dir)
+        if self.TASKS_CONFIG_PATH:
+            py_tasks_dirs = _read_py_tasks_dir_from_config(self.TASKS_CONFIG_PATH)
+            if py_tasks_dirs:
+                if not self.PY_MODULE_PATH:
+                    self.PY_MODULE_PATH = _module_path_from_dir(py_tasks_dirs[0])
+                if not self.PY_TASKS_DIRS:
+                    self.PY_TASKS_DIRS = tuple(py_tasks_dirs)
+        if not self.PY_TASKS_DIRS and self.PY_MODULE_PATH:
+            parent_parts = self.PY_MODULE_PATH.split(".")
+            if parent_parts:
+                derived_path = Path(".")
+                for part in parent_parts:
+                    derived_path /= part
+                self.PY_TASKS_DIRS = (str(derived_path),)
         return self
 
     @model_validator(mode='after')
@@ -94,6 +145,25 @@ class PipelineConfig(BaseModel):
                     raise
                 # If we can't read the config, just continue without auto-deriving
                 pass
+        return self
+
+    @model_validator(mode='after')
+    def _ensure_r_tasks_dirs(self):
+        """Ensure R task directories are stored as a tuple."""
+        dirs = self.R_TASKS_DIRS
+        if dirs is None:
+            dirs = ()
+        if isinstance(dirs, list):
+            dirs = tuple(dirs)
+        if isinstance(dirs, tuple):
+            cleaned = []
+            for entry in dirs:
+                if isinstance(entry, str) and entry.strip():
+                    cleaned.append(entry)
+            dirs = tuple(cleaned)
+        else:
+            dirs = ()
+        self.R_TASKS_DIRS = dirs
         return self
 
     @computed_field
@@ -125,7 +195,7 @@ def generateConfig(pipeline_name: str, r_tasks_dir_path: str, py_module_path: st
         PIPELINE_NAME=pipeline_name,
         PY_MODULE_PATH=py_module_path,
         TASKS_CONFIG_PATH=tasks_config_path,
-        R_TASKS_DIR_PATH=r_tasks_dir_path,
+        R_TASKS_DIRS=(r_tasks_dir_path,) if r_tasks_dir_path else (),
     )
 
 def get_storage_key(pipeline_config: PipelineConfig) -> str:
@@ -144,7 +214,7 @@ def get_storage_key(pipeline_config: PipelineConfig) -> str:
 
 
 """
-Like DATA_YEAR, the defaults for the following variables are set in deployments, but can be overridden task by task via tasks.yaml
+Like DATA_YEAR, the defaults for the following variables are set in deployments, but can be overridden task by task via kapten.yaml
 
 - OUTPUT_STORETYPE: fs|s3
 - OUTPUT_FILETYPE: csv|parquet

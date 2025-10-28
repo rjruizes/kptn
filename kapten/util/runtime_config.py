@@ -27,6 +27,7 @@ class RuntimeConfigError(RuntimeError):
 def ensure_pythonpath(
     base_dir: str | Path | None,
     module_path: str | None = None,
+    extra_paths: Iterable[str | Path] | None = None,
 ) -> None:
     """Ensure the Python import system can locate project and task modules."""
     if base_dir is None:
@@ -45,6 +46,13 @@ def ensure_pythonpath(
                     candidates.append(module_parent)
                 if module_dir.is_dir():
                     candidates.append(module_dir)
+        if extra_paths:
+            for entry in extra_paths:
+                entry_path = Path(entry)
+                if entry_path.is_absolute():
+                    candidates.append(entry_path.resolve())
+                elif base_path:
+                    candidates.append(base_path.joinpath(entry_path).resolve())
 
     seen: set[str] = set()
     for candidate in candidates:
@@ -89,7 +97,8 @@ class RuntimeConfig:
 
         config_block = deepcopy(tasks_config.get("config", {}) if tasks_config else {})
         module_path = getattr(fallback, "PY_MODULE_PATH", None) if fallback else None
-        ensure_pythonpath(base_dir, module_path)
+        extra_paths = getattr(fallback, "PY_TASKS_DIRS", None) if fallback else None
+        ensure_pythonpath(base_dir, module_path, extra_paths)
         resolved = cls._resolve_config_block(config_block, base_dir)
         return cls(resolved, fallback)
 
@@ -105,7 +114,8 @@ class RuntimeConfig:
 
         config_block = deepcopy(config or {})
         module_path = getattr(fallback, "PY_MODULE_PATH", None) if fallback else None
-        ensure_pythonpath(base_dir, module_path)
+        extra_paths = getattr(fallback, "PY_TASKS_DIRS", None) if fallback else None
+        ensure_pythonpath(base_dir, module_path, extra_paths)
         resolved = cls._resolve_config_block(config_block, base_dir)
         return cls(resolved, fallback)
 
@@ -116,27 +126,15 @@ class RuntimeConfig:
         base_dir: str | Path | None,
     ) -> dict[str, Any]:
         base_path = Path(base_dir) if base_dir else Path.cwd()
+        resolved_entry = cls._resolve_entry(dict(config_block), base_path)
+        resolved_value = resolved_entry.value
+        if not isinstance(resolved_value, Mapping):
+            raise RuntimeConfigError("Config block must decode to a mapping")
 
-        include_value = config_block.pop("include", None)
+        resolved = dict(resolved_value)
+        if resolved_entry.aliases:
+            cls._apply_aliases(resolved, resolved_entry.aliases)
 
-        merged: dict[str, Any] = {}
-        if include_value is not None:
-            for include_path in cls._normalise_includes(include_value):
-                include_data_raw = cls._load_include(base_path, include_path)
-                include_data = cls._resolve_value(include_data_raw, base_path)
-                if not isinstance(include_data, Mapping):
-                    raise RuntimeConfigError(
-                        f"Included file '{include_path}' did not decode to a mapping"
-                    )
-                merged = cls._deep_merge(merged, dict(include_data))
-
-        current = {
-            key: cls._resolve_value(value, base_path)
-            for key, value in config_block.items()
-            if key != "include"
-        }
-
-        resolved = cls._deep_merge(merged, current)
         cls._apply_duckdb_overrides(resolved)
         return resolved
 
@@ -153,15 +151,11 @@ class RuntimeConfig:
                 "DuckDB config mapping must define a 'function' entry"
             )
 
-        alias = duckdb_entry.get("parameter_name")
-        if isinstance(alias, str):
-            alias = alias.strip()
-            if alias and not alias.isidentifier():
-                raise RuntimeConfigError(
-                    f"DuckDB config alias '{alias}' is not a valid identifier"
-                )
-        else:
-            alias = None
+        alias = duckdb_entry.get("alias")
+        if alias is None and "parameter_name" in duckdb_entry:
+            alias = duckdb_entry.get("parameter_name")
+
+        alias = cls._normalise_alias(alias)
 
         resolved["duckdb"] = connection
 
@@ -170,39 +164,171 @@ class RuntimeConfig:
 
     @classmethod
     def _resolve_value(cls, value: Any, base_path: Path) -> Any:
+        return cls._resolve_entry(value, base_path).value
+
+    @classmethod
+    def _resolve_entry(cls, value: Any, base_path: Path) -> "_ResolvedEntry":
         if isinstance(value, Mapping):
-            return cls._resolve_mapping(dict(value), base_path)
+            return cls._resolve_mapping_entry(dict(value), base_path)
         if isinstance(value, list):
-            return [cls._resolve_value(item, base_path) for item in value]
+            resolved_items: list[Any] = []
+            for item in value:
+                item_entry = cls._resolve_entry(item, base_path)
+                if item_entry.aliases:
+                    raise RuntimeConfigError(
+                        "Alias definitions are not supported inside lists"
+                    )
+                resolved_items.append(item_entry.value)
+            return _ResolvedEntry(resolved_items, [])
         if isinstance(value, str):
             callable_result = cls._maybe_call_callable(value.strip())
             if callable_result is not _Sentinel.NO_RESULT:
-                return callable_result
-            return value
-        return value
+                return _ResolvedEntry(callable_result, [])
+            return _ResolvedEntry(value, [])
+        return _ResolvedEntry(value, [])
 
     @classmethod
-    def _resolve_mapping(cls, mapping: dict[str, Any], base_path: Path) -> dict[str, Any]:
+    def _resolve_mapping_entry(
+        cls,
+        mapping: dict[str, Any],
+        base_path: Path,
+    ) -> "_ResolvedEntry":
+        if cls._is_config_entry_mapping(mapping):
+            return cls._resolve_config_entry_mapping(mapping, base_path)
+
         include_value = mapping.pop("include", None)
 
         merged: dict[str, Any] = {}
         if include_value is not None:
             for include_path in cls._normalise_includes(include_value):
                 include_data_raw = cls._load_include(base_path, include_path)
-                include_data = cls._resolve_value(include_data_raw, base_path)
-                if not isinstance(include_data, Mapping):
+                include_entry = cls._resolve_entry(include_data_raw, base_path)
+                include_value_resolved = include_entry.value
+                if not isinstance(include_value_resolved, Mapping):
                     raise RuntimeConfigError(
                         f"Included file '{include_path}' did not decode to a mapping"
                     )
-                merged = cls._deep_merge(merged, dict(include_data))
+                merged = cls._deep_merge(merged, dict(include_value_resolved))
+                if include_entry.aliases:
+                    cls._apply_aliases(merged, include_entry.aliases)
 
-        current = {
-            key: cls._resolve_value(value, base_path)
-            for key, value in mapping.items()
-            if key != "include"
-        }
+        current: dict[str, Any] = {}
+        alias_entries: list[tuple[str, Any]] = []
+        for key, raw_value in mapping.items():
+            if key == "include":
+                continue
+            resolved_entry = cls._resolve_entry(raw_value, base_path)
+            current[key] = resolved_entry.value
+            if resolved_entry.aliases:
+                alias_entries.extend(resolved_entry.aliases)
 
-        return cls._deep_merge(merged, current)
+        resolved = cls._deep_merge(merged, current)
+        if alias_entries:
+            cls._apply_aliases(resolved, alias_entries)
+
+        return _ResolvedEntry(resolved, [])
+
+    @classmethod
+    def _resolve_config_entry_mapping(
+        cls,
+        mapping: dict[str, Any],
+        base_path: Path,
+    ) -> "_ResolvedEntry":
+        include_value = mapping.pop("include", None)
+        if include_value is not None:
+            raise RuntimeConfigError("Config entry mappings do not support 'include'")
+
+        alias_raw = mapping.pop("alias", None)
+        parameter_raw = mapping.pop("parameter_name", None)
+        alias_name = cls._coalesce_alias(alias_raw, parameter_raw)
+
+        has_value = "value" in mapping
+        has_function = "function" in mapping
+        if has_value and has_function:
+            raise RuntimeConfigError(
+                "Config entry cannot define both 'value' and 'function'"
+            )
+        if not has_value and not has_function:
+            raise RuntimeConfigError(
+                "Config entry must define either 'value' or 'function'"
+            )
+
+        if has_function:
+            function_spec = mapping.pop("function")
+            if not isinstance(function_spec, str):
+                raise RuntimeConfigError(
+                    "Config entry 'function' must be provided as a string"
+                )
+            resolved_function = cls._resolve_entry(function_spec, base_path)
+            if resolved_function.aliases:
+                raise RuntimeConfigError(
+                    "Function specifications cannot define alias entries"
+                )
+            resolved_value = resolved_function.value
+        else:
+            value_spec = mapping.pop("value")
+            resolved_value_entry = cls._resolve_entry(value_spec, base_path)
+            if resolved_value_entry.aliases:
+                raise RuntimeConfigError(
+                    "Alias definitions are not supported within config 'value' fields"
+                )
+            resolved_value = resolved_value_entry.value
+
+        if mapping:
+            extra_keys = ", ".join(sorted(mapping.keys()))
+            raise RuntimeConfigError(
+                f"Config entry mapping contains unsupported keys: {extra_keys}"
+            )
+
+        alias_entries: list[tuple[str, Any]] = []
+        if alias_name:
+            alias_entries.append((alias_name, resolved_value))
+
+        return _ResolvedEntry(resolved_value, alias_entries)
+
+    @staticmethod
+    def _is_config_entry_mapping(mapping: Mapping[str, Any]) -> bool:
+        return "value" in mapping or "function" in mapping
+
+    @classmethod
+    def _coalesce_alias(cls, alias: Any, parameter_name: Any) -> str | None:
+        alias_set = alias is not None
+        parameter_set = parameter_name is not None
+
+        if alias_set and parameter_set:
+            alias_name = cls._normalise_alias(alias)
+            parameter_alias = cls._normalise_alias(parameter_name)
+            if alias_name != parameter_alias:
+                raise RuntimeConfigError(
+                    "Config entry defines conflicting 'alias' and 'parameter_name' values"
+                )
+            return alias_name
+
+        if alias_set:
+            return cls._normalise_alias(alias)
+        if parameter_set:
+            return cls._normalise_alias(parameter_name)
+        return None
+
+    @staticmethod
+    def _apply_aliases(target: dict[str, Any], aliases: Iterable[tuple[str, Any]]) -> None:
+        for alias_name, alias_value in aliases:
+            target[alias_name] = alias_value
+
+    @staticmethod
+    def _normalise_alias(alias: Any) -> str | None:
+        if alias is None:
+            return None
+        if not isinstance(alias, str):
+            raise RuntimeConfigError("Alias must be provided as a string")
+        alias_str = alias.strip()
+        if not alias_str:
+            raise RuntimeConfigError("Alias strings must not be empty")
+        if not alias_str.isidentifier():
+            raise RuntimeConfigError(
+                f"Alias '{alias_str}' is not a valid identifier"
+            )
+        return alias_str
 
     @classmethod
     def _maybe_call_callable(cls, candidate: str) -> Any:
@@ -296,3 +422,9 @@ class RuntimeConfig:
 
 class _Sentinel:
     NO_RESULT = object()
+
+
+@dataclass
+class _ResolvedEntry:
+    value: Any
+    aliases: list[tuple[str, Any]]

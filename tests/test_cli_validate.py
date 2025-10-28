@@ -108,6 +108,111 @@ def test_validate_python_tasks_flags_missing_r_script(tmp_path):
     assert any("R file 'producer.R' not found" in message for message in errors)
 
 
+def test_validate_python_tasks_supports_multiple_python_dirs(tmp_path):
+    primary_dir = tmp_path / "py_primary"
+    secondary_dir = tmp_path / "py_shared"
+    _write_task(primary_dir, "__init__.py", "")
+    _write_task(primary_dir, "placeholder.py", "def placeholder():\n    return 1")
+    _write_task(secondary_dir, "__init__.py", "")
+    _write_task(
+        secondary_dir,
+        "consumer.py",
+        """
+        def consumer(runtime_config, producer):
+            return producer
+        """,
+    )
+
+    r_dir = tmp_path / "r_tasks"
+    _write_task(
+        r_dir,
+        "producer.R",
+        """
+        # placeholder producer
+        """,
+    )
+
+    kap_conf = {
+        "settings": {
+            "py-tasks-dir": ["py_primary", "py_shared"],
+            "r-tasks-dir": "r_tasks",
+            "flows-dir": ".",
+        },
+        "tasks": {
+            "producer": {"file": "producer.R", "cache_result": True},
+            "consumer": {"file": "consumer.py"},
+        },
+        "graphs": {
+            "demo": {
+                "tasks": {
+                    "producer": None,
+                    "consumer": ["producer"],
+                }
+            }
+        },
+    }
+
+    (tmp_path / "kapten.yaml").write_text(
+        yaml.safe_dump(kap_conf), encoding="utf-8"
+    )
+
+    errors = _validate_python_tasks(tmp_path, kap_conf)
+
+    assert errors == []
+
+
+def test_validate_python_tasks_supports_multiple_r_dirs(tmp_path):
+    py_dir = tmp_path / "py_tasks"
+    _write_task(py_dir, "__init__.py", "")
+    _write_task(
+        py_dir,
+        "consumer.py",
+        """
+        def consumer(runtime_config, producer):
+            return producer
+        """,
+    )
+
+    primary_r_dir = tmp_path / "r_missing"
+    primary_r_dir.mkdir(parents=True, exist_ok=True)
+    secondary_r_dir = tmp_path / "r_tasks"
+    _write_task(
+        secondary_r_dir,
+        "producer.R",
+        """
+        # placeholder producer
+        """,
+    )
+
+    kap_conf = {
+        "settings": {
+            "py-tasks-dir": "py_tasks",
+            "r-tasks-dir": ["r_missing", "r_tasks"],
+            "flows-dir": ".",
+        },
+        "tasks": {
+            "producer": {"file": "producer.R", "cache_result": True},
+            "consumer": {"file": "consumer.py"},
+        },
+        "graphs": {
+            "demo": {
+                "tasks": {
+                    "producer": None,
+                    "consumer": ["producer"],
+                }
+            }
+        },
+    }
+
+    (tmp_path / "kapten.yaml").write_text(
+        yaml.safe_dump(kap_conf), encoding="utf-8"
+    )
+
+    errors = _validate_python_tasks(tmp_path, kap_conf)
+
+    assert errors == []
+
+
 def test_validate_python_tasks_defaults_to_task_name(tmp_path):
     kap_conf = _base_config(
         tmp_path,

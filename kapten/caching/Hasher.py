@@ -6,12 +6,14 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from kapten.caching.r_imports import get_file_list, hash_r_files
 from kapten.util.hash import hash_file, hash_obj
 from kapten.util.logger import get_logger
-from kapten.util.read_tasks_config import read_tasks_configs
+from kapten.util.pipeline_config import PipelineConfig
+from kapten.util.read_tasks_config import merge, read_tasks_config
+from kapten.util.task_dirs import resolve_python_task_dirs
 
 if TYPE_CHECKING:  # pragma: no cover - only for static typing
     import duckdb
@@ -273,14 +275,138 @@ class Hasher:
         tasks_config=None,
         tasks_config_paths=None,
         runtime_config=None,
+        pipeline_config: PipelineConfig | None = None,
     ):
         self.r_dirs = r_dirs or []
-        self.py_dirs = py_dirs or []
         self.output_dir = output_dir
-        self.tasks_config = tasks_config or read_tasks_configs(tasks_config_paths)
         self.runtime_config = runtime_config
+        self.pipeline_config = pipeline_config
         self._duckdb_connection = None
         self._py_function_analyzer: PythonFunctionAnalyzer | None = None
+        self.task_file_roots: dict[str, Path] = {}
+        self.tasks_base_dirs: list[Path] = []
+        self.tasks_base_configs: dict[Path, dict[str, Any]] = {}
+        self._extra_py_dirs: list[Path] = [
+            Path(entry).resolve() for entry in (py_dirs or []) if entry
+        ]
+        self._pipeline_py_dirs: list[Path] = []
+        self.py_dirs: list[str] = []
+
+        loaded_config = None
+        if tasks_config_paths:
+            loaded_config, task_roots, base_dirs, base_configs = self._load_tasks_configs(tasks_config_paths)
+            self.task_file_roots.update(task_roots)
+            self.tasks_base_dirs = base_dirs
+            self.tasks_base_configs.update(base_configs)
+
+        if tasks_config is not None:
+            self.tasks_config = tasks_config
+        else:
+            if loaded_config is None:
+                raise ValueError("Hasher requires tasks_config or tasks_config_paths")
+            self.tasks_config = loaded_config
+
+        self._initialise_python_directories()
+
+    def _load_tasks_configs(
+        self, tasks_config_paths: list[str]
+    ) -> tuple[dict, dict[str, Path], list[Path], dict[Path, dict[str, Any]]]:
+        superset: dict = {}
+        task_roots: dict[str, Path] = {}
+        base_dirs: list[Path] = []
+        base_configs: dict[Path, dict[str, Any]] = {}
+        for config_path in tasks_config_paths:
+            config = read_tasks_config(config_path)
+            superset = merge(superset, config)
+            base_dir = Path(config_path).resolve().parent
+            base_dirs.append(base_dir)
+            base_configs[base_dir] = config
+            for task_name in config.get("tasks", {}):
+                task_roots[task_name] = base_dir
+        unique_base_dirs = list(dict.fromkeys(base_dirs))
+        return superset, task_roots, unique_base_dirs, base_configs
+
+    @staticmethod
+    def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
+        seen: set[str] = set()
+        unique: list[Path] = []
+        for entry in paths:
+            resolved = entry.resolve()
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(resolved)
+        return unique
+
+    def _initialise_python_directories(self) -> None:
+        discovered_dirs: list[Path] = []
+
+        for base_dir in self.tasks_base_dirs:
+            config = self.tasks_base_configs.get(base_dir)
+            discovered_dirs.extend(
+                resolve_python_task_dirs(
+                    base_dir,
+                    tasks_config=config,
+                )
+            )
+
+        if self.pipeline_config:
+            config_path = getattr(self.pipeline_config, "TASKS_CONFIG_PATH", "") or ""
+            module_path = getattr(self.pipeline_config, "PY_MODULE_PATH", None)
+            base_dir: Path | None = Path(config_path).resolve().parent if config_path else None
+            pipeline_config_map = self.tasks_base_configs.get(base_dir) if base_dir else None
+            fallback_config = pipeline_config_map or (self.tasks_config if isinstance(self.tasks_config, dict) else None)
+            if base_dir or module_path:
+                discovered_dirs.extend(
+                    resolve_python_task_dirs(
+                        base_dir,
+                        tasks_config=fallback_config,
+                        module_path=module_path,
+                    )
+                )
+
+        self._pipeline_py_dirs = self._dedupe_paths(discovered_dirs)
+        combined = self._pipeline_py_dirs + self._extra_py_dirs
+        self.py_dirs = [str(path) for path in self._dedupe_paths(combined)]
+
+    @staticmethod
+    def _split_file_spec(file_spec: str) -> tuple[str, str | None]:
+        if ":" in file_spec:
+            path_part, func_part = file_spec.rsplit(":", 1)
+            func_part = func_part.strip() or None
+        else:
+            path_part, func_part = file_spec, None
+        return path_part.strip(), func_part
+
+    def _ensure_task_code_fields(self, task_name: str, task: dict) -> dict:
+        if "r_script" in task or "py_script" in task:
+            return task
+        file_value = task.get("file")
+        if not isinstance(file_value, str) or not file_value.strip():
+            return task
+        file_path, func_name = self._split_file_spec(file_value)
+        suffix = Path(file_path).suffix.lower()
+        updated = dict(task)
+        if suffix == ".r":
+            updated["r_script"] = file_path
+        elif suffix in {".py", ".pyw"}:
+            updated["py_script"] = file_path
+            if func_name:
+                updated["py_function"] = func_name
+        self.tasks_config.setdefault("tasks", {})[task_name] = updated
+        return updated
+
+    def _task_search_roots(self, task_name: str) -> list[Path]:
+        roots: list[Path] = []
+        direct_root = self.task_file_roots.get(task_name)
+        if direct_root:
+            roots.append(direct_root.resolve())
+        for base in self.tasks_base_dirs:
+            resolved = base.resolve()
+            if resolved not in roots:
+                roots.append(resolved)
+        return roots
 
     def get_task(self, name: str):
         """Return the task configuration."""
@@ -291,29 +417,52 @@ class Hasher:
             raise KeyError(f"Task '{name}' not found in list of tasks, {taskname_keys}")
         return task
 
-    def get_full_r_script_paths(self, filename: str) -> tuple[list[Path], list[str]]:
+    def get_full_r_script_paths(self, task_name: str, filename: str) -> tuple[list[Path], str]:
         """Search r_dirs for matching R script(s)."""
+        matching_r_dir: Path | None = None
+        relative = Path(filename)
+
+        if relative.is_absolute():
+            if relative.exists():
+                return [relative.resolve()], str(relative.parent.resolve())
+            raise FileNotFoundError(f"R script {filename} not found at absolute path; cwd={Path.cwd()}")
+
         matching_r_scripts = []
-        matching_r_dir = None
-        for r_dir in self.r_dirs:
+        search_dirs: list[Path] = []
+        search_dirs.extend(self._task_search_roots(task_name))
+        search_dirs.extend(Path(dir_entry).resolve() for dir_entry in self.r_dirs)
+
+        seen_dirs: set[Path] = set()
+        for base_dir in search_dirs:
+            resolved_base = base_dir.resolve()
+            if resolved_base in seen_dirs:
+                continue
+            seen_dirs.add(resolved_base)
             if "$" in filename:
                 # Regex replace any variables ${.*} -> '*'
-                r_script_pattern = Path(r_dir) / re.sub(var_pattern, "*", filename)
+                r_script_pattern = resolved_base / re.sub(var_pattern, "*", filename)
                 matching_r_scripts.extend(glob.glob(str(r_script_pattern)))
-                matching_r_dir = r_dir
+                if matching_r_scripts:
+                    matching_r_dir = resolved_base
+                    break
             else:
-                r_script_path = Path(r_dir) / filename
+                r_script_path = resolved_base / relative
                 if r_script_path.exists():
                     matching_r_scripts.append(r_script_path)
-                    matching_r_dir = r_dir
-        if len(matching_r_scripts) == 0:
-            raise FileNotFoundError(f"No R script {filename} not found in {self.r_dirs}; cwd={Path.cwd()}")
-        return matching_r_scripts, matching_r_dir
+                    matching_r_dir = resolved_base
+                    break
+        if len(matching_r_scripts) == 0 or matching_r_dir is None:
+            raise FileNotFoundError(
+                f"No R script {filename} found for task '{task_name}' "
+                f"(searched roots={[str(dir_path) for dir_path in search_dirs]}; cwd={Path.cwd()})"
+            )
+        return [Path(path).resolve() for path in matching_r_scripts], str(matching_r_dir)
 
-    def get_task_filelist(self, task: dict) -> list[str]:
+    def get_task_filelist(self, task_name: str, task: dict) -> list[str]:
         """Return a list of all files associated with a task."""
+        task = self._ensure_task_code_fields(task_name, task)
         filename = task["r_script"]
-        full_paths, r_tasks_dir = self.get_full_r_script_paths(filename)
+        full_paths, r_tasks_dir = self.get_full_r_script_paths(task_name, filename)
         abs_file_list = get_file_list(full_paths)
         return abs_file_list
 
@@ -321,28 +470,51 @@ class Hasher:
         """Hash the code of a task to determine if it has changed."""
         if task is None:
             task = self.get_task(name)
+        task = self._ensure_task_code_fields(name, task)
         filename = task["r_script"]
-        full_paths, r_tasks_dir = self.get_full_r_script_paths(filename)
+        full_paths, r_tasks_dir = self.get_full_r_script_paths(name, filename)
         logger.info(f"Building R code hashes for {name}, paths: {full_paths}")
         return hash_r_files(full_paths, r_tasks_dir)
 
-    def get_full_py_script_path(self, filename: str) -> Path:
+    def get_full_py_script_path(self, task_name: str, filename: str) -> Path:
         """Search py_dirs for the Python script."""
-        for py_dir in self.py_dirs:
-            py_script_path = Path(py_dir) / filename
-            if py_script_path.exists():
-                return py_script_path
-            else:
-                print(f"Debug: {py_script_path} does not exist; cwd={Path.cwd()}")
-        raise FileNotFoundError(f"Python script {filename} not found in {self.py_dirs}")
+        candidate = Path(filename)
+        if candidate.is_absolute():
+            if candidate.exists():
+                return candidate.resolve()
+            raise FileNotFoundError(f"Python script {filename} not found at absolute path; cwd={Path.cwd()}")
+
+        search_paths: list[Path] = []
+        search_paths.extend(self._task_search_roots(task_name))
+        search_paths.extend(self._pipeline_py_dirs)
+        search_paths.extend(self._extra_py_dirs)
+        attempted: list[Path] = []
+
+        for base_dir in search_paths:
+            resolved_base = base_dir.resolve()
+            candidate_path = (resolved_base / candidate).resolve()
+            attempted.append(candidate_path)
+            if candidate_path.exists():
+                return candidate_path
+
+        fallback = (Path.cwd() / candidate).resolve()
+        attempted.append(fallback)
+        if fallback.exists():
+            return fallback
+
+        attempted_str = ", ".join(str(path) for path in attempted)
+        raise FileNotFoundError(
+            f"Python script {filename} not found for task '{task_name}'; attempted: {attempted_str}"
+        )
 
     def build_py_code_hashes(self, name: str, task: dict = None) -> str:
         """Hash the code of a task to determine if it has changed."""
         if task is None:
             task = self.get_task(name)
+        task = self._ensure_task_code_fields(name, task)
         # If task["py_script"] is a string, use it as the filename
         filename = task["py_script"] if isinstance(task.get("py_script"), str) else name + ".py"
-        full_path = self.get_full_py_script_path(filename)
+        full_path = self.get_full_py_script_path(name, filename)
         logger.info(f"Building Python code hashes for {name}, path: {full_path}")
         analyzer = self._get_py_function_analyzer()
         function_name = task.get("py_function") or name
@@ -355,7 +527,7 @@ class Hasher:
             return [{"function": "__file__", "hash": hash_file(full_path)}]
 
     def hash_code_for_task(self, name: str):
-        task = self.get_task(name)
+        task = self._ensure_task_code_fields(name, self.get_task(name))
         if "r_script" in task:
             code_hashes = self.build_r_code_hashes(name, task)
         elif "py_script" in task:
@@ -366,7 +538,14 @@ class Hasher:
 
     def _get_py_function_analyzer(self) -> PythonFunctionAnalyzer:
         if self._py_function_analyzer is None:
-            self._py_function_analyzer = PythonFunctionAnalyzer(self.py_dirs or [])
+            combined_dirs: list[Path] = []
+            combined_dirs.extend(self._pipeline_py_dirs)
+            combined_dirs.extend(self._extra_py_dirs)
+            combined_dirs.extend(self.tasks_base_dirs)
+            if self.task_file_roots:
+                combined_dirs.extend(self.task_file_roots.values())
+            unique_dirs = self._dedupe_paths(combined_dirs)
+            self._py_function_analyzer = PythonFunctionAnalyzer([str(path) for path in unique_dirs])
         return self._py_function_analyzer
 
     @staticmethod

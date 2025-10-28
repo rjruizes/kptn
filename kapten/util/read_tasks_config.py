@@ -30,10 +30,18 @@ def read_tasks_configs(tasks_yaml_paths: list[str]):
     for tasks_yaml_path in tasks_yaml_paths:
         superset = merge(superset, read_tasks_config(tasks_yaml_path))
     return superset
+def all_tasks_configs_with_paths():
+    kap_conf = read_config()
+    tasks_conf_path = Path(kap_conf['tasks-conf-path'])
+    config_paths = [
+        tasks_conf_path,
+        Path(project_root) / "tests" / "mock_pipeline" / "kapten.yaml",
+    ]
+    superset: dict = {}
+    for config_path in config_paths:
+        superset = merge(superset, read_tasks_config(config_path))
+    return superset, config_paths
 
 def all_tasks_configs():
-    kap_conf = read_config()
-    tasks_conf_path = kap_conf['tasks-conf-path']
-    config1 = read_tasks_config(tasks_conf_path)
-    config2 = read_tasks_config(Path(project_root) / "tests" / "mock_pipeline" / "tasks.yaml")
-    return merge(config1, config2)
+    configs, _ = all_tasks_configs_with_paths()
+    return configs

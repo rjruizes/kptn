@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import ast
 import inspect
+import glob
+import re
 from pathlib import Path
 from typing import Any
 
-from kapten.util.pipeline_config import PipelineConfig, _module_path_from_dir
+from kapten.util.pipeline_config import (
+    PipelineConfig,
+    _module_path_from_dir,
+    normalise_dir_setting,
+)
 from kapten.util.runtime_config import RuntimeConfig, ensure_pythonpath
 from kapten.util.task_args import (
     build_task_argument_plan,
@@ -24,23 +30,56 @@ def _build_pipeline_config(
     subset_mode: bool,
 ) -> PipelineConfig:
     settings = kap_conf.get("settings", {})
-    py_tasks_dir = settings.get("py-tasks-dir")
-    if not py_tasks_dir:
-        raise RuntimeError("Missing 'py-tasks-dir' in kapten.yaml settings")
+    module_path: str | None = None
+    resolved_py_dirs: list[str] = []
+    py_tasks_dir_setting = settings.get("py-tasks-dir")
+    if py_tasks_dir_setting is not None:
+        py_tasks_dir_values = normalise_dir_setting(
+            py_tasks_dir_setting,
+            setting_name="py-tasks-dir",
+        )
+        if py_tasks_dir_values:
+            module_path = _module_path_from_dir(py_tasks_dir_values[0])
+            for entry in py_tasks_dir_values:
+                entry_path = Path(entry)
+                resolved = (
+                    (project_root / entry_path).resolve()
+                    if not entry_path.is_absolute()
+                    else entry_path.resolve()
+                )
+                resolved_py_dirs.append(str(resolved))
 
-    module_path = _module_path_from_dir(py_tasks_dir)
     project_root = project_root.resolve()
     tasks_config_path = (project_root / "kapten.yaml").resolve()
-    r_tasks_dir_setting = settings.get("r-tasks-dir", ".")
-    r_tasks_dir_path = (project_root / Path(r_tasks_dir_setting)).resolve()
+
+    r_tasks_dir_setting_raw = settings.get("r-tasks-dir", ".")
+    r_tasks_dir_setting = normalise_dir_setting(
+        r_tasks_dir_setting_raw,
+        setting_name="r-tasks-dir",
+    )
+    if not r_tasks_dir_setting:
+        r_tasks_dir_setting = ["."]
+    resolved_r_dirs = []
+    for entry in r_tasks_dir_setting:
+        entry_path = Path(entry)
+        resolved = (
+            (project_root / entry_path).resolve()
+            if not entry_path.is_absolute()
+            else entry_path.resolve()
+        )
+        resolved_r_dirs.append(str(resolved))
 
     pipeline_kwargs: dict[str, Any] = {
         "PIPELINE_NAME": pipeline_name,
-        "PY_MODULE_PATH": module_path,
         "TASKS_CONFIG_PATH": str(tasks_config_path),
-        "R_TASKS_DIR_PATH": str(r_tasks_dir_path),
         "SUBSET_MODE": subset_mode,
     }
+
+    if module_path:
+        pipeline_kwargs["PY_MODULE_PATH"] = module_path
+    if resolved_py_dirs:
+        pipeline_kwargs["PY_TASKS_DIRS"] = list(resolved_py_dirs)
+    pipeline_kwargs["R_TASKS_DIRS"] = list(resolved_r_dirs)
 
     storage_key = settings.get("storage-key") or settings.get("storage_key")
     if storage_key:
@@ -150,26 +189,44 @@ def _load_python_function_signature(
 
 def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str]:
     """Validate Kapten tasks, including Python signatures and required files."""
+    base_dir = base_dir.resolve()
     settings = kap_conf.get("settings") or {}
-    py_tasks_dir_entry = settings.get("py-tasks-dir")
     tasks_def = kap_conf.get("tasks") or {}
     graphs = kap_conf.get("graphs") or {}
 
-    if not py_tasks_dir_entry or not tasks_def or not graphs:
+    if not tasks_def or not graphs:
         return []
 
-    py_tasks_dir = Path(py_tasks_dir_entry)
-    if not py_tasks_dir.is_absolute():
-        py_tasks_dir = (base_dir / py_tasks_dir).resolve()
+    py_tasks_dir_values: list[str] = []
+    resolved_py_dirs: list[Path] = []
+    py_tasks_dir_entry = settings.get("py-tasks-dir")
+    if py_tasks_dir_entry is not None:
+        try:
+            py_tasks_dir_values = normalise_dir_setting(
+                py_tasks_dir_entry,
+                setting_name="py-tasks-dir",
+            )
+        except (TypeError, ValueError) as exc:
+            return [f"Invalid 'py-tasks-dir' setting: {exc}"]
+
+        for entry in py_tasks_dir_values:
+            entry_path = Path(entry)
+            resolved = (
+                (base_dir / entry_path).resolve()
+                if not entry_path.is_absolute()
+                else entry_path.resolve()
+            )
+            resolved_py_dirs.append(resolved)
 
     errors: list[str] = []
-    if not py_tasks_dir.exists():
+    if resolved_py_dirs and not any(path.exists() for path in resolved_py_dirs):
+        joined_dirs = ", ".join(str(path) for path in resolved_py_dirs)
         errors.append(
-            f"Python tasks directory '{py_tasks_dir_entry}' not found (resolved to {py_tasks_dir})"
+            f"Python tasks directories {py_tasks_dir_values} not found (checked: {joined_dirs})"
         )
 
     runtime_configs: dict[str, RuntimeConfig] = {}
-    r_task_roots: dict[str, Path] = {}
+    r_task_roots: dict[str, list[Path]] = {}
     pipelines_to_skip: set[str] = set()
 
     for pipeline_name in graphs:
@@ -184,10 +241,21 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
             pipelines_to_skip.add(pipeline_name)
             continue
 
-        r_task_roots[pipeline_name] = Path(pipeline_config.R_TASKS_DIR_PATH).resolve()
+        r_dirs = [
+            Path(dir_path).resolve()
+            for dir_path in getattr(pipeline_config, "R_TASKS_DIRS", ())
+            if dir_path
+        ]
+        if not r_dirs:
+            r_dirs = [base_dir.resolve()]
+        r_task_roots[pipeline_name] = r_dirs
 
         try:
-            ensure_pythonpath(base_dir, pipeline_config.PY_MODULE_PATH or None)
+            ensure_pythonpath(
+                base_dir,
+                pipeline_config.PY_MODULE_PATH or None,
+                getattr(pipeline_config, "PY_TASKS_DIRS", None),
+            )
             runtime_config = RuntimeConfig.from_tasks_config(
                 kap_conf,
                 base_dir=base_dir,
@@ -225,13 +293,42 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
             file_suffix = Path(file_path_str).suffix.lower()
 
             if file_suffix == ".r":
+                if "${" in file_path_str and "}" in file_path_str:
+                    glob_pattern = re.sub(r"\$\{[^}/]+}", "*", file_path_str)
+                    matches: list[Path] = []
+                    script_path = Path(file_path_str)
+                    if script_path.is_absolute():
+                        matches = [Path(match).resolve() for match in glob.glob(glob_pattern)]
+                    else:
+                        r_roots = r_task_roots.get(pipeline_name) or [base_dir]
+                        for root in r_roots:
+                            root_path = Path(root)
+                            root_matches = [
+                                candidate.resolve()
+                                for candidate in root_path.glob(glob_pattern)
+                            ]
+                            if root_matches:
+                                matches = root_matches
+                                break
+                    if matches:
+                        continue
+                    # Treat unresolved template values as wildcards during validation.
+                    continue
+
                 script_path = Path(file_path_str)
                 if not script_path.is_absolute():
-                    r_root = r_task_roots.get(pipeline_name)
-                    if r_root is not None:
-                        script_path = (r_root / script_path).resolve()
+                    r_roots = r_task_roots.get(pipeline_name) or []
+                    candidate = None
+                    for root in r_roots:
+                        potential = (root / script_path).resolve()
+                        if potential.exists():
+                            candidate = potential
+                            break
+                    if candidate is None:
+                        fallback_root = r_roots[0] if r_roots else base_dir
+                        script_path = (fallback_root / script_path).resolve()
                     else:
-                        script_path = (base_dir / script_path).resolve()
+                        script_path = candidate
                 else:
                     script_path = script_path.resolve()
 
@@ -246,10 +343,21 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
             function_name = func_name or task_name
 
             script_path = Path(file_path_str)
-            if not script_path.is_absolute():
-                script_path = (py_tasks_dir / script_path).resolve()
-            else:
+            if script_path.is_absolute():
                 script_path = script_path.resolve()
+            else:
+                search_roots = [base_dir, *resolved_py_dirs]
+                candidate = None
+                for root in search_roots:
+                    potential = (root / script_path).resolve()
+                    if potential.exists():
+                        candidate = potential
+                        break
+                if candidate is None:
+                    fallback_root = search_roots[0]
+                    script_path = (fallback_root / script_path).resolve()
+                else:
+                    script_path = candidate
 
             if not script_path.exists():
                 errors.append(

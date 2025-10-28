@@ -9,6 +9,7 @@ from kapten.read_config import read_config
 from kapten.codegen.lib.setup_jinja_env import debug
 from kapten.codegen.lib.stepfunctions import build_stepfunctions_flow_context
 from kapten.util.filepaths import py_dir, codegen_dir
+from kapten.util.pipeline_config import normalise_dir_setting, _module_path_from_dir
 from kapten.util.read_tasks_config import read_tasks_config
 
 PYTHON_FILE_SUFFIXES = {".py", ".pyw"}
@@ -75,34 +76,34 @@ def parse_python_task_spec(task_name: str, task_config: dict) -> dict | None:
 
 def relative_path_from_flows_dir_to_tasks_conf_path(kap_conf):
     """
-    Get the relative path from the flows dir to the tasks.yaml file
-    so that the generated flows can find the tasks.yaml file
-    (e.g. "../../tasks.yaml")
+    Get the relative path from the flows dir to the kapten.yaml file
+    so that the generated flows can find the kapten.yaml file
+    (e.g. "../../kapten.yaml")
     """
     flows_dir = Path(kap_conf['flows-dir'])
     tasks_conf_path = "kapten.yaml"
     return path.relpath(tasks_conf_path, flows_dir)
 
-def relative_path_from_flows_dir_to_py_tasks_dir(kap_conf):
-    """
-    Get the relative path from the flows dir to the py_tasks dir
-    so that the generated flows can import the tasks
-    (e.g. "../../py_tasks")
-    """
-    flows_dir = Path(kap_conf['flows-dir'])
-    py_tasks_dir = Path(kap_conf['py-tasks-dir'])
-    return path.relpath(py_tasks_dir, flows_dir)
+# def relative_path_from_flows_dir_to_py_tasks_dir(kap_conf, py_tasks_dir_entry: str):
+#     """
+#     Get the relative path from the flows dir to the py_tasks dir
+#     so that the generated flows can import the tasks
+#     (e.g. "../../py_tasks")
+#     """
+#     flows_dir = Path(kap_conf['flows-dir'])
+#     py_tasks_dir = Path(py_tasks_dir_entry)
+#     return path.relpath(py_tasks_dir, flows_dir)
 
-def relative_path_from_flows_dir_to_r_tasks_dir(kap_conf):
+def relative_path_from_flows_dir_to_r_tasks_dir(kap_conf, r_tasks_dir_entry: str | None):
     """
     Get the relative path from the flows dir to the r_tasks dir
     so that the generated flows can find the R tasks
     (e.g. "../../r_tasks")
     """
-    if 'r-tasks-dir' not in kap_conf:
+    if not r_tasks_dir_entry:
         return None
     flows_dir = Path(kap_conf['flows-dir'])
-    r_tasks_dir = Path(kap_conf['r-tasks-dir'])
+    r_tasks_dir = Path(r_tasks_dir_entry)
     return path.relpath(r_tasks_dir, flows_dir)
 
 def generate_files(graph: str = None):
@@ -125,6 +126,15 @@ def generate_files(graph: str = None):
     conf = read_tasks_config(root_dir / tasks_conf_path)
     environment.filters['debug'] = debug
     tasks_dict = conf['tasks']
+
+    r_tasks_dir_values: list[str] = []
+    if 'r-tasks-dir' in kap_conf:
+        r_tasks_dir_values = normalise_dir_setting(
+            kap_conf['r-tasks-dir'],
+            setting_name='r-tasks-dir',
+        )
+    primary_r_tasks_dir = r_tasks_dir_values[0] if r_tasks_dir_values else None
+
     python_task_specs = {}
     for name, task in tasks_dict.items():
         spec = parse_python_task_spec(name, task)
@@ -144,11 +154,11 @@ def generate_files(graph: str = None):
             "task_names": task_names,
             "tasks_dict": tasks_dict,
             "deps_lookup": deps_lookup,
-            "py_tasks_dir": kap_conf['py-tasks-dir'],
-            "r_tasks_dir": kap_conf['r-tasks-dir'] if 'r-tasks-dir' in kap_conf else None,
+            # "py_tasks_dir": py_tasks_module,
+            "r_tasks_dir": primary_r_tasks_dir,
             "rel_tasks_conf_path": relative_path_from_flows_dir_to_tasks_conf_path(kap_conf),
-            "rel_py_tasks_dir": relative_path_from_flows_dir_to_py_tasks_dir(kap_conf),
-            "rel_r_tasks_dir": relative_path_from_flows_dir_to_r_tasks_dir(kap_conf),
+            # "rel_py_tasks_dir": relative_path_from_flows_dir_to_py_tasks_dir(kap_conf, primary_py_tasks_dir),
+            "rel_r_tasks_dir": relative_path_from_flows_dir_to_r_tasks_dir(kap_conf, primary_r_tasks_dir),
             "python_task_names": python_task_names,
             "python_task_specs": python_task_specs,
         }
@@ -206,10 +216,10 @@ def generate_files(graph: str = None):
             )
         except TemplateNotFound:
             rendered = None
-        if rendered is not None:
-            output_file = root_dir / kap_conf['py-tasks-dir'] / '__init__.py'
-            with open(output_file, 'w') as f:
-                f.write(rendered)
+        # if rendered is not None:
+        #     output_file = root_dir / Path(primary_py_tasks_dir) / '__init__.py'
+        #     with open(output_file, 'w') as f:
+        #         f.write(rendered)
 
     # print("Formatting code...")
     # subprocess.run(["black", "-q", "."], cwd=flows_dir)

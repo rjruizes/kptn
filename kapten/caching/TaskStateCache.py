@@ -2,10 +2,11 @@ from datetime import datetime
 from contextlib import suppress
 import functools
 import importlib
+import importlib.util
 import logging
 import os
 import json
-from os import path
+import sys
 from typing import Callable, Optional, Union
 import requests
 import time
@@ -23,6 +24,7 @@ from kapten.util.rscript import r_script
 from kapten.util.read_tasks_config import read_tasks_config
 from kapten.util.hash import hash_file, hash_obj
 from kapten.util.task_args import plan_python_call
+from kapten.util.task_dirs import python_module_name_candidates, resolve_python_task_dirs
 
 class TaskStateCache():
     """
@@ -52,6 +54,7 @@ class TaskStateCache():
         pipeline_config: PipelineConfig,
         db_client: Optional[DbClientBase] = None,
         tasks_config = None,
+        tasks_config_paths: list[str] | None = None,
     ):
         self = cls._instance
         if self is None:
@@ -59,30 +62,51 @@ class TaskStateCache():
             self.pipeline_config = pipeline_config
             storage_key = get_storage_key(pipeline_config)
             self.pipeline_name = pipeline_config.PIPELINE_NAME
-            self.tasks_config = tasks_config or read_tasks_config(pipeline_config.TASKS_CONFIG_PATH)
+            config_paths = [str(path) for path in (tasks_config_paths or []) if str(path)]
+            primary_config_path = config_paths[0] if config_paths else getattr(pipeline_config, "TASKS_CONFIG_PATH", "")
+            if not primary_config_path:
+                raise ValueError("TaskStateCache requires at least one tasks_config_path")
+            self.tasks_config_paths = [str(path) for path in (config_paths or [primary_config_path])]
+            self.tasks_config = tasks_config or read_tasks_config(primary_config_path)
             self.db_client = db_client or init_db_client(
                 table_name=os.getenv("DYNAMODB_TABLE_NAME", "tasks"),
                 storage_key=storage_key,
                 pipeline=pipeline_config.PIPELINE_NAME,
                 tasks_config=self.tasks_config,
-                tasks_config_path=pipeline_config.TASKS_CONFIG_PATH,
+                tasks_config_path=primary_config_path,
             )
-            self.r_tasks_dir = pipeline_config.R_TASKS_DIR_PATH
-            tasks_config_path = Path(pipeline_config.TASKS_CONFIG_PATH)
+            tasks_config_path = Path(primary_config_path)
             self.tasks_root_dir = tasks_config_path.parent
             duckdb_dir_setting = self.tasks_config.get("settings", {}).get("duckdb-tasks-dir")
             if duckdb_dir_setting:
                 self.duckdb_tasks_dir = (self.tasks_root_dir / duckdb_dir_setting).resolve()
             else:
                 self.duckdb_tasks_dir = self.tasks_root_dir
-            py_tasks_dir = self.tasks_root_dir / pipeline_config.PY_MODULE_PATH.replace(".", os.sep)
+            self.py_task_dirs = resolve_python_task_dirs(
+                self.tasks_root_dir,
+                tasks_config=self.tasks_config,
+                module_path=getattr(pipeline_config, "PY_MODULE_PATH", None),
+            )
+
+            r_task_dirs: list[Path] = []
+            for entry in getattr(pipeline_config, "R_TASKS_DIRS", ()):
+                entry_path = Path(entry)
+                if entry_path.is_absolute():
+                    r_task_dirs.append(entry_path.resolve())
+                else:
+                    r_task_dirs.append((self.tasks_root_dir / entry_path).resolve())
+            if not r_task_dirs:
+                r_task_dirs.append(self.tasks_root_dir)
+            self.r_task_dirs = r_task_dirs
+
             self.runtime_config = self.build_runtime_config()
             self.hasher = Hasher(
-                py_dirs=[py_tasks_dir],
-                r_dirs=[self.r_tasks_dir],
+                r_dirs=[str(path) for path in self.r_task_dirs],
                 output_dir=pipeline_config.scratch_dir,
                 tasks_config=self.tasks_config,
+                tasks_config_paths=self.tasks_config_paths,
                 runtime_config=self.runtime_config,
+                pipeline_config=pipeline_config,
             )
             self.logger = get_logger()
             self._duckdb_sql_functions: dict[str, Callable[..., object]] = {}
@@ -140,8 +164,12 @@ class TaskStateCache():
         if not self.is_rscript(name, task):
             raise ValueError(f"Task '{name}' is not an R task")
         file_value = self._get_task_file(name, task)
-        r_script_path = path.join(self.r_tasks_dir, file_value)
-        return r_script_path
+        for root in self.r_task_dirs:
+            candidate = (root / Path(file_value)).resolve()
+            if candidate.exists():
+                return str(candidate)
+        fallback_root = self.r_task_dirs[0] if self.r_task_dirs else self.tasks_root_dir
+        return str((fallback_root / Path(file_value)).resolve())
 
     def should_cache_result(self, task_name: str) -> bool:
         """Check if the task should cache its results."""
@@ -324,12 +352,52 @@ class TaskStateCache():
         self._duckdb_sql_functions[task_name] = duckdb_sql_runner
         return duckdb_sql_runner
 
+    def _load_python_package_from_path(self, package_dir: Path, module_name: str | None = None):
+        init_path = package_dir / "__init__.py"
+        if not init_path.exists():
+            raise ValueError(
+                f"Python tasks directory '{package_dir}' is missing an __init__.py file"
+            )
+        load_name = (module_name.split(".")[-1] if module_name else package_dir.name) or package_dir.name
+        spec = importlib.util.spec_from_file_location(
+            load_name,
+            init_path,
+            submodule_search_locations=[str(package_dir)],
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Unable to load python tasks package from {init_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[load_name] = module
+        spec.loader.exec_module(module)
+        return module
+
     def _get_python_tasks_module(self):
-        if not self.pipeline_config.PY_MODULE_PATH:
-            raise ValueError("Pipeline configuration missing PY_MODULE_PATH for python tasks")
-        if self._python_tasks_module is None:
-            self._python_tasks_module = importlib.import_module(self.pipeline_config.PY_MODULE_PATH)
-        return self._python_tasks_module
+        if self._python_tasks_module is not None:
+            return self._python_tasks_module
+
+        candidates = python_module_name_candidates(
+            tasks_config=self.tasks_config,
+            module_path=getattr(self.pipeline_config, "PY_MODULE_PATH", None),
+            tasks_root_dir=self.tasks_root_dir,
+        )
+
+        for candidate in candidates:
+            try:
+                module = importlib.import_module(candidate)
+            except ModuleNotFoundError:
+                continue
+            else:
+                self._python_tasks_module = module
+                return module
+
+        if self.py_task_dirs:
+            self._python_tasks_module = self._load_python_package_from_path(
+                self.py_task_dirs[0],
+                module_name=candidates[0] if candidates else None,
+            )
+            return self._python_tasks_module
+
+        raise ValueError("Unable to locate python tasks module for pipeline")
 
     def get_python_callable(self, task_name: str):
         """Return the Python callable for a task, creating one for DuckDB SQL tasks if needed."""
