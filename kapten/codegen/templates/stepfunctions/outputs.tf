@@ -107,3 +107,8 @@ output "batch_service_role_arn_effective" {
   description = "ARN of the IAM service role used by AWS Batch (created or supplied)"
   value       = local.batch_service_role_arn_effective
 }
+
+output "decider_lambda_arn" {
+  description = "ARN of the Kapten decider Lambda function invoked by Step Functions"
+  value       = coalesce(local.decider_lambda_arn_effective, "")
+}

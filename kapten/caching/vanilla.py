@@ -62,7 +62,7 @@ def map_task_vanilla(
     """Maps a script/function over its data_args (dependency data) sequentially"""
     tscache = TaskStateCache(pipeline_config)
     task_obj = tscache.get_task(task_name)
-    data_args, value_list = fetch_cached_dep_data(tscache, task_name)
+    data_args, value_list, _ = fetch_cached_dep_data(tscache, task_name)
     tscache.set_initial_state(task_name)
     index = list(range(len(value_list)))
     data_args["idx"] = index
@@ -240,4 +240,3 @@ def run_task_vanilla(
         run_single_task(pipeline_config, task_name, **kwargs)
 
     tscache.set_final_state(task_name, status="SUCCESS")
-

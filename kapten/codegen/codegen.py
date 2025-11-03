@@ -141,10 +141,16 @@ def generate_files(graph: str = None):
         if spec:
             python_task_specs[name] = spec
     python_task_names = list(python_task_specs.keys())
+    graphs_block = conf.get('graphs')
+    if not isinstance(graphs_block, dict) or not graphs_block:
+        raise ValueError("No graphs defined in kapten.yaml.")
     if graph:
-        graphs = {graph: conf['graphs'][graph]}
+        if graph not in graphs_block:
+            available = ", ".join(sorted(graphs_block))
+            raise ValueError(f"Graph '{graph}' not found; available graphs: {available}")
+        graphs = {graph: graphs_block[graph]}
     else:
-        graphs = conf['graphs']
+        graphs = graphs_block
     # Write flows/*.py files
     for graph_name in graphs:
         deps_lookup = graphs[graph_name]["tasks"]
@@ -169,6 +175,7 @@ def generate_files(graph: str = None):
                 pipeline_name=graph_name,
                 task_names=task_names,
                 deps_lookup=deps_lookup,
+                tasks_dict=tasks_dict,
                 kap_conf=kap_conf,
             )
             render_context.update(extra_context)

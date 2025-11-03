@@ -25,9 +25,23 @@ locals {
 
   batch_security_group_ids_effective = length(var.batch_security_group_ids) > 0 ? var.batch_security_group_ids : local.security_group_ids_effective
 
+  task_definition_container_environment_effective = merge(
+    var.task_definition_container_environment,
+    {
+      ARTIFACT_STORE = var.artifact_store
+      EXTERNAL_STORE = var.external_store
+    }
+  )
+
   batch_container_command_effective = length(var.batch_container_command) > 0 ? var.batch_container_command : var.task_definition_container_command
 
-  batch_container_environment_effective = length(var.batch_container_environment) > 0 ? var.batch_container_environment : var.task_definition_container_environment
+  batch_container_environment_effective = length(var.batch_container_environment) > 0 ? merge(
+    var.batch_container_environment,
+    {
+      ARTIFACT_STORE = var.artifact_store
+      EXTERNAL_STORE = var.external_store
+    }
+  ) : local.task_definition_container_environment_effective
 
   batch_container_vcpu_effective = var.batch_container_vcpu != "" ? var.batch_container_vcpu : (var.task_definition_cpu != "" ? tostring(tonumber(var.task_definition_cpu) / 1024) : null)
 
@@ -49,4 +63,6 @@ locals {
       local.batch_job_definition_arn_effective
     ] : arn if arn != null && arn != ""
   ]
+
+  decider_lambda_arn_effective = var.create_decider_lambda ? aws_lambda_function.decider[0].arn : var.decider_lambda_arn
 }

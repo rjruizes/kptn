@@ -16,6 +16,30 @@ variable "state_machines" {
   description = "Map of state machine configurations where key is the graph name and value contains the definition file path"
 }
 
+variable "create_decider_lambda" {
+  type        = bool
+  description = "Set to true to provision the Kapten decider Lambda function"
+  default     = true
+}
+
+variable "decider_lambda_arn" {
+  type        = string
+  description = "Existing decider Lambda function ARN to reuse when not creating one"
+  default     = null
+}
+
+variable "decider_lambda_timeout" {
+  type        = number
+  description = "Timeout, in seconds, for the Kapten decider Lambda"
+  default     = 30
+}
+
+variable "decider_lambda_memory_size" {
+  type        = number
+  description = "Memory size, in MB, for the Kapten decider Lambda"
+  default     = 512
+}
+
 variable "create_networking" {
   type        = bool
   description = "Set to true to provision a new VPC and subnets"
@@ -305,6 +329,16 @@ variable "dynamodb_table_name" {
   description = "Name for the DynamoDB table used by Kapten tasks"
 }
 
+variable "artifact_store" {
+  type        = string
+  description = "Artifact storage identifier exposed to runtime environments"
+}
+
+variable "external_store" {
+  type        = string
+  description = "External inputs storage identifier exposed to runtime environments"
+}
+
 variable "create_efs" {
   type        = bool
   description = "Set to true to provision an EFS file system"
@@ -451,8 +485,8 @@ variable "create_batch_resources" {
 
 variable "create_batch_service_role" {
   type        = bool
-  description = "Set to true to create an IAM service role for AWS Batch"
-  default     = true
+  description = "Set to true to create an IAM service role for AWS Batch instead of using the AWS managed service-linked role"
+  default     = false
 }
 
 variable "batch_service_role_arn" {

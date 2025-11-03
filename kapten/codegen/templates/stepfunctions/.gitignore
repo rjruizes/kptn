@@ -23,3 +23,6 @@ crash.*.log
 # CLI configuration files
 .terraformrc
 terraform.rc
+
+# Generated Lambda bundles
+lambda_decider.zip

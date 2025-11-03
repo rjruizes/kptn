@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from contextlib import suppress
 import functools
@@ -25,6 +26,16 @@ from kapten.util.read_tasks_config import read_tasks_config
 from kapten.util.hash import hash_file, hash_obj
 from kapten.util.task_args import plan_python_call
 from kapten.util.task_dirs import python_module_name_candidates, resolve_python_task_dirs
+
+
+@dataclass
+class TaskSubmissionDecision:
+    """Outcome of evaluating whether a task should be submitted for execution."""
+    task_name: str
+    task: dict
+    cached_state: TaskState | None
+    should_run: bool
+    reason: str | None = None
 
 class TaskStateCache():
     """
@@ -120,6 +131,10 @@ class TaskStateCache():
     def is_flow_prefect(self) -> str:
         """Check if the workflow type is Prefect"""
         return self.tasks_config.get("settings", {}).get("flow-type") == "prefect"
+
+    def is_flow_stepfunctions(self) -> str:
+        """Check if the workflow type is Step Functions"""
+        return self.tasks_config.get("settings", {}).get("flow-type") == "stepfunctions"
 
     def get_dep_list(self, task_name: str) -> list[str]:
         """Return the names of the dependencies of a task."""
@@ -432,6 +447,15 @@ class TaskStateCache():
         task = self.get_task(task_name)
         return task.get("map_over")
 
+    def get_map_over_count(self, task_name: str) -> int | None:
+        """Return the number of items that a mapped task will iterate over."""
+        if not self.is_mapped_task(task_name):
+            return None
+        from kapten.caching.TSCacheUtils import fetch_cached_dep_data
+
+        _, _, count = fetch_cached_dep_data(self, task_name)
+        return count
+
     def get_key_value(self, task_name: str, kwargs) -> str:
         """Return the key value of a task."""
         key_name = self.get_map_over_key(task_name)
@@ -572,10 +596,20 @@ class TaskStateCache():
         """Delete cache for a task"""
         self.db_client.delete_task(task_name)
 
-    def submit(self, task_name: str, parameters, ignore_cache: bool):
-        """Submit Prefect task if task state is out-of-date (code or inputs changed)."""
-        self.logger.debug(f"tscache.submit({task_name}, {parameters}, ignore_cache={ignore_cache}) called")
-        storage_key = get_storage_key(self.pipeline_config)
+    def evaluate_submission(
+        self,
+        task_name: str,
+        parameters: dict | None = None,
+        ignore_cache: bool = False,
+    ) -> TaskSubmissionDecision:
+        """
+        Determine whether a task should be submitted for execution.
+
+        Returns a TaskSubmissionDecision containing the task configuration, cached state,
+        and the reason (if any) that the task should run.
+        """
+        if parameters is None:
+            parameters = {}
         task = self.get_task(task_name)
         cached_state = self.fetch_state(task_name)
         is_r_task = self.is_rscript(task_name, task)
@@ -588,9 +622,7 @@ class TaskStateCache():
             is_duckdb_sql_task=is_duckdb_sql_task,
             is_python_task=is_python_task,
         )
-        deployment_name = (
-            f"{run_task.__name__.replace('_', '-')}/{self.pipeline_config.PIPELINE_NAME}-RunTask-{storage_key}"
-        )
+
         reason = None
         if not cached_state:
             reason = "No cached state"
@@ -598,7 +630,7 @@ class TaskStateCache():
             reason = "ignore_cache is set"
         elif self.pipeline_config.SUBSET_MODE:
             reason = "Subset mode"
-        elif cached_state and cached_state.status == "FAILURE":
+        elif cached_state.status == "FAILURE":
             reason = "Task previously failed all subtasks"
         elif self.code_changed(
             code_hashes,
@@ -610,36 +642,54 @@ class TaskStateCache():
         else:
             dep_states = self.get_dep_states(task_name)
             if self.inputs_changed(self.get_input_hashes(task_name, dep_states), cached_state):
-                reason = f"Inputs changed" #: {self.get_input_hashes(task_name)} != {cached_state.input_hashes}"
+                reason = "Inputs changed"
             elif self.data_changed(self.get_data_hashes(task_name, dep_states), cached_state):
-                reason = f"Data changed"
-            # All the above reasons delete the task's cache and re-run the task, but one below submits the task to fill out the cache
-            elif cached_state and cached_state.status == "INCOMPLETE":
+                reason = "Data changed"
+            elif cached_state.status == "INCOMPLETE":
                 reason = "INCOMPLETE"
-            elif cached_state and not cached_state.end_time:
+            elif not cached_state.end_time:
                 reason = "Not finished"
 
-        if reason:
-            self.logger.info(f"Submitting task {task_name} because {reason}")
-            # Run as separate flow container in prod
-            if self.is_flow_prefect():
-                if not os.getenv("DEPLOY_AS_INLINE_SUBFLOWS") == "1":
-                    from kapten.caching.prefect import run_deployment_task
-                    run_deployment_task(deployment_name, task_name, self.pipeline_config, task, reason, self.logger)
-                else:  # Run as subflow locally
-                    import prefect
-                    parameters["task_name"] = task_name
-                    parameters["reason"] = reason
-                    flow_run_name = f"{task_name}-{prefect.runtime.flow_run.name}-{datetime.now().strftime('%H:%M:%S')}"
-                    run_task.with_options(flow_run_name=flow_run_name)(
-                        self.pipeline_config, **parameters
-                    )
-            else:
-                kwargs = {}
-                run_task(self.pipeline_config, task_name, **kwargs)
-        else:
+        return TaskSubmissionDecision(
+            task_name=task_name,
+            task=task,
+            cached_state=cached_state,
+            should_run=bool(reason),
+            reason=reason,
+        )
+
+    def submit(self, task_name: str, parameters, ignore_cache: bool):
+        """Submit Prefect task if task state is out-of-date (code or inputs changed)."""
+        self.logger.debug(f"tscache.submit({task_name}, {parameters}, ignore_cache={ignore_cache}) called")
+        decision = self.evaluate_submission(task_name, parameters, ignore_cache)
+        if not decision.should_run:
             self.logger.info(f"Skipping task {task_name}")
             return None
+
+        reason = decision.reason or "No cached state"
+        self.logger.info(f"Submitting task {task_name} because {reason}")
+        storage_key = get_storage_key(self.pipeline_config)
+        task = decision.task
+        deployment_name = (
+            f"{run_task.__name__.replace('_', '-')}/{self.pipeline_config.PIPELINE_NAME}-RunTask-{storage_key}"
+        )
+        # Run as separate flow container in prod
+        if self.is_flow_prefect():
+            if not os.getenv("DEPLOY_AS_INLINE_SUBFLOWS") == "1":
+                from kapten.caching.prefect import run_deployment_task
+                run_deployment_task(deployment_name, task_name, self.pipeline_config, task, reason, self.logger)
+            else:  # Run as subflow locally
+                import prefect
+                parameters = parameters or {}
+                parameters["task_name"] = task_name
+                parameters["reason"] = reason
+                flow_run_name = f"{task_name}-{prefect.runtime.flow_run.name}-{datetime.now().strftime('%H:%M:%S')}"
+                run_task.with_options(flow_run_name=flow_run_name)(
+                    self.pipeline_config, **parameters
+                )
+        else:
+            kwargs = {}
+            run_task(self.pipeline_config, task_name, **kwargs)
 
     def log_ecs_task_id(self) -> str:
         """Log the ECS Task ID and memory graph URL"""

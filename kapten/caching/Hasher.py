@@ -581,7 +581,8 @@ class Hasher:
 
     @staticmethod
     def _quote_duckdb_identifier(identifier: str) -> str:
-        return f'"{identifier.replace("\"", "\"\"")}"'
+        escaped = identifier.replace('"', '""')
+        return f'"{escaped}"'
 
     def _parse_duckdb_target(self, target: str) -> tuple[str | None, str]:
         if not target.startswith(DUCKDB_OUTPUT_PREFIX):

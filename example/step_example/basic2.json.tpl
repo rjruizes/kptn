@@ -1,8 +1,59 @@
 {
   "Comment": "Kapten generated state machine for basic2",
-  "StartAt": "a",
+  "StartAt": "a_Decide",
   "States": {
-    "a": {
+    "a_Decide": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${decider_lambda_arn}",
+        "Payload": {
+          "state.$": "$",
+          "task_name": "a",
+          "execution_mode": "ecs"
+        }
+      },
+      "ResultSelector": {
+        "Payload.$": "$.Payload"
+      },
+      "ResultPath": "$.last_decision",
+      "OutputPath": "$",
+      "Next": "a_Choice"
+    },
+    "a_Choice": {
+      "Type": "Choice",
+      "Default": "a_Skip",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.last_decision.Payload.should_run",
+              "BooleanEquals": true
+            },
+            {
+              "Or": [
+                {
+                  "Variable": "$.last_decision.Payload.execution_mode",
+                  "StringEquals": "ecs"
+                },
+                {
+                  "Not": {
+                    "Variable": "$.last_decision.Payload.execution_mode",
+                    "IsPresent": true
+                  }
+                }
+              ]
+            }
+          ],
+          "Next": "a_RunEcs"
+        }
+      ]
+    },
+    "a_Skip": {
+      "Type": "Pass",
+      "Next": "b_Decide"
+    },
+    "a_RunEcs": {
       "Type": "Task",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
@@ -32,6 +83,10 @@
                 {
                   "Name": "DYNAMODB_TABLE_NAME",
                   "Value": "${dynamodb_table_name}"
+                },
+                {
+                  "Name": "KAPTEN_DECISION_REASON",
+                  "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"
                 }
               ]
             }
@@ -50,9 +105,60 @@
         ]
       },
       "ResultPath": null,
-      "Next": "b"
+      "Next": "b_Decide"
     },
-    "b": {
+    "b_Decide": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${decider_lambda_arn}",
+        "Payload": {
+          "state.$": "$",
+          "task_name": "b",
+          "execution_mode": "ecs"
+        }
+      },
+      "ResultSelector": {
+        "Payload.$": "$.Payload"
+      },
+      "ResultPath": "$.last_decision",
+      "OutputPath": "$",
+      "Next": "b_Choice"
+    },
+    "b_Choice": {
+      "Type": "Choice",
+      "Default": "b_Skip",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.last_decision.Payload.should_run",
+              "BooleanEquals": true
+            },
+            {
+              "Or": [
+                {
+                  "Variable": "$.last_decision.Payload.execution_mode",
+                  "StringEquals": "ecs"
+                },
+                {
+                  "Not": {
+                    "Variable": "$.last_decision.Payload.execution_mode",
+                    "IsPresent": true
+                  }
+                }
+              ]
+            }
+          ],
+          "Next": "b_RunEcs"
+        }
+      ]
+    },
+    "b_Skip": {
+      "Type": "Pass",
+      "End": true
+    },
+    "b_RunEcs": {
       "Type": "Task",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
@@ -82,6 +188,10 @@
                 {
                   "Name": "DYNAMODB_TABLE_NAME",
                   "Value": "${dynamodb_table_name}"
+                },
+                {
+                  "Name": "KAPTEN_DECISION_REASON",
+                  "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"
                 }
               ]
             }

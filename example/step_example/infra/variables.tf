@@ -451,8 +451,8 @@ variable "create_batch_resources" {
 
 variable "create_batch_service_role" {
   type        = bool
-  description = "Set to true to create an IAM service role for AWS Batch"
-  default     = true
+  description = "Set to true to create an IAM service role for AWS Batch instead of using the AWS managed service-linked role"
+  default     = false
 }
 
 variable "batch_service_role_arn" {

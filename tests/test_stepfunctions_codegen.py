@@ -1,38 +1,64 @@
 import pytest
 
 from kapten.codegen.lib.stepfunctions import (
+    DEFAULT_BATCH_RESOURCE_ARN,
     DEFAULT_STEP_FUNCTION_RESOURCE_ARN,
     build_state_machine_definition,
 )
 
 
-def test_parallel_branches_are_grouped_with_trailing_tasks():
+def _build_state_machine(deps_lookup, tasks, order):
+    return build_state_machine_definition(
+        "example",
+        deps_lookup,
+        tasks=tasks,
+        task_order=order,
+        decider_lambda_arn="arn:aws:lambda:us-east-1:123456789012:function:decider",
+    )
+
+
+def test_parallel_branches_are_grouped_with_decider_and_trailing_tasks():
     deps_lookup = {
         "A": None,
         "B": "A",
         "C": None,
         "D": ["B", "C"],
     }
+    tasks = {name: {} for name in deps_lookup}
 
-    state_machine = build_state_machine_definition(
-        "example",
-        deps_lookup,
-        task_order=["A", "B", "C", "D"],
-    )
+    state_machine = _build_state_machine(deps_lookup, tasks, ["A", "B", "C", "D"])
 
     assert state_machine["StartAt"] == "ParallelRoot"
     parallel_state = state_machine["States"]["ParallelRoot"]
     assert parallel_state["Type"] == "Parallel"
-    assert parallel_state["Branches"][0]["States"]["A"]["Next"] == "B"
-    assert parallel_state["Branches"][0]["States"]["B"]["End"] is True
-    assert parallel_state["Branches"][1]["StartAt"] == "C"
-    assert parallel_state["Branches"][1]["States"]["C"]["End"] is True
-    assert parallel_state["Next"] == "D"
 
-    d_state = state_machine["States"]["D"]
-    assert d_state["Type"] == "Task"
-    assert d_state["Resource"] == DEFAULT_STEP_FUNCTION_RESOURCE_ARN
-    params = d_state["Parameters"]
+    first_branch = parallel_state["Branches"][0]
+    assert first_branch["StartAt"] == "A_Decide"
+    branch_states = first_branch["States"]
+    assert branch_states["A_Decide"]["Resource"] == "arn:aws:states:::lambda:invoke"
+    assert branch_states["A_Decide"]["Parameters"]["FunctionName"] == "arn:aws:lambda:us-east-1:123456789012:function:decider"
+    payload_params = branch_states["A_Decide"]["Parameters"]["Payload"]
+    assert payload_params["state.$"] == "$"
+    assert payload_params["task_name"] == "A"
+    assert payload_params["execution_mode"] == "ecs"
+    assert payload_params["TASKS_CONFIG_PATH"] == "kapten.yaml"
+    assert payload_params["PIPELINE_NAME"] == "example"
+    assert branch_states["A_Choice"]["Type"] == "Choice"
+    assert branch_states["A_RunEcs"]["Next"] == "B_Decide"
+    assert branch_states["B_RunEcs"]["End"] is True
+
+    second_branch = parallel_state["Branches"][1]
+    assert second_branch["StartAt"] == "C_Decide"
+    assert second_branch["States"]["C_RunEcs"]["End"] is True
+
+    assert parallel_state["Next"] == "D_Decide"
+
+    d_states = state_machine["States"]
+    assert d_states["D_Decide"]["Parameters"]["FunctionName"] == "arn:aws:lambda:us-east-1:123456789012:function:decider"
+    d_run_ecs = d_states["D_RunEcs"]
+    assert d_run_ecs["Type"] == "Task"
+    assert d_run_ecs["Resource"] == DEFAULT_STEP_FUNCTION_RESOURCE_ARN
+    params = d_run_ecs["Parameters"]
     assert params["Cluster"] == "${ecs_cluster_arn}"
     assert params["TaskDefinition"] == "${ecs_task_definition_arn}"
     network_conf = params["NetworkConfiguration"]["AwsvpcConfiguration"]
@@ -40,11 +66,11 @@ def test_parallel_branches_are_grouped_with_trailing_tasks():
     assert network_conf["SecurityGroups"] == "${security_group_ids}"
     container_override = params["Overrides"]["ContainerOverrides"][0]
     assert container_override["Name"] == "${container_name}"
-    env_vars = {env["Name"]: env["Value"] for env in container_override["Environment"]}
+    env_vars = {env["Name"]: env.get("Value") or env.get("Value.$") for env in container_override["Environment"]}
     assert env_vars["KAPTEN_TASK"] == "D"
     assert env_vars["KAPTEN_PIPELINE"] == "example"
-    assert d_state["ResultPath"] is None
-    assert d_state["End"] is True
+    assert d_run_ecs["ResultPath"] is None
+    assert d_run_ecs["End"] is True
 
 
 def test_sequential_pipeline_maps_to_linear_states():
@@ -53,23 +79,43 @@ def test_sequential_pipeline_maps_to_linear_states():
         "Transform": "Extract",
         "Load": "Transform",
     }
+    tasks = {name: {} for name in deps_lookup}
 
-    state_machine = build_state_machine_definition(
-        "etl",
-        deps_lookup,
-        task_order=["Extract", "Transform", "Load"],
+    state_machine = _build_state_machine(deps_lookup, tasks, ["Extract", "Transform", "Load"])
+
+    assert state_machine["StartAt"] == "Extract_Decide"
+    states = state_machine["States"]
+    assert states["Extract_RunEcs"]["Next"] == "Transform_Decide"
+    assert states["Transform_RunEcs"]["Next"] == "Load_Decide"
+    assert states["Load_RunEcs"]["End"] is True
+
+
+def test_mapped_task_uses_batch_branch():
+    deps_lookup = {"List": None, "Process": "List"}
+    tasks = {
+        "List": {"cache_result": True},
+        "Process": {"map_over": "item"},
+    }
+
+    state_machine = _build_state_machine(deps_lookup, tasks, ["List", "Process"])
+    states = state_machine["States"]
+
+    process_choice = states["Process_Choice"]
+    batch_choice = next(
+        choice
+        for choice in process_choice["Choices"]
+        if choice.get("Next") == "Process_RunBatch"
     )
+    assert batch_choice["And"][0]["Variable"] == "$.last_decision.Payload.should_run"
+    assert batch_choice["And"][1]["Variable"] == "$.last_decision.Payload.execution_mode"
+    assert batch_choice["And"][1]["StringEquals"] == "batch_array"
 
-    assert state_machine["StartAt"] == "Extract"
-    extract_state = state_machine["States"]["Extract"]
-    assert extract_state["Next"] == "Transform"
-
-    transform_state = state_machine["States"]["Transform"]
-    assert transform_state["Next"] == "Load"
-
-    load_state = state_machine["States"]["Load"]
-    assert load_state["End"] is True
-    assert load_state["ResultPath"] is None
+    batch_state = states["Process_RunBatch"]
+    assert batch_state["Resource"] == DEFAULT_BATCH_RESOURCE_ARN
+    params = batch_state["Parameters"]
+    assert params["JobQueue"] == "${batch_job_queue_arn}"
+    assert params["JobDefinition"] == "${batch_job_definition_arn}"
+    assert params["ArrayProperties"]["Size.$"] == "$.last_decision.Payload.array_size"
 
 
 def test_cycle_detection_raises_value_error():
@@ -78,10 +124,7 @@ def test_cycle_detection_raises_value_error():
         "B": "A",
         "C": "B",
     }
+    tasks = {name: {} for name in deps_lookup}
 
     with pytest.raises(ValueError):
-        build_state_machine_definition(
-            "cycle",
-            deps_lookup,
-            task_order=["A", "B", "C"],
-        )
+        _build_state_machine(deps_lookup, tasks, ["A", "B", "C"])

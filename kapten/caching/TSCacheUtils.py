@@ -11,6 +11,7 @@ def fetch_cached_dep_data(tscache: TaskStateCache, task_name: str):
     Fetch cached data for dependencies of a task
     data_args: a dictionary of the data for each dependency
     value_list: a list of values for the keys of the dependencies; used for mapping tasks
+    map_over_count: number of items that will be mapped over (if applicable)
     """
     deps = tscache.get_dep_list(task_name)
     task = tscache.get_task(task_name)
@@ -26,6 +27,7 @@ def fetch_cached_dep_data(tscache: TaskStateCache, task_name: str):
 
     data_args = {}
     value_list = []
+    map_over_count = None
 
     for dep_name in deps:
         if tscache.should_cache_result(dep_name):
@@ -47,15 +49,18 @@ def fetch_cached_dep_data(tscache: TaskStateCache, task_name: str):
                     # e.g. if data = [(1, 2), (3, 4)]
                     # then value_list = ["1,2", "3,4"]
                     value_list = [",".join([str(x) for x in tup]) for tup in data]
+                    map_over_count = len(value_list)
                 else:
                     data_args[key] = resp.data
                     value_list = resp.data
-    return data_args, value_list
+                    if "map_over" in task and isinstance(value_list, list):
+                        map_over_count = len(value_list)
+    return data_args, value_list, map_over_count
 
 def run_single_task(pipeline_config: PipelineConfig, task_name: str, db_client=None, **kwargs):
     """Execute either an R script or a Python function"""
     tscache = TaskStateCache(pipeline_config, db_client)
-    data_args = fetch_cached_dep_data(tscache, task_name)[0]
+    data_args, _, _ = fetch_cached_dep_data(tscache, task_name)
 
     if tscache.is_rscript(task_name):
         return rscript_task(pipeline_config, task_name, **data_args, **kwargs)

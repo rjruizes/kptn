@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 from typing import Any, Dict, List, Optional
 
+from kapten.cli.decider_bundle import BundleDeciderError, bundle_decider_lambda
 from kapten.codegen.infra_scaffolder import scaffold_stepfunctions_infra
 from kapten.read_config import read_config
 
@@ -175,6 +176,7 @@ def _collect_infra_inputs(
         "create_task_execution_role": create_task_execution_role,
         "create_task_role": create_task_role,
         "create_ecs_cluster": create_ecs_cluster,
+        "create_decider_lambda": True,
     }
     warnings: List[str] = []
 
@@ -643,6 +645,30 @@ def _run_codegen_infra(
         for graph_name, file_path in report.state_machine_files.items():
             status = "✓" if graph_name not in report.state_machine_files_missing else "✗"
             typer.echo(f"  {status} {graph_name}: {_display_path(file_path)}")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    project_root = Path.cwd()
+    try:
+        bundle_result = bundle_decider_lambda(
+            project_root=project_root,
+            output_dir=report.output_dir / "lambda_decider",
+            pipeline=pipeline_name,
+            kapten_source=repo_root,
+            project_source=project_root,
+            install_project=False,
+            prefer_local_kapten=True,
+        )
+    except BundleDeciderError as exc:
+        typer.secho(f"Failed to build decider Lambda bundle: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    suffix = ""
+    if bundle_result.pipeline_name:
+        suffix = f" (pipeline {bundle_result.pipeline_name})"
+    typer.echo(
+        "Decider Lambda bundle installed under "
+        f"{_display_path(bundle_result.bundle_dir)}{suffix}"
+    )
 
     combined_warnings = report.warnings
     if combined_warnings:

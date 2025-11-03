@@ -5,6 +5,7 @@ from collections import defaultdict, deque
 from typing import Any, Iterable, Mapping
 
 DEFAULT_STEP_FUNCTION_RESOURCE_ARN = "arn:aws:states:::ecs:runTask.sync"
+DEFAULT_BATCH_RESOURCE_ARN = "arn:aws:states:::batch:submitJob.sync"
 
 
 def _normalize_dependencies(dependencies: Any) -> list[str]:
@@ -51,46 +52,75 @@ def topological_sort(task_order: Iterable[str], deps_lookup: Mapping[str, Any]) 
     return ordered
 
 
-def _build_branch_sequences(
+def _construct_execution_lanes(
     ordered_tasks: list[str],
     deps_lookup: Mapping[str, Any],
-) -> tuple[list[list[str]], set[str]]:
-    """Group root-to-leaf chains that qualify for parallel execution."""
-    branches: list[list[str]] = []
-    assigned: set[str] = set()
+) -> list[list[str]]:
+    """
+    Partition tasks into execution lanes based on dependency readiness.
 
-    for task in ordered_tasks:
-        deps = _normalize_dependencies(deps_lookup.get(task))
-        if deps:
-            continue
+    Each lane contains the tasks whose dependencies are fully satisfied by the
+    lanes computed before it. Tasks that land in the same lane can execute in
+    parallel because they have no unmet prerequisites within the lane.
+    """
+    processed: set[str] = set()
+    total_tasks = len(ordered_tasks)
+    lanes: list[list[str]] = []
 
-        branch = [task]
-        assigned.add(task)
-        changed = True
-        while changed:
-            changed = False
-            for candidate in ordered_tasks:
-                if candidate in assigned:
-                    continue
-                candidate_deps = _normalize_dependencies(deps_lookup.get(candidate))
-                if candidate_deps and all(dep in branch for dep in candidate_deps):
-                    branch.append(candidate)
-                    assigned.add(candidate)
-                    changed = True
-        branches.append(branch)
+    while len(processed) < total_tasks:
+        lane: list[str] = []
+        for task in ordered_tasks:
+            if task in processed:
+                continue
+            deps = _normalize_dependencies(deps_lookup.get(task))
+            if all(dep in processed for dep in deps):
+                lane.append(task)
 
-    return branches, assigned
+        if not lane:
+            unresolved = [task for task in ordered_tasks if task not in processed]
+            raise ValueError(
+                "Unable to build execution lanes; unresolved dependencies for: "
+                + ", ".join(unresolved)
+            )
+
+        lanes.append(lane)
+        processed.update(lane)
+
+    return lanes
 
 
-def _make_task_state(
-    pipeline_name: str,
-    task_name: str,
-    resource_arn: str,
-    next_state: str | None,
-    *,
-    end: bool,
-) -> dict[str, Any]:
-    parameters: dict[str, Any] = {
+def _state_name(task_name: str, suffix: str) -> str:
+    """Generate a unique Step Functions state name for a task and suffix."""
+    return f"{task_name}_{suffix}"
+
+
+def _task_execution_mode(task_config: Mapping[str, Any]) -> str:
+    """
+    Determine the default execution mode for a task.
+
+    Prefers explicit configuration via `execution.mode`, otherwise falls back to
+    inferred rules (mapped tasks default to batch array jobs).
+    """
+    execution_cfg = task_config.get("execution")
+    if isinstance(execution_cfg, Mapping):
+        mode = execution_cfg.get("mode")
+        if isinstance(mode, str) and mode:
+            return mode
+    if task_config.get("map_over"):
+        return "batch_array"
+    return "ecs"
+
+
+def _build_ecs_parameters(pipeline_name: str, task_name: str) -> dict[str, Any]:
+    """Construct the ECS task parameters shared across generated states."""
+    environment = [
+        {"Name": "KAPTEN_PIPELINE", "Value": pipeline_name},
+        {"Name": "KAPTEN_TASK", "Value": task_name},
+        {"Name": "DYNAMODB_TABLE_NAME", "Value": "${dynamodb_table_name}"},
+        {"Name": "KAPTEN_DECISION_REASON", "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"},
+    ]
+
+    return {
         "Cluster": "${ecs_cluster_arn}",
         "TaskDefinition": "${ecs_task_definition_arn}",
         "LaunchType": "${launch_type}",
@@ -105,11 +135,7 @@ def _make_task_state(
             "ContainerOverrides": [
                 {
                     "Name": "${container_name}",
-                    "Environment": [
-                        {"Name": "KAPTEN_PIPELINE", "Value": pipeline_name},
-                        {"Name": "KAPTEN_TASK", "Value": task_name},
-                        {"Name": "DYNAMODB_TABLE_NAME", "Value": "${dynamodb_table_name}"},
-                    ],
+                    "Environment": environment,
                 }
             ]
         },
@@ -120,108 +146,258 @@ def _make_task_state(
         ],
     }
 
-    state: dict[str, Any] = {
+
+def _build_batch_parameters(pipeline_name: str, task_name: str) -> dict[str, Any]:
+    """Construct AWS Batch task parameters for mapped tasks."""
+    environment = [
+        {"Name": "KAPTEN_PIPELINE", "Value": pipeline_name},
+        {"Name": "KAPTEN_TASK", "Value": task_name},
+        {"Name": "DYNAMODB_TABLE_NAME", "Value": "${dynamodb_table_name}"},
+        {"Name": "ARRAY_SIZE", "Value.$": "States.Format('{}', $.last_decision.Payload.array_size)"},
+        {"Name": "KAPTEN_DECISION_REASON", "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"},
+    ]
+
+    return {
+        "JobName.$": f"States.Format('{pipeline_name}-{task_name}-{{}}', $$.Execution.Name)",
+        "JobQueue": "${batch_job_queue_arn}",
+        "JobDefinition": "${batch_job_definition_arn}",
+        "ArrayProperties": {
+            "Size.$": "$.last_decision.Payload.array_size",
+        },
+        "ContainerOverrides": {
+            "Environment": environment,
+        },
+        "Tags": {
+            "KaptenPipeline": pipeline_name,
+            "KaptenTask": task_name,
+        },
+    }
+
+
+def _build_task_state_chain(
+    pipeline_name: str,
+    task_name: str,
+    task_config: Mapping[str, Any],
+    resource_arn: str,
+    next_state: str | None,
+    *,
+    end: bool,
+    decider_lambda_arn: str,
+    tasks_config_path: str,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Build the collection of states needed to evaluate and execute a pipeline task.
+
+    Returns a tuple of (start_state_name, states_dict).
+    """
+    execution_mode_default = _task_execution_mode(task_config)
+    supports_batch = execution_mode_default == "batch_array"
+
+    decide_state_name = _state_name(task_name, "Decide")
+    choice_state_name = _state_name(task_name, "Choice")
+    skip_state_name = _state_name(task_name, "Skip")
+    ecs_state_name = _state_name(task_name, "RunEcs")
+    batch_state_name = _state_name(task_name, "RunBatch")
+
+    states: dict[str, Any] = {}
+
+    states[decide_state_name] = {
         "Type": "Task",
-        "Resource": resource_arn,
-        "Parameters": parameters,
-        "ResultPath": None,
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "Parameters": {
+            "FunctionName": decider_lambda_arn,
+            "Payload": {
+                "state.$": "$",
+                "task_name": task_name,
+                "execution_mode": execution_mode_default,
+                "TASKS_CONFIG_PATH": tasks_config_path,
+                "PIPELINE_NAME": pipeline_name,
+            },
+        },
+        "ResultSelector": {
+            "Payload.$": "$.Payload",
+        },
+        "ResultPath": "$.last_decision",
+        "OutputPath": "$",
+        "Next": choice_state_name,
+    }
+
+    choice_state: dict[str, Any] = {
+        "Type": "Choice",
+        "Default": skip_state_name,
+        "Choices": [],
+    }
+
+    if supports_batch:
+        choice_state["Choices"].append(
+            {
+                "And": [
+                    {"Variable": "$.last_decision.Payload.should_run", "BooleanEquals": True},
+                    {"Variable": "$.last_decision.Payload.execution_mode", "StringEquals": "batch_array"},
+                    {"Variable": "$.last_decision.Payload.array_size", "NumericGreaterThan": 0},
+                ],
+                "Next": batch_state_name,
+            }
+        )
+
+    if not supports_batch:
+        ecs_condition: dict[str, Any] = {
+            "And": [
+                {"Variable": "$.last_decision.Payload.should_run", "BooleanEquals": True},
+                {
+                    "Or": [
+                        {"Variable": "$.last_decision.Payload.execution_mode", "StringEquals": "ecs"},
+                        {"Not": {"Variable": "$.last_decision.Payload.execution_mode", "IsPresent": True}},
+                    ]
+                },
+            ],
+            "Next": ecs_state_name,
+        }
+        choice_state["Choices"].append(ecs_condition)
+    states[choice_state_name] = choice_state
+
+    skip_state: dict[str, Any] = {
+        "Type": "Pass",
     }
     if next_state:
-        state["Next"] = next_state
+        skip_state["Next"] = next_state
     elif end:
-        state["End"] = True
+        skip_state["End"] = True
     else:
-        state["End"] = True
-    return state
+        skip_state["End"] = True
+    states[skip_state_name] = skip_state
+
+    if supports_batch:
+        batch_state: dict[str, Any] = {
+            "Type": "Task",
+            "Resource": DEFAULT_BATCH_RESOURCE_ARN,
+            "Parameters": _build_batch_parameters(pipeline_name, task_name),
+            "ResultPath": None,
+        }
+        if next_state:
+            batch_state["Next"] = next_state
+        elif end:
+            batch_state["End"] = True
+        else:
+            batch_state["End"] = True
+        states[batch_state_name] = batch_state
+    else:
+        ecs_state: dict[str, Any] = {
+            "Type": "Task",
+            "Resource": resource_arn,
+            "Parameters": _build_ecs_parameters(pipeline_name, task_name),
+            "ResultPath": None,
+        }
+        if next_state:
+            ecs_state["Next"] = next_state
+        elif end:
+            ecs_state["End"] = True
+        else:
+            ecs_state["End"] = True
+        states[ecs_state_name] = ecs_state
+
+    return decide_state_name, states
 
 
 def build_state_machine_definition(
     pipeline_name: str,
     deps_lookup: Mapping[str, Any],
     *,
+    tasks: Mapping[str, Any],
     task_order: Iterable[str],
     resource_arn: str | None = None,
+    decider_lambda_arn: str | None = None,
+    tasks_config_path: str = "kapten.yaml",
 ) -> dict[str, Any]:
     """Produce a Step Functions state machine definition for the pipeline graph."""
     ordered_tasks = topological_sort(task_order, deps_lookup)
-    branches, assigned = _build_branch_sequences(ordered_tasks, deps_lookup)
-    unassigned = [task for task in ordered_tasks if task not in assigned]
-    active_branches = [branch for branch in branches if branch]
-    has_parallel = len(active_branches) > 1
-
     effective_resource = resource_arn or DEFAULT_STEP_FUNCTION_RESOURCE_ARN
+    decider_resource = decider_lambda_arn or "${decider_lambda_arn}"
+    start_name_lookup = {task: _state_name(task, "Decide") for task in ordered_tasks}
+    lanes = _construct_execution_lanes(ordered_tasks, deps_lookup)
+
+    if not lanes:
+        raise ValueError("Cannot build state machine definition for empty task list")
+
+    stage_metadata: list[dict[str, Any]] = []
+    for lane_index, lane_tasks in enumerate(lanes):
+        if not lane_tasks:
+            continue
+        if len(lane_tasks) == 1:
+            stage_metadata.append(
+                {
+                    "type": "serial",
+                    "tasks": lane_tasks,
+                    "start_state": start_name_lookup[lane_tasks[0]],
+                }
+            )
+            continue
+
+        stage_metadata.append(
+            {
+                "type": "parallel",
+                "tasks": lane_tasks,
+                "state_name": f"Lane{lane_index}Parallel",
+                "start_state": f"Lane{lane_index}Parallel",
+            }
+        )
 
     states: dict[str, Any] = {}
 
-    if has_parallel:
-        parallel_branches = []
-        for branch in active_branches:
-            branch_states: dict[str, Any] = {}
-            for index, task in enumerate(branch):
-                next_state = branch[index + 1] if index + 1 < len(branch) else None
-                branch_states[task] = _make_task_state(
+    for index, stage in enumerate(stage_metadata):
+        if index + 1 < len(stage_metadata):
+            next_stage_start = stage_metadata[index + 1]["start_state"]
+        else:
+            next_stage_start = None
+
+        if stage["type"] == "parallel":
+            parallel_branches = []
+            for task in stage["tasks"]:
+                branch_start, branch_states = _build_task_state_chain(
                     pipeline_name,
                     task,
+                    tasks.get(task, {}),
                     effective_resource,
-                    next_state,
-                    end=next_state is None,
+                    None,
+                    end=True,
+                    decider_lambda_arn=decider_resource,
+                    tasks_config_path=tasks_config_path,
                 )
-            parallel_branches.append(
-                {
-                    "StartAt": branch[0],
-                    "States": branch_states,
-                }
-            )
+                parallel_branches.append(
+                    {
+                        "StartAt": branch_start,
+                        "States": branch_states,
+                    }
+                )
 
-        states["ParallelRoot"] = {
-            "Type": "Parallel",
-            "Branches": parallel_branches,
-        }
-        if unassigned:
-            states["ParallelRoot"]["Next"] = unassigned[0]
-        else:
-            states["ParallelRoot"]["End"] = True
-    elif active_branches:
-        branch = active_branches[0]
-        for index, task in enumerate(branch):
-            if index + 1 < len(branch):
-                next_state = branch[index + 1]
-            elif unassigned:
-                next_state = unassigned[0]
+            parallel_state: dict[str, Any] = {
+                "Type": "Parallel",
+                "Branches": parallel_branches,
+            }
+            if next_stage_start:
+                parallel_state["Next"] = next_stage_start
             else:
-                next_state = None
-            states[task] = _make_task_state(
-                pipeline_name,
-                task,
-                effective_resource,
-                next_state,
-                end=next_state is None,
-            )
+                parallel_state["End"] = True
 
-    for index, task in enumerate(unassigned):
-        next_state = unassigned[index + 1] if index + 1 < len(unassigned) else None
-        states[task] = _make_task_state(
+            states[stage["state_name"]] = parallel_state
+            continue
+
+        task = stage["tasks"][0]
+        start_name, task_states = _build_task_state_chain(
             pipeline_name,
             task,
+            tasks.get(task, {}),
             effective_resource,
-            next_state,
-            end=next_state is None,
+            next_stage_start,
+            end=next_stage_start is None,
+            decider_lambda_arn=decider_resource,
+            tasks_config_path=tasks_config_path,
         )
-
-    if has_parallel:
-        start_state = "ParallelRoot"
-    elif active_branches:
-        start_state = active_branches[0][0]
-    elif unassigned:
-        start_state = unassigned[0]
-    elif ordered_tasks:
-        start_state = ordered_tasks[0]
-    else:
-        raise ValueError("Cannot build state machine definition for empty task list")
+        states.update(task_states)
 
     state_machine = {
         "Comment": f"Kapten generated state machine for {pipeline_name}",
-        "StartAt": start_state,
+        "StartAt": stage_metadata[0]["start_state"],
         "States": states,
     }
     return state_machine
@@ -232,15 +408,22 @@ def build_stepfunctions_flow_context(
     pipeline_name: str,
     task_names: list[str],
     deps_lookup: Mapping[str, Any],
+    tasks_dict: Mapping[str, Any],
     kap_conf: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Assemble template context overrides for Step Functions flows."""
     resource_arn = kap_conf.get("stepfunctions-resource-arn")
+    decider_lambda_arn = kap_conf.get("decider-lambda-arn", "${decider_lambda_arn}")
+    tasks_config_path = "kapten.yaml"
+
     state_machine = build_state_machine_definition(
         pipeline_name,
         deps_lookup,
+        tasks=tasks_dict,
         task_order=task_names,
         resource_arn=resource_arn,
+        decider_lambda_arn=decider_lambda_arn,
+        tasks_config_path=tasks_config_path,
     )
     json_definition = json.dumps(state_machine, indent=2)
     json_definition = json_definition.replace('"${subnet_ids}"', '${subnet_ids}')
@@ -249,4 +432,5 @@ def build_stepfunctions_flow_context(
         "state_machine": state_machine,
         "step_function_resource_arn": resource_arn or DEFAULT_STEP_FUNCTION_RESOURCE_ARN,
         "state_machine_json": json_definition,
+        "lambda_tasks_config_path": tasks_config_path,
     }

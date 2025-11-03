@@ -5,6 +5,7 @@ from typing import Any, Optional
 import json
 import yaml
 from kapten.caching.TaskStateDbClient import TaskStateDbClient
+from kapten.cli.decider_bundle import BundleDeciderError, bundle_decider_lambda
 from kapten.cli.infra_commands import register_infra_commands
 from kapten.cli.config_validation import (
     SchemaValidationError,
@@ -74,20 +75,32 @@ def _choose_pipeline(kap_conf: dict[str, Any], requested: Optional[str]) -> str:
 
 @app.command()
 def codegen(
-    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-p", help="Project directory containing kapten configuration")
+    project_dir: Optional[Path] = typer.Option(
+        None, "--project-dir", "-p", help="Project directory containing kapten configuration"
+    ),
+    graph: Optional[str] = typer.Option(
+        None, "--graph", "-g", help="Graph name to generate flows for"
+    ),
 ):
     """
     Generate Prefect flows (Python files) from the kapten.yaml file
     """
+    def _generate() -> None:
+        try:
+            generate_files(graph=graph)
+        except ValueError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1) from exc
+
     if project_dir:
         original_dir = os.getcwd()
         os.chdir(project_dir)
         try:
-            generate_files()
+            _generate()
         finally:
             os.chdir(original_dir)
     else:
-        generate_files()
+        _generate()
 
 @app.command()
 def serve_docker(
@@ -235,6 +248,102 @@ def validate(
         raise typer.Exit(1)
 
     typer.echo("kapten.yaml conforms to kapten-schema.json.")
+
+
+@app.command(name="bundle-decider")
+def bundle_decider(
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project-dir",
+        "-p",
+        help="Project directory containing kapten configuration",
+    ),
+    output_dir: Path = typer.Option(
+        Path("infra/lambda_decider"),
+        "--output-dir",
+        "-o",
+        help="Directory where the decider bundle will be written",
+    ),
+    pipeline: Optional[str] = typer.Option(
+        None,
+        "--pipeline",
+        "-n",
+        help="Target pipeline (graph) name. Required when multiple graphs exist.",
+    ),
+    kapten_source: Optional[Path] = typer.Option(
+        None,
+        "--kapten-source",
+        help="Path to Kapten source to include in the bundle (defaults to PyPI release).",
+    ),
+    project_source: Optional[Path] = typer.Option(
+        None,
+        "--project-source",
+        help="Path to install the project package from (defaults to the project directory).",
+    ),
+    python_version: str = typer.Option(
+        "3.11",
+        "--python-version",
+        help="Python version used when installing dependencies with uv.",
+    ),
+    python_platform: str = typer.Option(
+        "x86_64-manylinux2014",
+        "--python-platform",
+        help="Platform tag used when installing dependencies with uv.",
+    ),
+    install_project: bool = typer.Option(
+        False,
+        "--install-project/--no-install-project",
+        help="Also install the project package into the bundle (defaults to copying sources only).",
+    ),
+    prefer_local_kapten: bool = typer.Option(
+        True,
+        "--prefer-local-kapten/--no-prefer-local-kapten",
+        help="Install the locally checked-out Kapten source when available (default: enabled).",
+    ),
+):
+    """Build the Kapten decider Lambda bundle for the current project."""
+
+    base_dir = Path(project_dir).resolve() if project_dir else Path.cwd()
+    if project_dir and not base_dir.exists():
+        typer.secho(f"Provided project directory does not exist: {base_dir}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    bundle_output_dir = output_dir
+    if not bundle_output_dir.is_absolute():
+        bundle_output_dir = (base_dir / bundle_output_dir).resolve()
+    else:
+        bundle_output_dir = bundle_output_dir.resolve()
+
+    kapten_src = kapten_source.resolve() if kapten_source else None
+    if kapten_src and not kapten_src.exists():
+        typer.secho(f"Kapten source path does not exist: {kapten_src}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    project_src = project_source.resolve() if project_source else None
+    if project_src and not project_src.exists():
+        typer.secho(f"Project source path does not exist: {project_src}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    try:
+        result = bundle_decider_lambda(
+            project_root=base_dir,
+            output_dir=bundle_output_dir,
+            pipeline=pipeline,
+            kapten_source=str(kapten_src) if kapten_src else None,
+            project_source=str(project_src) if project_src else None,
+            python_version=python_version,
+            python_platform=python_platform,
+            install_project=install_project,
+            prefer_local_kapten=prefer_local_kapten,
+        )
+    except BundleDeciderError as exc:
+        typer.secho(f"Failed to build decider bundle: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    suffix = f" (pipeline {result.pipeline_name})" if result.pipeline_name else ""
+    typer.echo(
+        f"Decider bundle written to {result.bundle_dir}{suffix}"
+    )
 
 
 @app.command()

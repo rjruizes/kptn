@@ -109,9 +109,7 @@ resource "aws_iam_role_policy" "step_function" {
           "ecs:DescribeTasks",
           "ecs:StopTask"
         ]
-        Resource = [
-          local.ecs_task_definition_arn_effective
-        ]
+        Resource = ["*"]
       },
       {
         Effect = "Allow"
@@ -159,7 +157,9 @@ resource "aws_iam_role_policy" "step_function" {
           "events:PutRule",
           "events:DescribeRule"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctions*"
+        Resource = [
+          "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule"
+        ]
       },
       {
         Effect = "Allow"

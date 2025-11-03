@@ -104,6 +104,7 @@ def scaffold_stepfunctions_infra(
         "networking.tf": _load_template("networking.tf"),
         "ecs.tf": _load_template("ecs.tf"),
         "task_definition.tf": _load_template("task_definition.tf"),
+        "lambda.tf": _load_template("lambda.tf"),
         "ecr.tf": _load_template("ecr.tf"),
         "task_execution_role.tf": _load_template("task_execution_role.tf"),
         "task_role.tf": _load_template("task_role.tf"),
@@ -127,6 +128,7 @@ def scaffold_stepfunctions_infra(
         if destination.exists() and not force:
             skipped.append(destination)
             continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(
             _ensure_trailing_newline(template.strip()),
             encoding="utf-8",

@@ -52,11 +52,6 @@ resource "aws_batch_compute_environment" "kapten" {
       condition     = length(local.batch_security_group_ids_effective) > 0
       error_message = "At least one security group must be provided via batch_security_group_ids or security_group_ids when provisioning AWS Batch."
     }
-
-    precondition {
-      condition     = local.batch_service_role_arn_effective != null && local.batch_service_role_arn_effective != ""
-      error_message = "Provide batch_service_role_arn when create_batch_service_role is false."
-    }
   }
 }
 

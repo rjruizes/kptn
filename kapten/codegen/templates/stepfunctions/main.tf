@@ -59,6 +59,7 @@ locals {
         dynamodb_table_name         = aws_dynamodb_table.kapten.name
         batch_job_queue_arn         = coalesce(local.batch_job_queue_arn_effective, "")
         batch_job_definition_arn    = coalesce(local.batch_job_definition_arn_effective, "")
+        decider_lambda_arn          = coalesce(local.decider_lambda_arn_effective, "")
       }
     )
   }
@@ -109,9 +110,7 @@ resource "aws_iam_role_policy" "step_function" {
           "ecs:DescribeTasks",
           "ecs:StopTask"
         ]
-        Resource = [
-          local.ecs_task_definition_arn_effective
-        ]
+        Resource = ["*"]
       },
       {
         Effect = "Allow"
@@ -159,7 +158,16 @@ resource "aws_iam_role_policy" "step_function" {
           "events:PutRule",
           "events:DescribeRule"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctions*"
+        Resource = [
+          "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = var.create_decider_lambda ? aws_lambda_function.decider[0].arn : coalesce(var.decider_lambda_arn, "*")
       },
       {
         Effect = "Allow"

@@ -1,5 +1,6 @@
 from kapten.caching.models import Subtask
-from kapten.caching.TaskStateCache import TaskStateCache, fetch_cached_dep_data, get_task_partial, run_single_task
+from kapten.caching.TaskStateCache import TaskStateCache
+from kapten.caching.TSCacheUtils import fetch_cached_dep_data, get_task_partial, run_single_task
 from kapten.util.logger import get_logger
 from kapten.util.pipeline_config import PipelineConfig
 from kapten.util.hash import hash_obj
@@ -48,7 +49,7 @@ def map_flow(
     """Maps an R script over its data_args (dependency data)"""
     tscache = TaskStateCache(pipeline_config)
     task_obj = tscache.get_task(task_name)
-    data_args, value_list = fetch_cached_dep_data(tscache, task_name)
+    data_args, value_list, _ = fetch_cached_dep_data(tscache, task_name)
     tscache.set_initial_state(task_name)
     index = list(range(len(value_list)))
     data_args["idx"] = index
