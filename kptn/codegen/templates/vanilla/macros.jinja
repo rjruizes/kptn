@@ -4,15 +4,16 @@
 {%- set _dep = "_" + dep %}
             {{ _dep }}{% if not loop.last %},{% endif %}
 {%- endfor %}
-{%- endmacro %}
+{% endmacro %}
 
 {% macro submit(name, deps, python_task_names, tasks_dict) -%}
 {%- set task_config = tasks_dict.get(name, {}) -%}
 {%- set file_value = task_config.get('file', '') -%}
+{# Emit raw submit lines without leading indentation so callers control spacing #}
 {%- if file_value -%}
-{%- set file_path = file_value.split(':')[0] %}
-    submit("{{name}}", opts)  # file://./{{ file_path }}
+{%- set file_path = file_value.split(':')[0] -%}
+submit("{{name}}", opts)  # file://./{{ file_path }}
 {%- else -%}
-    submit("{{name}}", opts)
-{%- endif %}
-{%- endmacro %}
+submit("{{name}}", opts)
+{%- endif -%}
+{% endmacro %}

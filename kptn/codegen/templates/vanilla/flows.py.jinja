@@ -23,9 +23,13 @@ def {{pipeline_name}}(task_list: list[str] = [], ignore_cache: bool = False):
         set(task_list),
         ignore_cache,
     )
-    {% for name in task_names -%}
-    {{ macros.submit(name, deps_lookup[name], python_task_names, tasks_dict) }}
-    {%- endfor %}
+    {#- Gather rendered submit blocks so we can join them with a fixed separator -#}
+    {%- set ns = namespace(submits=[]) -%}
+    {%- for name in task_names -%}
+        {%- set ns.submits = ns.submits + [macros.submit(name, deps_lookup[name], python_task_names, tasks_dict)] -%}
+    {%- endfor -%}
+{# Prefix and join submit calls with single newlines to avoid blank gaps #}
+{{ '\n    ' ~ (ns.submits | join('\n    ')) }}
 
 
 if __name__ == "__main__":

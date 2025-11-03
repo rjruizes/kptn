@@ -20,7 +20,7 @@ def basic(task_list: list[str] = [], ignore_cache: bool = False):
         set(task_list),
         ignore_cache,
     )
-    
+
     submit("a", opts)  # file://./src/a.py
     submit("b", opts)  # file://./src/b.py
     submit("c", opts)  # file://./src/c.py
