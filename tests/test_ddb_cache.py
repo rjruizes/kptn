@@ -2,7 +2,7 @@ import pytest
 import os
 import boto3
 import os
-from kapten.caching.client.DbClientDDB import DbClientDDB
+from kptn.caching.client.DbClientDDB import DbClientDDB
 from tests.base_db_client_test import BaseDbClientTest
 
 TABLE = "tasks"

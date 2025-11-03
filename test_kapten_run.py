@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Test script for kapten.run() API"""
+"""Test script for kptn.run() API"""
 
-import kapten
+import kptn
 
 # Test 1: Run a single task
 print("Test 1: Running single task 'fruit_summary'")
-kapten.run("fruit_summary", project_dir="example/duckdb_example")
+kptn.run("fruit_summary", project_dir="example/duckdb_example")
 
 print("\n" + "="*60 + "\n")
 
 # Test 2: Run multiple tasks as list
 print("Test 2: Running multiple tasks as list")
-kapten.run(["fruit_metrics", "fruit_summary"], project_dir="example/duckdb_example", force=True)
+kptn.run(["fruit_metrics", "fruit_summary"], project_dir="example/duckdb_example", force=True)
 
 print("\n" + "="*60 + "\n")
 
 # Test 3: Run all tasks
 print("Test 3: Running all tasks")
-kapten.run(project_dir="example/duckdb_example")
+kptn.run(project_dir="example/duckdb_example")
 
 print("\nAll tests completed!")

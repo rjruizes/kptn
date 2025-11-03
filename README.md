@@ -1,8 +1,8 @@
-# Kapten
+# kptn
 
-Kapten is a meta orchestration framework for building R and Python data pipelines with Prefect. It was built after experience with Prefect, tuning it from a general-purpose workflow tool to a data pipeline solution. It right-sizes tasks, tests changes, and streamlines development and operation.
+kptn is a meta orchestration framework for building R and Python data pipelines with Prefect. It was built after experience with Prefect, tuning it from a general-purpose workflow tool to a data pipeline solution. It right-sizes tasks, tests changes, and streamlines development and operation.
 
-Define your tasks and their dependencies in YAML and Kapten will render a pipeline runnable locally or on AWS with one click.
+Define your tasks and their dependencies in YAML and kptn will render a pipeline runnable locally or on AWS with one click.
 
 ## Features
 
@@ -14,7 +14,7 @@ Define your tasks and their dependencies in YAML and Kapten will render a pipeli
   - **Less vendor lock-in**: Any orchestration framework could be rendered, not just Prefect
 
 <p style="text-align: center">
-  <img alt="Kapten UI" src="https://github.com/rti-international/kapten/blob/main/ui/ui-nov24.png?raw=true">
+  <img alt="kptn UI" src="https://github.com/rti-international/kptn/blob/main/ui/ui-nov24.png?raw=true">
 </p>
 
 ## Basic Example
@@ -49,20 +49,20 @@ The `r_script` and `py_script` fields define the location of the script to run. 
 
 ## Configuration
 
-There are two main configuration files: pyproject.toml and kapten.yaml
+There are two main configuration files: pyproject.toml and kptn.yaml
 
 ### pyproject.toml
 
-Your project is expected to use a pyproject.toml and contain a `tool.kapten` section.
+Your project is expected to use a pyproject.toml and contain a `tool.kptn` section.
 
 <table>
   <thead>
   <tr><td>Field</td><td>Description</td><td>Required</td></tr>
   </thead>
   <tbody>
-  <tr><td>flows-dir</td><td>The output directory where kapten will render your flow files to</td><td>Yes</td></tr>
+  <tr><td>flows-dir</td><td>The output directory where kptn will render your flow files to</td><td>Yes</td></tr>
   <tr><td>py-tasks-dir</td><td>The directory (or list of directories) where Python task code exists</td><td>Yes</td></tr>
-  <tr><td>tasks-conf-path</td><td>The filepath to the kapten.yaml file defining your pipeline</td><td>Yes</td></tr>
+  <tr><td>tasks-conf-path</td><td>The filepath to the kptn.yaml file defining your pipeline</td><td>Yes</td></tr>
   <tr><td>docker-image</td><td>The name of the Docker image to build and push to Prefect</td><td>Yes</td></tr>
   </tbody>
 </table>
@@ -70,16 +70,16 @@ Your project is expected to use a pyproject.toml and contain a `tool.kapten` sec
 Example:
 
 ```toml
-[tool.kapten]
+[tool.kptn]
 flows-dir = "py_src/flows"
 py-tasks-dir = "py_src/tasks"
-tasks-conf-path = "py_src/kapten.yaml"
+tasks-conf-path = "py_src/kptn.yaml"
 docker-image = "nibrs-estimation-pipeline:latest"
 ```
 
-### kapten.yaml
+### kptn.yaml
 
-Create a file, `kapten.yaml` that contains definitions of the graphs of tasks and the tasks themselves.
+Create a file, `kptn.yaml` that contains definitions of the graphs of tasks and the tasks themselves.
 
 <table>
   <thead>
@@ -92,7 +92,7 @@ Create a file, `kapten.yaml` that contains definitions of the graphs of tasks an
   <tr><td>graphs.[id].tasks.[task_id]</td><td>A list of dependency task IDs. If no dependencies, leave blank or use an empty list `[]`.</td><td>Yes</td></tr>
   <tr><td>tasks</td><td>A dictionary of task names and task objects</td><td>Yes</td></tr>
   <tr><td>tasks.[task_id]</td><td>A dictionary representing a task</td><td>Yes</td></tr>
-  <tr><td>tasks.[task_id].r_script</td><td>A string with the filepath to the R script; Kapten searches each directory listed in `r-tasks-dir`</td><td>No</td></tr>
+  <tr><td>tasks.[task_id].r_script</td><td>A string with the filepath to the R script; kptn searches each directory listed in `r-tasks-dir`</td><td>No</td></tr>
   <tr><td>tasks.[task_id].prefix_args</td><td>A string that will be inserted before the `Rscript` command-line call</td><td>No</td></tr>
   <tr><td>tasks.[task_id].cli_args</td><td>A string that will be inserted at the end of the `Rscript` command-line call</td><td>No</td></tr>
   <tr><td>tasks.[task_id].py_script</td><td>If a string, the filepath to the Python script relative to any entry in `py-tasks-dir`; if simply `true`, the filename is assumed to be the task_id.</td><td>No</td></tr>
@@ -144,12 +144,12 @@ For example, if `A` returned the list `['NC', 'SC']`, `B/run.R` would be called 
 
 > Why not just use Prefect?
 
-tldr: Kapten simplifies pipeline configuration and improves base implementation
+tldr: kptn simplifies pipeline configuration and improves base implementation
 
 As we tried to scale with Prefect and ran into bugs and wondered if Airflow or Dagster might work better, but we'd already written our pipeline in formulaic Prefect code of "call task A, call task B". It was simple to pull out the logic into a YAML representation of a graph. This is a portable definition, allowing us to render to any orchestrator's code.
 
 A major goal was to test our pipeline. If we change the code for task `A`, we need to be able to run task `A` by itself and check if its outputs changed compared to its previous outputs. Prefect 2 didn't support running tasks by themselves, and its caching wasn't designed for this use case. Rendering Prefect code allows us to render runnable pieces of the pipeline and use a cache accessible for snapshot testing.
 
-Another major goal is scaling to handle a large number of mapped tasks. Mapped tasks create a single subtask for each input. Prefect has two task runners that allow running subtasks in parallel: Dask and Ray. In our testing with Dask, we've found that we can speedup runtime by batching subtasks into bundles for Dask workers, and prevent the scheduler from crashing by batching subtasks into groups that are run sequentially. Kapten offers both of these features via its API. Caching is particularly important for mapped tasks, because mapped tasks can be very expensive to run and more prone to crash. In the event some subtasks fail, re-running will only re-run failed tasks.
+Another major goal is scaling to handle a large number of mapped tasks. Mapped tasks create a single subtask for each input. Prefect has two task runners that allow running subtasks in parallel: Dask and Ray. In our testing with Dask, we've found that we can speedup runtime by batching subtasks into bundles for Dask workers, and prevent the scheduler from crashing by batching subtasks into groups that are run sequentially. kptn offers both of these features via its API. Caching is particularly important for mapped tasks, because mapped tasks can be very expensive to run and more prone to crash. In the event some subtasks fail, re-running will only re-run failed tasks.
 
-Overall, Kapten makes maintenance easier. Developing and testing new features, copying production state to a local environment for debugging, and running subsets of subtasks are use cases its designed for.
+Overall, kptn makes maintenance easier. Developing and testing new features, copying production state to a local environment for debugging, and running subsets of subtasks are use cases its designed for.

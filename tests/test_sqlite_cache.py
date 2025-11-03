@@ -2,7 +2,7 @@ import pytest
 import os
 import tempfile
 from pathlib import Path
-from kapten.caching.client.DbClientSQLite import DbClientSQLite
+from kptn.caching.client.DbClientSQLite import DbClientSQLite
 from tests.base_db_client_test import BaseDbClientTest
 
 
@@ -32,11 +32,11 @@ class TestSQLiteClient(BaseDbClientTest):
             if os.path.exists(db_path):
                 os.unlink(db_path)
 
-    def test_default_db_path_uses_kapten_directory(self, tmp_path):
-        """Ensure the sqlite file defaults to the kapten.yaml directory."""
+    def test_default_db_path_uses_kptn_directory(self, tmp_path):
+        """Ensure the sqlite file defaults to the kptn.yaml directory."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
-        config_path = project_dir / "kapten.yaml"
+        config_path = project_dir / "kptn.yaml"
         config_path.write_text("settings: {}")
 
         db = DbClientSQLite(

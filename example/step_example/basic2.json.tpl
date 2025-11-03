@@ -1,5 +1,5 @@
 {
-  "Comment": "Kapten generated state machine for basic2",
+  "Comment": "kptn generated state machine for basic2",
   "StartAt": "a_Decide",
   "States": {
     "a_Decide": {

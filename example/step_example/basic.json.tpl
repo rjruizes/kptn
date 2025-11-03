@@ -1,5 +1,5 @@
 {
-  "Comment": "Kapten generated state machine for basic",
+  "Comment": "kptn generated state machine for basic",
   "StartAt": "ParallelRoot",
   "States": {
     "ParallelRoot": {

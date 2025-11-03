@@ -1,15 +1,15 @@
 
 from pathlib import Path
-from kapten.caching.submit import submit
-from kapten.runner import cli_parser, parse_and_validate_tasks
-from kapten.util.pipeline_config import PipelineConfig
+from kptn.caching.submit import submit
+from kptn.runner import cli_parser, parse_and_validate_tasks
+from kptn.util.pipeline_config import PipelineConfig
 
 
 VALID_TASKS: set[str] = { "a", "b", "c" }
 
 def basic(task_list: list[str] = [], ignore_cache: bool = False):
     pipeline_config = PipelineConfig(
-        TASKS_CONFIG_PATH=str(Path(__file__).parent / "kapten.yaml"),
+        TASKS_CONFIG_PATH=str(Path(__file__).parent / "kptn.yaml"),
         PIPELINE_NAME="basic",
     )
 

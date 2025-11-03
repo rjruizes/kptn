@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Kapten Configuration",
-  "description": "Schema for kapten.yaml configuration file",
+  "title": "kptn Configuration",
+  "description": "Schema for kptn.yaml configuration file",
   "type": "object",
   "required": ["settings", "graphs", "tasks"],
   "properties": {

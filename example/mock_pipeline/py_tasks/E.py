@@ -1,5 +1,5 @@
 from pathlib import Path
-from kapten.util.pipeline_config import PipelineConfig
+from kptn.util.pipeline_config import PipelineConfig
 
 
 def E(pipeline_config: PipelineConfig):

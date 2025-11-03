@@ -1,0 +1,77 @@
+{% import "macros.jinja" as macros %}
+import sys
+from typing import Literal, Never
+from prefect import flow
+from prefect.task_runners import ConcurrentTaskRunner
+from kptn.caching.submit import submit
+from kptn.deploy.prefect_deploy import prefect_deploy
+from kptn.deploy.storage_key import read_branch_storage_key
+from kptn.util.pipeline_config import PipelineConfig, get_storage_key
+import {{ py_tasks_dir }} as tasks
+
+from prefect.settings import temporary_settings, PREFECT_API_URL
+from kptn.caching.TaskStateCache import run_task
+from kptn.deploy.push import docker_push
+from kptn.watcher.stacks import get_stack_endpoints
+
+TaskListChoices = list[Literal[{% for name in task_names -%}"{{name}}",{% endfor %}]]|list[Never]
+
+@flow(task_runner=ConcurrentTaskRunner, log_prints=True)
+def {{pipeline_name}}(pipeline_config: PipelineConfig, task_list: TaskListChoices = [], ignore_cache: bool = False):
+    {% for name in task_names -%}
+    {# If last one, .wait() #}
+    {% if loop.last -%}
+    {{ macros.submit(name, deps_lookup[name], python_task_names) }}.wait()
+    {%- else -%}
+    {{ macros.submit(name, deps_lookup[name], python_task_names) }}
+    {%- endif -%}
+    {% endfor %}
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: uv run py_src/{{pipeline_name}}.py <stack_name>")
+        sys.exit(1)
+    stack_name = sys.argv[1]
+    prefect_api_url, authproxy_endpoint = get_stack_endpoints(stack_name)
+    image, branch, _ = docker_push(authproxy_endpoint)
+    possible_storage_key = read_branch_storage_key(branch)
+    pipeline_config = PipelineConfig(
+        IMAGE=image,
+        BRANCH=branch,
+        STORAGE_KEY=possible_storage_key,
+        PIPELINE_NAME="{{pipeline_name}}",
+        TASKS_CONFIG_PATH="/code/py_src/kptn.yaml",
+        R_TASKS_DIRS=("/code",),
+    )
+    pipeline_config_dict = pipeline_config.model_dump()
+
+    storage_key = get_storage_key(pipeline_config)
+    prefect_deploy(
+        run_task,
+        f"{pipeline_config.PIPELINE_NAME}-RunTask-{storage_key}",
+        prefect_api_url,
+        job_variables={
+            "launch_type": "FARGATE_SPOT",
+        },
+        parameters={
+            "pipeline_config": pipeline_config_dict,
+        },
+        work_pool_name="ecs-pool",
+        image=image
+    )
+    prefect_deploy(
+        {{pipeline_name}},
+        f"{pipeline_config.PIPELINE_NAME}-{storage_key}",
+        prefect_api_url,
+        job_variables={
+            "launch_type": "EC2",
+        },
+        parameters={
+            "pipeline_config": pipeline_config_dict,
+            "task_list": [],
+            "ignore_cache": False,
+        },
+        work_pool_name="ecs-pool",
+        image=image
+    )

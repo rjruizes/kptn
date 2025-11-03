@@ -1,5 +1,5 @@
 [project]
-name = "kapten_step"
+name = "kptn_step"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-kapten = "kapten.cli:app"
+kptn = "kptn.cli:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -19,7 +19,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["kapten"]
+packages = ["kptn"]
 
 [dependency-groups]
 dev = [

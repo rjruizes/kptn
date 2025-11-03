@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from kapten.cli.decider_bundle import BundleDeciderError, bundle_decider_lambda
+from kptn.cli.decider_bundle import BundleDeciderError, bundle_decider_lambda
 
 
 def test_bundle_decider_copies_project_code(tmp_path, monkeypatch):
@@ -17,8 +17,8 @@ def test_bundle_decider_copies_project_code(tmp_path, monkeypatch):
     (r_dir / "example.R").write_text("# R script\n", encoding="utf-8")
     (project_root / "standalone.py").write_text("print('standalone')\n", encoding="utf-8")
 
-    kapten_yaml = project_root / "kapten.yaml"
-    kapten_yaml.write_text(
+    kptn_yaml = project_root / "kptn.yaml"
+    kptn_yaml.write_text(
         "\n".join(
             [
                 "settings:",
@@ -53,7 +53,7 @@ def test_bundle_decider_copies_project_code(tmp_path, monkeypatch):
 
     assert result.bundle_dir == bundle_dir
     assert result.pipeline_name == "main"
-    assert (bundle_dir / "kapten.yaml").is_file()
+    assert (bundle_dir / "kptn.yaml").is_file()
     assert (bundle_dir / "lambda_function.py").is_file()
     assert (bundle_dir / "tasks" / "example.py").read_text(encoding="utf-8") == "print('hello')\n"
     assert (bundle_dir / "r_tasks" / "example.R").is_file()
@@ -61,7 +61,7 @@ def test_bundle_decider_copies_project_code(tmp_path, monkeypatch):
 
     assert installs, "Expected uv installer to be invoked"
     first_target = installs[0][-1]
-    assert first_target.endswith("kapten"), first_target
+    assert first_target.endswith("kptn"), first_target
 
     installs.clear()
     bundle_dir_install = tmp_path / "bundle_with_install"
@@ -71,7 +71,7 @@ def test_bundle_decider_copies_project_code(tmp_path, monkeypatch):
         installer=fake_installer,
         install_project=True,
     )
-    assert installs[0][-1] == "kapten"
+    assert installs[0][-1] == "kptn"
     assert installs[1][-1] == str(project_root)
 
     installs.clear()
@@ -79,15 +79,15 @@ def test_bundle_decider_copies_project_code(tmp_path, monkeypatch):
         project_root=project_root,
         output_dir=tmp_path / "bundle_pypi",
         installer=fake_installer,
-        prefer_local_kapten=False,
+        prefer_local_kptn=False,
     )
-    assert installs[0][-1] == "kapten"
+    assert installs[0][-1] == "kptn"
 
 
 def test_bundle_decider_rejects_external_paths(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
-    (project_root / "kapten.yaml").write_text(
+    (project_root / "kptn.yaml").write_text(
         "\n".join(
             [
                 "settings:",
@@ -117,7 +117,7 @@ def test_bundle_decider_handles_placeholder_paths(tmp_path):
     (base_dir / "actual_table").mkdir(parents=True)
     (base_dir / "actual_table" / "script.R").write_text("# script\n", encoding="utf-8")
 
-    (project_root / "kapten.yaml").write_text(
+    (project_root / "kptn.yaml").write_text(
         "\n".join(
             [
                 "settings:",

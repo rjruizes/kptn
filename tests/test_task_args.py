@@ -1,7 +1,7 @@
 import inspect
 from types import SimpleNamespace
 
-from kapten.util.task_args import plan_python_call
+from kptn.util.task_args import plan_python_call
 
 
 def test_plan_python_call_injects_runtime_config_attribute():

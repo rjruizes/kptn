@@ -56,7 +56,7 @@ locals {
         launch_type                 = var.ecs_launch_type
         container_name              = var.task_definition_container_name
         pipeline_name               = var.pipeline_name
-        dynamodb_table_name         = aws_dynamodb_table.kapten.name
+        dynamodb_table_name         = aws_dynamodb_table.kptn.name
         batch_job_queue_arn         = coalesce(local.batch_job_queue_arn_effective, "")
         batch_job_definition_arn    = coalesce(local.batch_job_definition_arn_effective, "")
       }

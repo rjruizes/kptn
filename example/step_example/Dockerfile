@@ -12,16 +12,16 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies
 RUN touch README.md
 RUN uv sync --frozen --no-dev
-# Copy kapten package from parent directory
-COPY kapten-0.1.0-py3-none-any.whl /app/
+# Copy kptn package from parent directory
+COPY kptn-0.1.0-py3-none-any.whl /app/
 
-# Update pyproject.toml to reference local kapten
-RUN uv add /app/kapten-0.1.0-py3-none-any.whl
+# Update pyproject.toml to reference local kptn
+RUN uv add /app/kptn-0.1.0-py3-none-any.whl
 # Copy source files
 COPY src/ ./src/
 
 # Copy configuration and entry point
-COPY kapten.yaml run.py ./
+COPY kptn.yaml run.py ./
 
 # Set Python path
 ENV PYTHONPATH=/app

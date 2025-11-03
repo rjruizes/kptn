@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from kapten.caching.Hasher import DUCKDB_EMPTY_HASH, Hasher
-from kapten.util.hash import hash_obj
+from kptn.caching.Hasher import DUCKDB_EMPTY_HASH, Hasher
+from kptn.util.hash import hash_obj
 
 
 @pytest.mark.parametrize("rows", [

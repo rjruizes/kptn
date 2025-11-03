@@ -1,6 +1,6 @@
 cd ../..
 uv build --wheel
-cp dist/kapten-*.whl example/step_example/
+cp dist/kptn-*.whl example/step_example/
 cd example/step_example
-docker build -t kaptenstep .
-# rm kapten-*.whl
+docker build -t kptnstep .
+# rm kptn-*.whl

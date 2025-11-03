@@ -1,4 +1,4 @@
-from kapten.util.pipeline_config import PipelineConfig
+from kptn.util.pipeline_config import PipelineConfig
 
 
 def combo50_list(pipeline_config: PipelineConfig) -> list[tuple[str, str]]:

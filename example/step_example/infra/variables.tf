@@ -6,7 +6,7 @@ variable "region" {
 
 variable "pipeline_name" {
   type        = string
-  description = "Kapten pipeline name used as prefix for all resources"
+  description = "kptn pipeline name used as prefix for all resources"
 }
 
 variable "state_machines" {
@@ -97,7 +97,7 @@ variable "new_security_group_egress_cidr_blocks" {
 variable "new_security_group_description" {
   type        = string
   description = "Description applied to the generated security group"
-  default     = "Kapten Step Functions tasks"
+  default     = "kptn Step Functions tasks"
 }
 
 variable "subnet_ids" {
@@ -139,7 +139,7 @@ variable "create_task_definition" {
 variable "task_definition_family" {
   type        = string
   description = "Family name assigned to the generated ECS task definition"
-  default     = "kapten-task"
+  default     = "kptn-task"
 }
 
 variable "task_definition_cpu" {
@@ -175,7 +175,7 @@ variable "create_task_role" {
 variable "task_role_name_prefix" {
   type        = string
   description = "Name prefix applied to a generated IAM task role"
-  default     = "kapten-task-role"
+  default     = "kptn-task-role"
 }
 
 variable "task_role_managed_policies" {
@@ -193,7 +193,7 @@ variable "task_role_arn" {
 variable "task_definition_container_name" {
   type        = string
   description = "Name assigned to the container in the generated task definition"
-  default     = "kapten"
+  default     = "kptn"
 }
 
 variable "task_definition_container_image" {
@@ -253,7 +253,7 @@ variable "create_task_execution_role" {
 variable "task_execution_role_name_prefix" {
   type        = string
   description = "Name prefix applied to a generated ECS task execution role"
-  default     = "kapten-task-execution-role"
+  default     = "kptn-task-execution-role"
 }
 
 variable "task_execution_role_managed_policies" {
@@ -302,7 +302,7 @@ variable "tags" {
 
 variable "dynamodb_table_name" {
   type        = string
-  description = "Name for the DynamoDB table used by Kapten tasks"
+  description = "Name for the DynamoDB table used by kptn tasks"
 }
 
 variable "create_efs" {
@@ -404,7 +404,7 @@ variable "efs_security_group_ids" {
 variable "efs_security_group_description" {
   type        = string
   description = "Description for the generated EFS security group"
-  default     = "Security group for Kapten EFS mount targets"
+  default     = "Security group for kptn EFS mount targets"
 }
 
 variable "build_and_push_image" {
@@ -475,7 +475,7 @@ variable "batch_compute_resources_type" {
 variable "batch_compute_environment_name_prefix" {
   type        = string
   description = "Name prefix applied to the generated AWS Batch compute environment"
-  default     = "kapten-batch-ce"
+  default     = "kptn-batch-ce"
 }
 
 variable "batch_max_vcpus" {

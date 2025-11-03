@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import kapten
+import kptn
 
 
 def _create_basic_project(root: Path, *, include_pipeline_config: bool) -> Path:
-    """Set up a minimal Kapten project for testing kapten.run."""
+    """Set up a minimal kptn project for testing kptn.run."""
     project_dir = root / ("with_config" if include_pipeline_config else "no_config")
     flows_dir = project_dir
     py_tasks_dir = project_dir / "py_tasks"
@@ -15,7 +15,7 @@ def _create_basic_project(root: Path, *, include_pipeline_config: bool) -> Path:
     (py_tasks_dir / "__init__.py").write_text("", encoding="utf-8")
     (py_tasks_dir / "alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
 
-    kapten_yaml = {
+    kptn_yaml = {
         "settings": {
             "flows-dir": ".",
             "py-tasks-dir": "py_tasks",
@@ -29,7 +29,7 @@ def _create_basic_project(root: Path, *, include_pipeline_config: bool) -> Path:
         },
     }
 
-    (project_dir / "kapten.yaml").write_text(json.dumps(kapten_yaml), encoding="utf-8")
+    (project_dir / "kptn.yaml").write_text(json.dumps(kptn_yaml), encoding="utf-8")
 
     call_file = flows_dir / "call.json"
     call_file_literal = json.dumps(str(call_file))
@@ -38,7 +38,7 @@ def _create_basic_project(root: Path, *, include_pipeline_config: bool) -> Path:
         flow_source = f"""
 import json
 from pathlib import Path
-from kapten.util.pipeline_config import PipelineConfig
+from kptn.util.pipeline_config import PipelineConfig
 
 def demo(pipeline_config: PipelineConfig, task_list=None, ignore_cache=False):
     data = {{
@@ -69,7 +69,7 @@ def demo(task_list=None, ignore_cache=False):
 def test_run_invokes_pipeline_with_pipeline_config(tmp_path):
     project_dir = _create_basic_project(tmp_path, include_pipeline_config=True)
 
-    kapten.run("alpha", project_dir=str(project_dir), force=True)
+    kptn.run("alpha", project_dir=str(project_dir), force=True)
 
     call_data = json.loads((project_dir / "call.json").read_text(encoding="utf-8"))
     assert call_data["has_pipeline_config"] is True
@@ -80,7 +80,7 @@ def test_run_invokes_pipeline_with_pipeline_config(tmp_path):
 def test_run_invokes_pipeline_without_pipeline_config(tmp_path):
     project_dir = _create_basic_project(tmp_path, include_pipeline_config=False)
 
-    kapten.run(["alpha"], project_dir=str(project_dir))
+    kptn.run(["alpha"], project_dir=str(project_dir))
 
     call_data = json.loads((project_dir / "call.json").read_text(encoding="utf-8"))
     assert call_data["task_list"] == ["alpha"]

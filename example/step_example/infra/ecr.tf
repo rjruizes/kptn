@@ -1,4 +1,4 @@
-resource "aws_ecr_repository" "kapten" {
+resource "aws_ecr_repository" "kptn" {
   for_each = var.create_ecr_repository ? { main = true } : {}
 
   force_delete = true

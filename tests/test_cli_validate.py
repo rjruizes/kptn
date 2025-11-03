@@ -5,7 +5,7 @@ from pathlib import Path
 import textwrap
 import yaml
 
-from kapten.cli import _validate_python_tasks
+from kptn.cli import _validate_python_tasks
 
 
 def _write_task(path: Path, filename: str, source: str) -> None:
@@ -72,7 +72,7 @@ def _base_config(
     if config_block:
         kap_conf["config"] = config_block
 
-    (tmp_path / "kapten.yaml").write_text(
+    (tmp_path / "kptn.yaml").write_text(
         yaml.safe_dump(kap_conf), encoding="utf-8"
     )
 
@@ -152,7 +152,7 @@ def test_validate_python_tasks_supports_multiple_python_dirs(tmp_path):
         },
     }
 
-    (tmp_path / "kapten.yaml").write_text(
+    (tmp_path / "kptn.yaml").write_text(
         yaml.safe_dump(kap_conf), encoding="utf-8"
     )
 
@@ -204,7 +204,7 @@ def test_validate_python_tasks_supports_multiple_r_dirs(tmp_path):
         },
     }
 
-    (tmp_path / "kapten.yaml").write_text(
+    (tmp_path / "kptn.yaml").write_text(
         yaml.safe_dump(kap_conf), encoding="utf-8"
     )
 

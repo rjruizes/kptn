@@ -58,7 +58,7 @@ wheels = [
 ]
 
 [[package]]
-name = "kapten-step"
+name = "kptn-step"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

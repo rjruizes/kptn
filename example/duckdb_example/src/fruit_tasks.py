@@ -1,4 +1,4 @@
-from kapten.util.runtime_config import RuntimeConfig
+from kptn.util.runtime_config import RuntimeConfig
 
 
 def fruit_summary(engine, config) -> None:

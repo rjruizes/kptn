@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from kapten.aws.decider import decide_task_execution
-from kapten.caching.TaskStateCache import TaskStateCache
-from kapten.caching.models import TaskState
+from kptn.aws.decider import decide_task_execution
+from kptn.caching.TaskStateCache import TaskStateCache
+from kptn.caching.models import TaskState
 
 
 class FakeDbClient:
@@ -57,7 +57,7 @@ def reset_task_state_cache():
 
 @pytest.fixture
 def mock_pipeline_config_path() -> str:
-    return str(Path("example/mock_pipeline/kapten.yaml").resolve())
+    return str(Path("example/mock_pipeline/kptn.yaml").resolve())
 
 
 @pytest.fixture

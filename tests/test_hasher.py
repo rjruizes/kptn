@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import shutil
 import pytest
-from kapten.caching.Hasher import Hasher
+from kptn.caching.Hasher import Hasher
 from tests.fixture_constants import mock_dir, tasks_yaml_path
 
 @pytest.fixture
@@ -13,18 +13,18 @@ def cleanup():
         shutil.rmtree(scratch_dir)
 
 def test_Hasher_py():
-    h = Hasher(tasks_config_paths=["example/basic/kapten.yaml"])
+    h = Hasher(tasks_config_paths=["example/basic/kptn.yaml"])
     hashes = h.hash_code_for_task("a")
     assert isinstance(hashes, list)
     assert hashes and all("function" in item and "hash" in item for item in hashes)
 
 def test_Hasher_r():
-    h = Hasher(tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
+    h = Hasher(tasks_config_paths=["example/mock_pipeline/kptn.yaml"])
     assert isinstance(h.hash_code_for_task("A"), list)
 
 def test_Hasher_r_glob():
     task_name = "srs_indicators_estimated_tables_part1_preprocessing"
-    h = Hasher(tasks_config_paths=["example/nibrs/kapten.yaml"])
+    h = Hasher(tasks_config_paths=["example/nibrs/kptn.yaml"])
     task = h.get_task(task_name)
     script_spec = task["file"] if isinstance(task.get("file"), str) else task.get("r_script", "")
     script_path = script_spec.split(":", 1)[0]
@@ -32,7 +32,7 @@ def test_Hasher_r_glob():
     assert isinstance(h.hash_code_for_task(task_name), list)
 
 def test_Hasher_weights_computed():
-    h = Hasher(tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
+    h = Hasher(tasks_config_paths=["example/mock_pipeline/kptn.yaml"])
     hashes = h.hash_code_for_task("A")
     assert type(hashes) == list
     # Assert no duplicate keys in list of objects
@@ -43,13 +43,13 @@ def test_Hasher_weights_computed():
         seen.add(key)
 
 def test_Hasher_get_task_filelist():
-    h = Hasher(r_dirs=["example/mock_pipeline/r_tasks"], tasks_config_paths=["example/mock_pipeline/kapten.yaml"])
+    h = Hasher(r_dirs=["example/mock_pipeline/r_tasks"], tasks_config_paths=["example/mock_pipeline/kptn.yaml"])
     task = h.get_task("A")
     assert type(h.get_task_filelist("A", task)) == list
 
 def test_Hasher_indicators():
     task_name = "srs_indicators_estimated_tables_part1_preprocessing"
-    h = Hasher(tasks_config_paths=["example/nibrs/kapten.yaml"])
+    h = Hasher(tasks_config_paths=["example/nibrs/kptn.yaml"])
     task = h.get_task(task_name)
     assert isinstance(h.get_task_filelist(task_name, task), list)
 

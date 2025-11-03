@@ -6,7 +6,7 @@ resource "aws_cloudwatch_log_group" "ecs_task" {
   tags              = var.tags
 }
 
-resource "aws_ecs_task_definition" "kapten" {
+resource "aws_ecs_task_definition" "kptn" {
   for_each = var.create_task_definition ? { main = true } : {}
 
   family                   = var.task_definition_family

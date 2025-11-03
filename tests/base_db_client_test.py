@@ -2,7 +2,7 @@ import pytest
 import datetime
 import time
 from abc import ABC, abstractmethod
-from kapten.caching.models import TaskState
+from kptn.caching.models import TaskState
 
 
 class BaseDbClientTest(ABC):

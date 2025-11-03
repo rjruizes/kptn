@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from kapten.util.runtime_config import RuntimeConfig, RuntimeConfigError
+from kptn.util.runtime_config import RuntimeConfig, RuntimeConfigError
 
 
 def test_runtime_config_evaluates_callables():

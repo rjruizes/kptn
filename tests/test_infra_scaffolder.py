@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kapten.codegen.infra_scaffolder import scaffold_stepfunctions_infra
+from kptn.codegen.infra_scaffolder import scaffold_stepfunctions_infra
 
 
 def test_scaffold_creates_expected_files(tmp_path: Path) -> None:
@@ -129,7 +129,7 @@ def test_scaffold_with_task_definition_creation(tmp_path: Path) -> None:
         "create_task_definition": True,
         "create_task_execution_role": True,
         "create_ecs_cluster": False,
-        "task_definition_family": "kapten-pipe",
+        "task_definition_family": "kptn-pipe",
         "task_definition_cpu": "256",
         "task_definition_memory": "512",
         "task_definition_network_mode": "awsvpc",
@@ -138,8 +138,8 @@ def test_scaffold_with_task_definition_creation(tmp_path: Path) -> None:
         "task_definition_container_command": ["python", "-m", "pipeline"],
         "task_definition_container_environment": {"ENV": "prod"},
         "task_definition_requires_compatibilities": ["FARGATE"],
-        "ecr_repository_name": "kapten-pipe",
-        "task_execution_role_name_prefix": "kapten-pipe-task-exec",
+        "ecr_repository_name": "kptn-pipe",
+        "task_execution_role_name_prefix": "kptn-pipe-task-exec",
     }
 
     report = scaffold_stepfunctions_infra(

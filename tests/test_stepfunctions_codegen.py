@@ -1,6 +1,6 @@
 import pytest
 
-from kapten.codegen.lib.stepfunctions import (
+from kptn.codegen.lib.stepfunctions import (
     DEFAULT_BATCH_RESOURCE_ARN,
     DEFAULT_STEP_FUNCTION_RESOURCE_ARN,
     build_state_machine_definition,
@@ -41,7 +41,7 @@ def test_parallel_branches_are_grouped_with_decider_and_trailing_tasks():
     assert payload_params["state.$"] == "$"
     assert payload_params["task_name"] == "A"
     assert payload_params["execution_mode"] == "ecs"
-    assert payload_params["TASKS_CONFIG_PATH"] == "kapten.yaml"
+    assert payload_params["TASKS_CONFIG_PATH"] == "kptn.yaml"
     assert payload_params["PIPELINE_NAME"] == "example"
     assert branch_states["A_Choice"]["Type"] == "Choice"
     assert branch_states["A_RunEcs"]["Next"] == "B_Decide"

@@ -1,5 +1,5 @@
 from pathlib import Path
-from kapten.util.pipeline_config import PipelineConfig
+from kptn.util.pipeline_config import PipelineConfig
 
 
 def combo_process(pipeline_config: PipelineConfig, item1: str, item2: str) -> list[str]:
