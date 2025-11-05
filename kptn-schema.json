@@ -8,13 +8,13 @@
     "settings": {
       "type": "object",
       "description": "Project settings and directories",
-      "required": ["flows-dir", "flow-type"],
+      "required": ["flows_dir", "flow_type"],
       "properties": {
-        "flows-dir": {
+        "flows_dir": {
           "type": "string",
           "description": "Directory where generated workflow files (.py) will be placed"
         },
-        "py-tasks-dir": {
+        "py_tasks_dir": {
           "description": "Directory or directories containing Python task code (.py files)",
           "oneOf": [
             {
@@ -29,7 +29,7 @@
             }
           ]
         },
-        "r-tasks-dir": {
+        "r_tasks_dir": {
           "description": "Directory or directories containing R task code (.R files)",
           "oneOf": [
             {
@@ -44,14 +44,18 @@
             }
           ]
         },
-        "duckdb-tasks-dir": {
+        "duckdb_tasks_dir": {
           "type": "string",
           "description": "Directory containing DuckDB SQL scripts (.sql files)"
         },
-        "flow-type": {
+        "flow_type": {
           "type": "string",
           "enum": ["vanilla", "prefect", "stepfunctions"],
           "description": "Workflow framework type: vanilla (plain Python), prefect, or stepfunctions (AWS Step Functions)"
+        },
+        "imports_slot": {
+          "type": "string",
+          "description": "Raw snippet inserted near the top of generated flows for custom imports or setup commands"
         },
         "db": {
           "type": "string",

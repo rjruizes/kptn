@@ -32,7 +32,7 @@ def read_tasks_configs(tasks_yaml_paths: list[str]):
     return superset
 def all_tasks_configs_with_paths():
     kap_conf = read_config()
-    tasks_conf_path = Path(kap_conf['tasks-conf-path'])
+    tasks_conf_path = Path(kap_conf['tasks_conf_path'])
     config_paths = [
         tasks_conf_path,
         Path(project_root) / "tests" / "mock_pipeline" / "kptn.yaml",

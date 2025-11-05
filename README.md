@@ -60,10 +60,10 @@ Your project is expected to use a pyproject.toml and contain a `tool.kptn` secti
   <tr><td>Field</td><td>Description</td><td>Required</td></tr>
   </thead>
   <tbody>
-  <tr><td>flows-dir</td><td>The output directory where kptn will render your flow files to</td><td>Yes</td></tr>
-  <tr><td>py-tasks-dir</td><td>The directory (or list of directories) where Python task code exists</td><td>Yes</td></tr>
-  <tr><td>tasks-conf-path</td><td>The filepath to the kptn.yaml file defining your pipeline</td><td>Yes</td></tr>
-  <tr><td>docker-image</td><td>The name of the Docker image to build and push to Prefect</td><td>Yes</td></tr>
+  <tr><td>flows_dir</td><td>The output directory where kptn will render your flow files to</td><td>Yes</td></tr>
+  <tr><td>py_tasks_dir</td><td>The directory (or list of directories) where Python task code exists</td><td>Yes</td></tr>
+  <tr><td>tasks_conf_path</td><td>The filepath to the kptn.yaml file defining your pipeline</td><td>Yes</td></tr>
+  <tr><td>docker_image</td><td>The name of the Docker image to build and push to Prefect</td><td>Yes</td></tr>
   </tbody>
 </table>
 
@@ -71,10 +71,10 @@ Example:
 
 ```toml
 [tool.kptn]
-flows-dir = "py_src/flows"
-py-tasks-dir = "py_src/tasks"
-tasks-conf-path = "py_src/kptn.yaml"
-docker-image = "nibrs-estimation-pipeline:latest"
+flows_dir = "py_src/flows"
+py_tasks_dir = "py_src/tasks"
+tasks_conf_path = "py_src/kptn.yaml"
+docker_image = "nibrs-estimation-pipeline:latest"
 ```
 
 ### kptn.yaml

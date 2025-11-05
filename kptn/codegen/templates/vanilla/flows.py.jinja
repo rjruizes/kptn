@@ -1,5 +1,8 @@
 {% import "macros.jinja" as macros %}
 from pathlib import Path
+{% if imports_slot -%}
+{{ imports_slot }}
+{%- endif -%}
 from kptn.caching.submit import submit
 {#- from kptn.deploy.storage_key import read_branch_storage_key #}
 from kptn.runner import cli_parser, parse_and_validate_tasks

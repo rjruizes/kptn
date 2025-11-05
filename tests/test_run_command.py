@@ -17,9 +17,9 @@ def _create_basic_project(root: Path, *, include_pipeline_config: bool) -> Path:
 
     kptn_yaml = {
         "settings": {
-            "flows-dir": ".",
-            "py-tasks-dir": "py_tasks",
-            "r-tasks-dir": ".",
+            "flows_dir": ".",
+            "py_tasks_dir": "py_tasks",
+            "r_tasks_dir": ".",
         },
         "graphs": {
             "demo": {"tasks": {"alpha": None}},

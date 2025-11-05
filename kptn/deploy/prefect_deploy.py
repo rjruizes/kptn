@@ -8,7 +8,7 @@ from kptn.read_config import read_config
 def prefect_deploy(flow, flow_name, public_url, job_variables, parameters={}, work_pool_name="docker-pool", image=None):
     if not image:
         kap_conf = read_config()
-        image = kap_conf["docker-image"]
+        image = kap_conf["docker_image"]
     settings = { PREFECT_API_URL: public_url }
     with temporary_settings(updates=settings):
         print(PREFECT_API_URL.value())

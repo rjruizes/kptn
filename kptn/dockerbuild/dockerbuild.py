@@ -28,7 +28,7 @@ class PushPayload(BaseModel):
 @app.post("/api/build")
 def post_build():
     kap_conf = read_config()
-    image = kap_conf["docker-image"]
+    image = kap_conf["docker_image"]
     subprocess.run(["docker", "build", "-t", image, "."])
     return {"message": "Build complete"}
 

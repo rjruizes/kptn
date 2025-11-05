@@ -121,7 +121,7 @@ def api_deploy(payload: DeployPayload):
         image = get_full_image_uri(branch, stack_to_authproxy(payload.stack, state["stackDict"]))
     else:
         kap_conf = read_config()
-        image = kap_conf["docker-image"]
+        image = kap_conf["docker_image"]
     if is_mock(payload.graph):
         py_tasks_module_path = "tests.mock_pipeline.py_tasks"
         tasks_config_path = "tests/mock_pipeline/kptn.yaml"

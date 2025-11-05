@@ -412,8 +412,8 @@ def build_stepfunctions_flow_context(
     kap_conf: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Assemble template context overrides for Step Functions flows."""
-    resource_arn = kap_conf.get("stepfunctions-resource-arn")
-    decider_lambda_arn = kap_conf.get("decider-lambda-arn", "${decider_lambda_arn}")
+    resource_arn = kap_conf.get("stepfunctions_resource_arn")
+    decider_lambda_arn = kap_conf.get("decider_lambda_arn", "${decider_lambda_arn}")
     tasks_config_path = "kptn.yaml"
 
     state_machine = build_state_machine_definition(

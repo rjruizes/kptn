@@ -88,7 +88,7 @@ class TaskStateCache():
             )
             tasks_config_path = Path(primary_config_path)
             self.tasks_root_dir = tasks_config_path.parent
-            duckdb_dir_setting = self.tasks_config.get("settings", {}).get("duckdb-tasks-dir")
+            duckdb_dir_setting = self.tasks_config.get("settings", {}).get("duckdb_tasks_dir")
             if duckdb_dir_setting:
                 self.duckdb_tasks_dir = (self.tasks_root_dir / duckdb_dir_setting).resolve()
             else:
@@ -130,11 +130,11 @@ class TaskStateCache():
 
     def is_flow_prefect(self) -> str:
         """Check if the workflow type is Prefect"""
-        return self.tasks_config.get("settings", {}).get("flow-type") == "prefect"
+        return self.tasks_config.get("settings", {}).get("flow_type") == "prefect"
 
     def is_flow_stepfunctions(self) -> str:
         """Check if the workflow type is Step Functions"""
-        return self.tasks_config.get("settings", {}).get("flow-type") == "stepfunctions"
+        return self.tasks_config.get("settings", {}).get("flow_type") == "stepfunctions"
 
     def get_dep_list(self, task_name: str) -> list[str]:
         """Return the names of the dependencies of a task."""

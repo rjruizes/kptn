@@ -32,11 +32,11 @@ def _build_pipeline_config(
     settings = kap_conf.get("settings", {})
     module_path: str | None = None
     resolved_py_dirs: list[str] = []
-    py_tasks_dir_setting = settings.get("py-tasks-dir")
+    py_tasks_dir_setting = settings.get("py_tasks_dir")
     if py_tasks_dir_setting is not None:
         py_tasks_dir_values = normalise_dir_setting(
             py_tasks_dir_setting,
-            setting_name="py-tasks-dir",
+            setting_name="py_tasks_dir",
         )
         if py_tasks_dir_values:
             module_path = _module_path_from_dir(py_tasks_dir_values[0])
@@ -52,10 +52,10 @@ def _build_pipeline_config(
     project_root = project_root.resolve()
     tasks_config_path = (project_root / "kptn.yaml").resolve()
 
-    r_tasks_dir_setting_raw = settings.get("r-tasks-dir", ".")
+    r_tasks_dir_setting_raw = settings.get("r_tasks_dir", ".")
     r_tasks_dir_setting = normalise_dir_setting(
         r_tasks_dir_setting_raw,
-        setting_name="r-tasks-dir",
+        setting_name="r_tasks_dir",
     )
     if not r_tasks_dir_setting:
         r_tasks_dir_setting = ["."]
@@ -81,7 +81,7 @@ def _build_pipeline_config(
         pipeline_kwargs["PY_TASKS_DIRS"] = list(resolved_py_dirs)
     pipeline_kwargs["R_TASKS_DIRS"] = list(resolved_r_dirs)
 
-    storage_key = settings.get("storage-key") or settings.get("storage_key")
+    storage_key = settings.get("storage_key")
     if storage_key:
         pipeline_kwargs["STORAGE_KEY"] = str(storage_key)
 
@@ -199,15 +199,15 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
 
     py_tasks_dir_values: list[str] = []
     resolved_py_dirs: list[Path] = []
-    py_tasks_dir_entry = settings.get("py-tasks-dir")
+    py_tasks_dir_entry = settings.get("py_tasks_dir")
     if py_tasks_dir_entry is not None:
         try:
             py_tasks_dir_values = normalise_dir_setting(
                 py_tasks_dir_entry,
-                setting_name="py-tasks-dir",
+                setting_name="py_tasks_dir",
             )
         except (TypeError, ValueError) as exc:
-            return [f"Invalid 'py-tasks-dir' setting: {exc}"]
+            return [f"Invalid 'py_tasks_dir' setting: {exc}"]
 
         for entry in py_tasks_dir_values:
             entry_path = Path(entry)

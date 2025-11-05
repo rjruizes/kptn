@@ -14,7 +14,7 @@ def docker_push(authproxy_url=None, branch=None, image=None):
     import boto3
     if not image:
         kap_conf = read_config()
-        image = kap_conf["docker-image"]
+        image = kap_conf["docker_image"]
     authproxy_endpoint = authproxy_url or get_authproxy_endpoint()
     branch = branch or get_active_branch_name()
     full_image_uri = get_full_image_uri(branch, authproxy_endpoint)

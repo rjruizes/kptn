@@ -25,7 +25,7 @@ def _module_path_from_dir(py_tasks_dir: str) -> str:
     parts = [part for part in Path(py_tasks_dir).parts if part and part != "."]
     module_path = ".".join(parts)
     if not module_path:
-        raise ValueError("Unable to derive module path from py-tasks-dir setting")
+        raise ValueError("Unable to derive module path from py_tasks_dir setting")
     return module_path
 
 
@@ -66,15 +66,16 @@ def normalise_dir_setting(
 
 
 def _read_py_tasks_dir_from_config(tasks_config_path: str) -> list[str]:
-    """Read the py-tasks-dir setting from the kptn.yaml config file"""
+    """Read the py_tasks_dir setting from the kptn.yaml config file"""
     try:
         config_path = Path(tasks_config_path)
         if not config_path.exists():
             return []
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
-        setting = config.get('settings', {}).get('py-tasks-dir')
-        return normalise_dir_setting(setting, setting_name='py-tasks-dir')
+        settings_section = config.get('settings', {})
+        setting = settings_section.get('py_tasks_dir')
+        return normalise_dir_setting(setting, setting_name='py_tasks_dir')
     except Exception:
         return []
 
@@ -104,7 +105,7 @@ class PipelineConfig(BaseModel):
 
     @model_validator(mode='after')
     def _derive_py_module_path(self):
-        """Auto-derive PY_MODULE_PATH from py-tasks-dir in kptn.yaml if not explicitly set"""
+        """Auto-derive PY_MODULE_PATH from py_tasks_dir in kptn.yaml if not explicitly set"""
         if self.TASKS_CONFIG_PATH:
             py_tasks_dirs = _read_py_tasks_dir_from_config(self.TASKS_CONFIG_PATH)
             if py_tasks_dirs:

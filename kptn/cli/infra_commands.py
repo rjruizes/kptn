@@ -552,7 +552,7 @@ def _run_codegen_infra(
     pipeline_name = graph_names[0]
 
     settings = kap_conf.get("settings", {})
-    flows_dir_setting = settings.get("flows-dir", "flows")
+    flows_dir_setting = settings.get("flows_dir", "flows")
     flows_dir = Path(flows_dir_setting)
 
     inputs = _collect_infra_inputs(

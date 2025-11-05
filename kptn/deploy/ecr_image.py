@@ -23,7 +23,7 @@ def get_full_image_uri(branch: str, authproxy_endpoint):
         repo = get_ecr_repo(authproxy_endpoint)
     else:
         kap_conf = read_config()
-        image = kap_conf["docker-image"]
+        image = kap_conf["docker_image"]
         return image
     return f"{repo}:{branch}"
 

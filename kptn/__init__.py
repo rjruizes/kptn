@@ -33,11 +33,11 @@ def _build_pipeline_config_for_run(
     """Construct a PipelineConfig from kptn.yaml for flow execution."""
     settings = config.get("settings", {})
     py_tasks_dir_setting = normalise_dir_setting(
-        settings.get("py-tasks-dir"),
-        setting_name="py-tasks-dir",
+        settings.get("py_tasks_dir"),
+        setting_name="py_tasks_dir",
     )
     if not py_tasks_dir_setting:
-        raise RuntimeError("Missing 'py-tasks-dir' in kptn.yaml settings")
+        raise RuntimeError("Missing 'py_tasks_dir' in kptn.yaml settings")
 
     module_path = _module_path_from_dir(py_tasks_dir_setting[0])
     tasks_config_path = (project_path / "kptn.yaml").resolve()
@@ -46,10 +46,10 @@ def _build_pipeline_config_for_run(
         entry_path = Path(entry)
         resolved_py_dirs.append(str((project_path / entry_path).resolve() if not entry_path.is_absolute() else entry_path.resolve()))
 
-    r_tasks_dir_setting_raw = settings.get("r-tasks-dir", ".")
+    r_tasks_dir_setting_raw = settings.get("r_tasks_dir", ".")
     r_tasks_dir_setting = normalise_dir_setting(
         r_tasks_dir_setting_raw,
-        setting_name="r-tasks-dir",
+        setting_name="r_tasks_dir",
     )
     if not r_tasks_dir_setting:
         r_tasks_dir_setting = ["."]
@@ -69,7 +69,7 @@ def _build_pipeline_config_for_run(
     pipeline_kwargs["PY_TASKS_DIRS"] = list(resolved_py_dirs)
     pipeline_kwargs["R_TASKS_DIRS"] = list(resolved_r_dirs)
 
-    storage_key = settings.get("storage-key") or settings.get("storage_key")
+    storage_key = settings.get("storage_key")
     if storage_key:
         pipeline_kwargs["STORAGE_KEY"] = str(storage_key)
 
@@ -128,7 +128,7 @@ def run(
             f"Make sure project_dir points to a valid kptn project."
         )
 
-    # Read kptn.yaml to get pipeline name and flows-dir
+    # Read kptn.yaml to get pipeline name and flows_dir
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
@@ -144,7 +144,7 @@ def run(
         )
 
     pipeline_name = next(iter(graphs.keys()))
-    flows_dir = config.get('settings', {}).get('flows-dir', '.')
+    flows_dir = config.get('settings', {}).get('flows_dir', '.')
 
     # Import the generated flow module
     flow_file = project_path / flows_dir / f"{pipeline_name}.py"

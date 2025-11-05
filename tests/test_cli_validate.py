@@ -54,9 +54,9 @@ def _base_config(
 
     kap_conf = {
         "settings": {
-            "py-tasks-dir": "py_tasks",
-            "r-tasks-dir": "r_tasks",
-            "flows-dir": ".",
+            "py_tasks_dir": "py_tasks",
+            "r_tasks_dir": "r_tasks",
+            "flows_dir": ".",
         },
         "tasks": tasks,
         "graphs": {
@@ -134,9 +134,9 @@ def test_validate_python_tasks_supports_multiple_python_dirs(tmp_path):
 
     kap_conf = {
         "settings": {
-            "py-tasks-dir": ["py_primary", "py_shared"],
-            "r-tasks-dir": "r_tasks",
-            "flows-dir": ".",
+            "py_tasks_dir": ["py_primary", "py_shared"],
+            "r_tasks_dir": "r_tasks",
+            "flows_dir": ".",
         },
         "tasks": {
             "producer": {"file": "producer.R", "cache_result": True},
@@ -186,9 +186,9 @@ def test_validate_python_tasks_supports_multiple_r_dirs(tmp_path):
 
     kap_conf = {
         "settings": {
-            "py-tasks-dir": "py_tasks",
-            "r-tasks-dir": ["r_missing", "r_tasks"],
-            "flows-dir": ".",
+            "py_tasks_dir": "py_tasks",
+            "r_tasks_dir": ["r_missing", "r_tasks"],
+            "flows_dir": ".",
         },
         "tasks": {
             "producer": {"file": "producer.R", "cache_result": True},

@@ -22,9 +22,9 @@ def test_bundle_decider_copies_project_code(tmp_path, monkeypatch):
         "\n".join(
             [
                 "settings:",
-                "  flow-type: stepfunctions",
-                "  py-tasks-dir: tasks",
-                "  r-tasks-dir: r_tasks",
+                "  flow_type: stepfunctions",
+                "  py_tasks_dir: tasks",
+                "  r_tasks_dir: r_tasks",
                 "graphs:",
                 "  main:",
                 "    comment: example pipeline",
@@ -91,7 +91,7 @@ def test_bundle_decider_rejects_external_paths(tmp_path):
         "\n".join(
             [
                 "settings:",
-                "  flow-type: stepfunctions",
+                "  flow_type: stepfunctions",
                 "graphs:",
                 "  main:",
                 "    comment: example",
@@ -121,7 +121,7 @@ def test_bundle_decider_handles_placeholder_paths(tmp_path):
         "\n".join(
             [
                 "settings:",
-                "  flow-type: stepfunctions",
+                "  flow_type: stepfunctions",
                 "graphs:",
                 "  main:",
                 "    comment: example",

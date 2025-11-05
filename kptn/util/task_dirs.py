@@ -36,13 +36,13 @@ def _normalise_entries(setting: Any) -> list[str]:
         candidates = setting  # type: ignore[assignment]
     else:
         raise TypeError(
-            f"'py-tasks-dir' must be a string or sequence of strings, received {type(setting)}"
+            f"'py_tasks_dir' must be a string or sequence of strings, received {type(setting)}"
         )
     entries: list[str] = []
     for candidate in candidates:
         if not isinstance(candidate, str):
             raise TypeError(
-                f"'py-tasks-dir' entries must be strings, received {type(candidate)}"
+                f"'py_tasks_dir' entries must be strings, received {type(candidate)}"
             )
         cleaned = candidate.strip()
         if not cleaned:
@@ -60,7 +60,7 @@ def _collect_py_dir_entries(
     if explicit_dirs:
         entries.extend(entry.strip() for entry in explicit_dirs if entry and entry.strip())
     if not entries and tasks_config:
-        setting = tasks_config.get("settings", {}).get("py-tasks-dir")
+        setting = tasks_config.get("settings", {}).get("py_tasks_dir")
         try:
             entries.extend(_normalise_entries(setting))
         except (TypeError, ValueError):

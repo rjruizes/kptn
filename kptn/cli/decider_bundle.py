@@ -45,15 +45,15 @@ def _resolve_python_dirs(project_root: Path, kap_conf: Mapping[str, object]) -> 
     if not isinstance(settings, Mapping):
         raise BundleDeciderError("kptn.yaml settings block must be a mapping")
 
-    py_tasks_setting = settings.get("py-tasks-dir")
+    py_tasks_setting = settings.get("py_tasks_dir")
     explicit_dirs: list[str] = []
     module_path: str | None = None
 
     if py_tasks_setting is not None:
         try:
-            explicit_dirs = normalise_dir_setting(py_tasks_setting, setting_name="py-tasks-dir")
+            explicit_dirs = normalise_dir_setting(py_tasks_setting, setting_name="py_tasks_dir")
         except (TypeError, ValueError) as exc:
-            raise BundleDeciderError(f"Invalid py-tasks-dir setting: {exc}") from exc
+            raise BundleDeciderError(f"Invalid py_tasks_dir setting: {exc}") from exc
         if explicit_dirs:
             try:
                 module_path = _module_path_from_dir(explicit_dirs[0])
@@ -74,14 +74,14 @@ def _resolve_r_dirs(project_root: Path, kap_conf: Mapping[str, object]) -> list[
     if not isinstance(settings, Mapping):
         raise BundleDeciderError("kptn.yaml settings block must be a mapping")
 
-    raw_setting = settings.get("r-tasks-dir")
+    raw_setting = settings.get("r_tasks_dir")
     entries: list[str]
     if raw_setting is None:
         return []
     try:
-        entries = normalise_dir_setting(raw_setting, setting_name="r-tasks-dir")
+        entries = normalise_dir_setting(raw_setting, setting_name="r_tasks_dir")
     except (TypeError, ValueError) as exc:
-        raise BundleDeciderError(f"Invalid r-tasks-dir setting: {exc}") from exc
+        raise BundleDeciderError(f"Invalid r_tasks_dir setting: {exc}") from exc
     if not entries:
         return []
 

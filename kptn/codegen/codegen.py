@@ -80,7 +80,7 @@ def relative_path_from_flows_dir_to_tasks_conf_path(kap_conf):
     so that the generated flows can find the kptn.yaml file
     (e.g. "../../kptn.yaml")
     """
-    flows_dir = Path(kap_conf['flows-dir'])
+    flows_dir = Path(kap_conf['flows_dir'])
     tasks_conf_path = "kptn.yaml"
     return path.relpath(tasks_conf_path, flows_dir)
 
@@ -90,7 +90,7 @@ def relative_path_from_flows_dir_to_tasks_conf_path(kap_conf):
 #     so that the generated flows can import the tasks
 #     (e.g. "../../py_tasks")
 #     """
-#     flows_dir = Path(kap_conf['flows-dir'])
+#     flows_dir = Path(kap_conf['flows_dir'])
 #     py_tasks_dir = Path(py_tasks_dir_entry)
 #     return path.relpath(py_tasks_dir, flows_dir)
 
@@ -102,7 +102,7 @@ def relative_path_from_flows_dir_to_r_tasks_dir(kap_conf, r_tasks_dir_entry: str
     """
     if not r_tasks_dir_entry:
         return None
-    flows_dir = Path(kap_conf['flows-dir'])
+    flows_dir = Path(kap_conf['flows_dir'])
     r_tasks_dir = Path(r_tasks_dir_entry)
     return path.relpath(r_tasks_dir, flows_dir)
 
@@ -110,8 +110,8 @@ def generate_files(graph: str = None):
     kap_conf = read_config()["settings"]
     # flows_dir = path.join(py_dir, 'flows')
     root_dir = Path('.')
-    flows_dir = root_dir / kap_conf['flows-dir']
-    flow_type = kap_conf.get('flow-type', 'vanilla')
+    flows_dir = root_dir / kap_conf['flows_dir']
+    flow_type = kap_conf.get('flow_type', 'vanilla')
     if flow_type not in FLOW_TYPE_CONFIG:
         flow_type = 'vanilla'
     flow_config = FLOW_TYPE_CONFIG.get(
@@ -128,10 +128,10 @@ def generate_files(graph: str = None):
     tasks_dict = conf['tasks']
 
     r_tasks_dir_values: list[str] = []
-    if 'r-tasks-dir' in kap_conf:
+    if 'r_tasks_dir' in kap_conf:
         r_tasks_dir_values = normalise_dir_setting(
-            kap_conf['r-tasks-dir'],
-            setting_name='r-tasks-dir',
+            kap_conf['r_tasks_dir'],
+            setting_name='r_tasks_dir',
         )
     primary_r_tasks_dir = r_tasks_dir_values[0] if r_tasks_dir_values else None
 
@@ -167,6 +167,8 @@ def generate_files(graph: str = None):
             "rel_r_tasks_dir": relative_path_from_flows_dir_to_r_tasks_dir(kap_conf, primary_r_tasks_dir),
             "python_task_names": python_task_names,
             "python_task_specs": python_task_specs,
+            "settings": kap_conf,
+            "imports_slot": kap_conf.get("imports_slot"),
         }
 
         context_builder: Callable[..., dict[str, Any]] | None = flow_config.get('context_builder')
