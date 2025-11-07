@@ -9,6 +9,7 @@ import os
 import json
 import sys
 from typing import Callable, Optional, Union
+from types import ModuleType
 import requests
 import time
 from pathlib import Path
@@ -25,7 +26,7 @@ from kptn.util.rscript import r_script
 from kptn.util.read_tasks_config import read_tasks_config
 from kptn.util.hash import hash_file, hash_obj
 from kptn.util.task_args import plan_python_call
-from kptn.util.task_dirs import python_module_name_candidates, resolve_python_task_dirs
+from kptn.util.task_dirs import resolve_python_task_dirs
 
 
 @dataclass
@@ -121,7 +122,7 @@ class TaskStateCache():
             )
             self.logger = get_logger()
             self._duckdb_sql_functions: dict[str, Callable[..., object]] = {}
-            self._python_tasks_module = None
+            self._python_module_cache: dict[str, ModuleType] = {}
         return self
 
     def __str__(self):
@@ -367,64 +368,99 @@ class TaskStateCache():
         self._duckdb_sql_functions[task_name] = duckdb_sql_runner
         return duckdb_sql_runner
 
-    def _load_python_package_from_path(self, package_dir: Path, module_name: str | None = None):
-        init_path = package_dir / "__init__.py"
-        if not init_path.exists():
-            raise ValueError(
-                f"Python tasks directory '{package_dir}' is missing an __init__.py file"
-            )
-        load_name = (module_name.split(".")[-1] if module_name else package_dir.name) or package_dir.name
-        spec = importlib.util.spec_from_file_location(
-            load_name,
-            init_path,
-            submodule_search_locations=[str(package_dir)],
-        )
+    def _resolve_task_file_path(self, file_path: str) -> Path:
+        candidate = Path(file_path)
+        if candidate.is_absolute():
+            return candidate.resolve()
+        if self.tasks_root_dir:
+            return (self.tasks_root_dir / candidate).resolve()
+        return candidate.resolve()
+
+    def _python_module_name_options(
+        self,
+        abs_file_path: Path,
+        *,
+        relative_spec: str | None = None,
+    ) -> list[str]:
+        """Return potential import paths for a Python task module."""
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add_from_path(path: Path):
+            parts = [part for part in path.with_suffix("").parts if part and part != "."]
+            if not parts:
+                return
+            dotted = ".".join(parts)
+            if dotted in seen:
+                return
+            seen.add(dotted)
+            candidates.append(dotted)
+
+        if relative_spec:
+            add_from_path(Path(relative_spec))
+
+        if self.tasks_root_dir:
+            try:
+                relative = abs_file_path.resolve().relative_to(self.tasks_root_dir.resolve())
+            except ValueError:
+                relative = None
+            if relative:
+                add_from_path(relative)
+        return candidates
+
+    def _load_module_from_file(self, module_name: str, file_path: Path) -> ModuleType:
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
         if spec is None or spec.loader is None:
-            raise ImportError(f"Unable to load python tasks package from {init_path}")
+            raise ImportError(f"Unable to load python module for task from {file_path}")
         module = importlib.util.module_from_spec(spec)
-        sys.modules[load_name] = module
+        sys.modules[module_name] = module
         spec.loader.exec_module(module)
         return module
 
-    def _get_python_tasks_module(self):
-        if self._python_tasks_module is not None:
-            return self._python_tasks_module
+    def _load_python_module_for_task(self, task_name: str, task: dict) -> ModuleType:
+        file_value = self._get_task_file(task_name, task)
+        abs_path = self._resolve_task_file_path(file_value)
+        cache_key = str(abs_path)
+        cached = self._python_module_cache.get(cache_key)
+        if cached:
+            return cached
 
-        candidates = python_module_name_candidates(
-            tasks_config=self.tasks_config,
-            module_path=getattr(self.pipeline_config, "PY_MODULE_PATH", None),
-            tasks_root_dir=self.tasks_root_dir,
+        module: ModuleType | None = None
+        module_candidates = self._python_module_name_options(
+            abs_path, relative_spec=file_value
         )
-
-        for candidate in candidates:
+        for candidate in module_candidates:
             try:
                 module = importlib.import_module(candidate)
             except ModuleNotFoundError:
                 continue
             else:
-                self._python_tasks_module = module
-                return module
+                break
 
-        if self.py_task_dirs:
-            self._python_tasks_module = self._load_python_package_from_path(
-                self.py_task_dirs[0],
-                module_name=candidates[0] if candidates else None,
-            )
-            return self._python_tasks_module
+        if module is None:
+            module_name = module_candidates[0] if module_candidates else f"kptn_task_{abs(hash(cache_key))}"
+            module = self._load_module_from_file(module_name, abs_path)
 
-        raise ValueError("Unable to locate python tasks module for pipeline")
+        self._python_module_cache[cache_key] = module
+        return module
 
     def get_python_callable(self, task_name: str):
         """Return the Python callable for a task, creating one for DuckDB SQL tasks if needed."""
-        module = self._get_python_tasks_module()
-        if hasattr(module, task_name):
-            return getattr(module, task_name)
-        if self.is_duckdb_sql_task(task_name):
+        task = self.get_task(task_name)
+        if self.is_duckdb_sql_task(task_name, task):
             duckdb_callable = self._ensure_duckdb_sql_callable(task_name)
-            setattr(module, task_name, duckdb_callable)
             return duckdb_callable
+        if not self.is_python_task(task_name, task):
+            raise AttributeError(
+                f"Task '{task_name}' is not configured as a Python task and cannot be executed as such"
+            )
+        module = self._load_python_module_for_task(task_name, task)
+        func_name = self.get_py_func_name(task_name)
+        if hasattr(module, func_name):
+            return getattr(module, func_name)
+        file_value = self._get_task_file(task_name, task)
         raise AttributeError(
-            f"Task '{task_name}' not found in module '{self.pipeline_config.PY_MODULE_PATH}'"
+            f"Task '{task_name}' callable '{func_name}' not found in module loaded from '{file_value}'"
         )
 
     def task_returns_list(self, task_name: str) -> bool:
