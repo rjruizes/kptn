@@ -15,7 +15,7 @@ import yaml
 # Example config (YAML):
 # config:
 #   my_global: 42
-#   engine: src.utils:get_engine()
+#   engine: src.utils:get_engine
 #   include:
 #   - config.json
 
@@ -73,7 +73,7 @@ class RuntimeConfig:
     The configuration is resolved as follows:
 
     * Plain values are copied as-is (after deep-merging any ``include`` files).
-    * Strings of the form ``module.path:function()`` are imported and executed.
+    * Strings of the form ``module.path:function`` are imported and executed.
     * ``include`` entries are treated as JSON/YAML files whose contents are
       merged into the runtime configuration prior to resolving remaining keys.
     """
@@ -82,7 +82,7 @@ class RuntimeConfig:
     _fallback: Any | None = None
 
     _CALLABLE_PATTERN = re.compile(
-        r"^(?P<module>[A-Za-z_][\w.]*):(?P<attr>[A-Za-z_][\w.]*)\(\)$"
+        r"^(?P<module>[A-Za-z_][\w.]*):(?P<attr>[A-Za-z_][\w.]*)$"
     )
 
     @classmethod
@@ -143,6 +143,14 @@ class RuntimeConfig:
         """Normalise duckdb config entries to maintain backwards compatibility."""
         duckdb_entry = resolved.get("duckdb")
         if not isinstance(duckdb_entry, Mapping):
+            return
+
+        if "function" not in duckdb_entry:
+            if any(key in duckdb_entry for key in ("alias", "parameter_name")):
+                raise RuntimeConfigError(
+                    "DuckDB config mapping must define a 'function' entry"
+                )
+            # Entry already resolved (new-style config); nothing further required.
             return
 
         connection = duckdb_entry.get("function")

@@ -8,7 +8,7 @@ from kptn.util.runtime_config import RuntimeConfig, RuntimeConfigError
 
 
 def test_runtime_config_evaluates_callables():
-    config = {"engine": "tests.runtime_config_fixtures:build_value()"}
+    config = {"engine": "tests.runtime_config_fixtures:build_value"}
 
     runtime = RuntimeConfig.from_config(config)
 
@@ -17,7 +17,7 @@ def test_runtime_config_evaluates_callables():
 
 def test_runtime_config_merges_includes(tmp_path):
     include_payload = {
-        "from_include": "tests.runtime_config_fixtures:build_value()",
+        "from_include": "tests.runtime_config_fixtures:build_value",
         "nested": {"dialect": "sqlite"},
     }
     include_path = tmp_path / "config.json"
@@ -26,7 +26,7 @@ def test_runtime_config_merges_includes(tmp_path):
     config = {
         "include": "config.json",
         "my_global": 42,
-        "engine": "tests.runtime_config_fixtures:build_engine()",
+        "engine": "tests.runtime_config_fixtures:build_engine",
         "nested": {"schema": "public"},
     }
 
@@ -55,7 +55,7 @@ def test_runtime_config_supports_multiple_include_files(tmp_path):
 
     config = {
         "include": ["config.json", "extras.yaml"],
-        "baz": "tests.runtime_config_fixtures:build_value()",
+        "baz": "tests.runtime_config_fixtures:build_value",
     }
 
     runtime = RuntimeConfig.from_config(config, base_dir=tmp_path)
@@ -73,7 +73,7 @@ def test_runtime_config_delegates_to_fallback():
 def test_runtime_config_supports_duckdb_mapping_alias():
     config = {
         "duckdb": {
-            "function": "tests.runtime_config_fixtures:build_engine()",
+            "function": "tests.runtime_config_fixtures:build_engine",
             "parameter_name": "engine",
         }
     }
@@ -87,7 +87,7 @@ def test_runtime_config_supports_duckdb_mapping_alias():
 def test_runtime_config_rejects_invalid_duckdb_alias():
     config = {
         "duckdb": {
-            "function": "tests.runtime_config_fixtures:build_engine()",
+            "function": "tests.runtime_config_fixtures:build_engine",
             "parameter_name": "not valid",
         }
     }

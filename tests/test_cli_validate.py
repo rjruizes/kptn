@@ -322,7 +322,7 @@ def test_validate_python_tasks_imports_modules_from_project(tmp_path):
         def consumer(runtime_config):
             return runtime_config.duckdb
         """,
-        config_block={"duckdb": "src.utils:get_engine()"},
+        config_block={"duckdb": "src.utils:get_engine"},
         consumer_dependencies=[],
     )
 
@@ -340,7 +340,7 @@ def test_validate_python_tasks_uses_duckdb_alias(tmp_path):
         """,
         config_block={
             "duckdb": {
-                "function": "tests.runtime_config_fixtures:build_engine()",
+                "function": "tests.runtime_config_fixtures:build_engine",
                 "parameter_name": "engine",
             }
         },
