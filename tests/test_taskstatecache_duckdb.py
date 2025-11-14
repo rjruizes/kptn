@@ -1,5 +1,8 @@
 from pathlib import Path
 import logging
+from types import SimpleNamespace
+
+import tests.runtime_config_fixtures as fixtures
 
 from kptn.caching.TaskStateCache import TaskStateCache
 from kptn.util.runtime_config import RuntimeConfig
@@ -107,6 +110,16 @@ def test_statement_parameters_ignore_casts_and_strings(tmp_path):
     assert filtered == {"foo": 1, "baz": 2}
 
 
+def test_statement_parameters_detect_dollar_notation(tmp_path):
+    cache = _make_cache(tmp_path)
+    statement = "set variable my_var = (select my.key from read_json_auto($config));"
+    params = {"config": "/tmp/config.json", "other": 1}
+
+    filtered = cache._extract_statement_parameters(statement, params)
+
+    assert filtered == {"config": "/tmp/config.json"}
+
+
 class FakeConn:
     def __init__(self):
         self.calls: list[tuple[str, object | None]] = []
@@ -148,3 +161,48 @@ def test_duckdb_sql_runner_executes_statements_individually(tmp_path):
     assert executed[2][1] is None
     assert executed[3][0] == "SELECT :bar"
     assert executed[3][1] == {"bar": 20}
+
+
+def test_duckdb_sql_runner_uses_runtime_config_callable(tmp_path):
+    cache = _make_cache(tmp_path)
+    fixtures.TEST_CONFIG_PATH = str(tmp_path / "duck_config.json")
+    (tmp_path / "duck_config.json").write_text("{}", encoding="utf-8")
+    script_path = tmp_path / "duck.sql"
+    script_path.write_text(
+        "set variable diet_period_gateway = (select asa24.diet_period_gateway from read_json_auto($config));",
+        encoding="utf-8",
+    )
+    cache.tasks_config = {
+        "config": {
+            "duckdb": "memory",
+            "config": {"function": "tests.runtime_config_fixtures:get_config"},
+        },
+        "tasks": {"duck": {"file": "duck.sql"}},
+    }
+    cache.pipeline_config = SimpleNamespace(
+        TASKS_CONFIG_PATH=str(tmp_path / "kptn.yaml"),
+        PY_MODULE_PATH="",
+        PY_TASKS_DIRS=(),
+        R_TASKS_DIRS=(),
+        scratch_dir=str(tmp_path / "scratch"),
+        SUBSET_MODE=False,
+    )
+    (tmp_path / "kptn.yaml").write_text("{}", encoding="utf-8")
+    runtime_config = cache.build_runtime_config(task_name="duck")
+    expected_path = fixtures.TEST_CONFIG_PATH
+    assert runtime_config["config"] == expected_path
+
+    conn = FakeConn()
+    runtime_values = runtime_config.as_dict()
+    runtime_values["duckdb"] = conn
+    runtime_with_conn = RuntimeConfig(runtime_values, None)
+
+    runner = cache._ensure_duckdb_sql_callable("duck")
+    try:
+        runner(runtime_with_conn)
+    finally:
+        fixtures.TEST_CONFIG_PATH = None
+
+    json_calls = [call for call in conn.calls if "read_json_auto" in call[0]]
+    assert json_calls
+    assert json_calls[0][1] == {"config": expected_path}

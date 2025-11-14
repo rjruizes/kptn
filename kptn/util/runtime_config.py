@@ -393,7 +393,11 @@ class RuntimeConfig:
     def _prepare_task_info(task_info: Mapping[str, Any] | None) -> dict[str, Any]:
         payload = dict(task_info or {})
         payload.setdefault("task_name", None)
-        payload.setdefault("task_lang", None)
+        lang = payload.get("task_lang")
+        if lang is None:
+            lang = payload.get("task_language")
+        payload["task_lang"] = lang
+        payload["task_language"] = lang
         return payload
 
     @classmethod

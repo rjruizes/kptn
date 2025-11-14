@@ -607,12 +607,10 @@ class TaskStateCache():
                 i += 1
                 continue
 
-            if (
-                ch == ":"
-                and nxt
-                and (nxt.isalpha() or nxt == "_")
-                and (i == 0 or statement[i - 1] != ":")
-            ):
+            if ch in (":", "$") and nxt and (nxt.isalpha() or nxt == "_"):
+                if ch == ":" and i > 0 and statement[i - 1] == ":":
+                    i += 1
+                    continue
                 start = i + 1
                 while start < length and (statement[start].isalnum() or statement[start] == "_"):
                     start += 1
