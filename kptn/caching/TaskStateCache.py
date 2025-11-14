@@ -8,7 +8,7 @@ import logging
 import os
 import json
 import sys
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, Mapping, Iterable
 from types import ModuleType
 import requests
 import time
@@ -355,7 +355,13 @@ class TaskStateCache():
                 conn.execute("SET file_search_path = ?", [str(script_dir)])
                 sql = script_path.read_text(encoding="utf-8")
                 logger.info("Executing DuckDB SQL script %s for task %s", script_path, task_name)
-                conn.execute(sql)
+                sql_parameters = self._build_duckdb_sql_parameters(runtime_config)
+                for statement in self._split_duckdb_sql(sql):
+                    statement_params = self._extract_statement_parameters(statement, sql_parameters)
+                    if statement_params:
+                        conn.execute(statement, statement_params)
+                    else:
+                        conn.execute(statement)
             finally:
                 if previous_search_path is not None:
                     with suppress(Exception):
@@ -367,6 +373,258 @@ class TaskStateCache():
         duckdb_sql_runner.__name__ = task_name
         self._duckdb_sql_functions[task_name] = duckdb_sql_runner
         return duckdb_sql_runner
+
+    def _build_duckdb_sql_parameters(self, runtime_config: RuntimeConfig) -> dict[str, object]:
+        """Provide runtime config entries as named SQL parameters."""
+        runtime_values = runtime_config.as_dict()
+        config_block = self.tasks_config.get("config", {})
+        duckdb_conn = runtime_values.get("duckdb")
+        parameters: dict[str, object] = {}
+        for key, value in runtime_values.items():
+            if key == "duckdb" or value is duckdb_conn:
+                continue
+            entry_spec = config_block.get(key)
+            include_override = self._extract_include_override(entry_spec)
+            if include_override is not None:
+                parameters[key] = include_override
+                continue
+            parameters[key] = value
+        return parameters
+
+    def _extract_include_override(self, entry_spec: Mapping[str, object] | object) -> object | None:
+        """Return resolved include path(s) for config entries defined solely via include."""
+        if not isinstance(entry_spec, Mapping):
+            return None
+        include_value = entry_spec.get("include")
+        other_keys = [name for name in entry_spec.keys() if name != "include"]
+        if include_value is None or other_keys:
+            return None
+        return self._normalise_include_value(include_value)
+
+    def _normalise_include_value(self, include_value: object) -> object | None:
+        if isinstance(include_value, str):
+            return self._resolve_include_path(include_value)
+        if isinstance(include_value, Iterable):
+            resolved_entries: list[str] = []
+            for entry in include_value:
+                if not isinstance(entry, str):
+                    continue
+                resolved_entries.append(self._resolve_include_path(entry))
+            if not resolved_entries:
+                return None
+            return resolved_entries
+        return None
+
+    def _resolve_include_path(self, include_entry: str) -> str:
+        entry_path = Path(include_entry)
+        if entry_path.is_absolute():
+            return str(entry_path.resolve())
+        return str((self.tasks_root_dir / entry_path).resolve())
+
+    def _split_duckdb_sql(self, sql: str) -> list[str]:
+        statements: list[str] = []
+        current: list[str] = []
+        in_single = False
+        in_double = False
+        in_line_comment = False
+        in_block_comment = False
+        preserve_line_comment = False
+        preserve_block_comment = False
+        has_content = False
+        i = 0
+        length = len(sql)
+        while i < length:
+            ch = sql[i]
+            nxt = sql[i + 1] if i + 1 < length else ""
+
+            if in_single:
+                current.append(ch)
+                if ch == "'" and nxt == "'":
+                    current.append(nxt)
+                    i += 2
+                    continue
+                if ch == "'":
+                    in_single = False
+                else:
+                    if not ch.isspace():
+                        has_content = True
+                i += 1
+                continue
+
+            if in_double:
+                current.append(ch)
+                if ch == '"' and nxt == '"':
+                    current.append(nxt)
+                    i += 2
+                    continue
+                if ch == '"':
+                    in_double = False
+                else:
+                    if not ch.isspace():
+                        has_content = True
+                i += 1
+                continue
+
+            if in_line_comment:
+                if preserve_line_comment:
+                    current.append(ch)
+                if ch == "\n":
+                    in_line_comment = False
+                    preserve_line_comment = False
+                i += 1
+                continue
+
+            if in_block_comment:
+                if preserve_block_comment:
+                    current.append(ch)
+                if ch == "*" and nxt == "/":
+                    if preserve_block_comment:
+                        current.append(nxt)
+                    in_block_comment = False
+                    preserve_block_comment = False
+                    i += 2
+                else:
+                    i += 1
+                continue
+
+            if ch == "-" and nxt == "-":
+                preserve_line_comment = has_content
+                if preserve_line_comment:
+                    current.append(ch)
+                    current.append(nxt)
+                in_line_comment = True
+                i += 2
+                continue
+
+            if ch == "/" and nxt == "*":
+                preserve_block_comment = has_content
+                if preserve_block_comment:
+                    current.append(ch)
+                    current.append(nxt)
+                in_block_comment = True
+                i += 2
+                continue
+
+            if ch == "'":
+                in_single = True
+                current.append(ch)
+                has_content = True
+                i += 1
+                continue
+
+            if ch == '"':
+                in_double = True
+                current.append(ch)
+                has_content = True
+                i += 1
+                continue
+
+            if ch == ";":
+                statement = "".join(current).strip()
+                if statement and not statement.startswith(("--", "/*")):
+                    statements.append(statement)
+                current = []
+                has_content = False
+                i += 1
+                continue
+
+            current.append(ch)
+            if not ch.isspace():
+                has_content = True
+            i += 1
+
+        tail = "".join(current).strip()
+        if tail and not tail.startswith(("--", "/*")):
+            statements.append(tail)
+        return statements
+
+    def _extract_statement_parameters(
+        self,
+        statement: str,
+        available: Mapping[str, object],
+    ) -> dict[str, object]:
+        used: set[str] = set()
+        in_single = False
+        in_double = False
+        in_line_comment = False
+        in_block_comment = False
+        i = 0
+        length = len(statement)
+
+        while i < length:
+            ch = statement[i]
+            nxt = statement[i + 1] if i + 1 < length else ""
+
+            if in_single:
+                if ch == "'" and nxt == "'":
+                    i += 2
+                    continue
+                if ch == "'":
+                    in_single = False
+                i += 1
+                continue
+
+            if in_double:
+                if ch == '"' and nxt == '"':
+                    i += 2
+                    continue
+                if ch == '"':
+                    in_double = False
+                i += 1
+                continue
+
+            if in_line_comment:
+                if ch == "\n":
+                    in_line_comment = False
+                i += 1
+                continue
+
+            if in_block_comment:
+                if ch == "*" and nxt == "/":
+                    in_block_comment = False
+                    i += 2
+                else:
+                    i += 1
+                continue
+
+            if ch == "-" and nxt == "-":
+                in_line_comment = True
+                i += 2
+                continue
+
+            if ch == "/" and nxt == "*":
+                in_block_comment = True
+                i += 2
+                continue
+
+            if ch == "'":
+                in_single = True
+                i += 1
+                continue
+
+            if ch == '"':
+                in_double = True
+                i += 1
+                continue
+
+            if (
+                ch == ":"
+                and nxt
+                and (nxt.isalpha() or nxt == "_")
+                and (i == 0 or statement[i - 1] != ":")
+            ):
+                start = i + 1
+                while start < length and (statement[start].isalnum() or statement[start] == "_"):
+                    start += 1
+                name = statement[i + 1 : start]
+                if name in available:
+                    used.add(name)
+                i = start
+                continue
+
+            i += 1
+
+        return {name: available[name] for name in used}
 
     def _resolve_task_file_path(self, file_path: str) -> Path:
         candidate = Path(file_path)
@@ -521,13 +779,25 @@ class TaskStateCache():
         else:
             return "", ""
 
-    def build_runtime_config(self) -> RuntimeConfig:
+    def build_runtime_config(
+        self,
+        task_name: str | None = None,
+        task_lang: str | None = None,
+    ) -> RuntimeConfig:
         """Construct a runtime configuration for task execution."""
         tasks_config_path = Path(self.pipeline_config.TASKS_CONFIG_PATH)
+        task_info: dict[str, str | None] | None = None
+        if task_name:
+            resolved_lang = task_lang or self._get_task_language(task_name)
+            task_info = {
+                "task_name": task_name,
+                "task_lang": resolved_lang,
+            }
         return RuntimeConfig.from_tasks_config(
             self.tasks_config,
             base_dir=tasks_config_path.parent,
             fallback=self.pipeline_config,
+            task_info=task_info,
         )
 
     def get_py_func_name(self, task_name: str) -> str:
@@ -835,7 +1105,7 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
         for arg_name, arg_value in func_args.items():
             if arg_name not in kwargs:
                 kwargs[arg_name] = arg_value
-    runtime_config = tscache.build_runtime_config()
+    runtime_config = tscache.build_runtime_config(task_name=task_name)
     task_callable = tscache.get_python_callable(task_name)
     signature = inspect.signature(task_callable)
     call_args, call_kwargs, missing = plan_python_call(

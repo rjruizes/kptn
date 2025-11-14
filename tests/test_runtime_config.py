@@ -70,6 +70,23 @@ def test_runtime_config_delegates_to_fallback():
     assert runtime.answer == 42
 
 
+def test_runtime_config_passes_task_info_to_callable():
+    config = {"meta": "tests.runtime_config_fixtures:build_value_with_task_info"}
+    runtime = RuntimeConfig.from_config(
+        config,
+        task_info={"task_name": "fruits", "task_lang": "python"},
+    )
+
+    assert runtime["meta"] == {"task_name": "fruits", "task_lang": "python"}
+
+
+def test_runtime_config_defaults_task_info_when_not_provided():
+    config = {"meta": "tests.runtime_config_fixtures:build_value_with_task_info"}
+    runtime = RuntimeConfig.from_config(config)
+
+    assert runtime["meta"] == {"task_name": None, "task_lang": None}
+
+
 def test_runtime_config_supports_duckdb_mapping_alias():
     config = {
         "duckdb": {

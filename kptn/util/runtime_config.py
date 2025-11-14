@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import re
 import sys
@@ -73,7 +74,9 @@ class RuntimeConfig:
     The configuration is resolved as follows:
 
     * Plain values are copied as-is (after deep-merging any ``include`` files).
-    * Strings of the form ``module.path:function`` are imported and executed.
+    * Strings of the form ``module.path:function`` are imported and executed. If the
+      callable defines a ``task_info`` parameter, a dictionary containing the current
+      task metadata will be provided when available (with ``None`` defaults otherwise).
     * ``include`` entries are treated as JSON/YAML files whose contents are
       merged into the runtime configuration prior to resolving remaining keys.
     """
@@ -92,6 +95,7 @@ class RuntimeConfig:
         *,
         base_dir: str | Path | None = None,
         fallback: Any | None = None,
+        task_info: Mapping[str, Any] | None = None,
     ) -> "RuntimeConfig":
         """Create a runtime config from a full tasks configuration mapping."""
 
@@ -99,7 +103,7 @@ class RuntimeConfig:
         module_path = getattr(fallback, "PY_MODULE_PATH", None) if fallback else None
         extra_paths = getattr(fallback, "PY_TASKS_DIRS", None) if fallback else None
         ensure_pythonpath(base_dir, module_path, extra_paths)
-        resolved = cls._resolve_config_block(config_block, base_dir)
+        resolved = cls._resolve_config_block(config_block, base_dir, task_info)
         return cls(resolved, fallback)
 
     @classmethod
@@ -109,6 +113,7 @@ class RuntimeConfig:
         *,
         base_dir: str | Path | None = None,
         fallback: Any | None = None,
+        task_info: Mapping[str, Any] | None = None,
     ) -> "RuntimeConfig":
         """Alternate constructor when only the ``config`` block is available."""
 
@@ -116,7 +121,7 @@ class RuntimeConfig:
         module_path = getattr(fallback, "PY_MODULE_PATH", None) if fallback else None
         extra_paths = getattr(fallback, "PY_TASKS_DIRS", None) if fallback else None
         ensure_pythonpath(base_dir, module_path, extra_paths)
-        resolved = cls._resolve_config_block(config_block, base_dir)
+        resolved = cls._resolve_config_block(config_block, base_dir, task_info)
         return cls(resolved, fallback)
 
     @classmethod
@@ -124,9 +129,10 @@ class RuntimeConfig:
         cls,
         config_block: Mapping[str, Any],
         base_dir: str | Path | None,
+        task_info: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         base_path = Path(base_dir) if base_dir else Path.cwd()
-        resolved_entry = cls._resolve_entry(dict(config_block), base_path)
+        resolved_entry = cls._resolve_entry(dict(config_block), base_path, task_info)
         resolved_value = resolved_entry.value
         if not isinstance(resolved_value, Mapping):
             raise RuntimeConfigError("Config block must decode to a mapping")
@@ -171,17 +177,27 @@ class RuntimeConfig:
             resolved[alias] = connection
 
     @classmethod
-    def _resolve_value(cls, value: Any, base_path: Path) -> Any:
-        return cls._resolve_entry(value, base_path).value
+    def _resolve_value(
+        cls,
+        value: Any,
+        base_path: Path,
+        task_info: Mapping[str, Any] | None,
+    ) -> Any:
+        return cls._resolve_entry(value, base_path, task_info).value
 
     @classmethod
-    def _resolve_entry(cls, value: Any, base_path: Path) -> "_ResolvedEntry":
+    def _resolve_entry(
+        cls,
+        value: Any,
+        base_path: Path,
+        task_info: Mapping[str, Any] | None,
+    ) -> "_ResolvedEntry":
         if isinstance(value, Mapping):
-            return cls._resolve_mapping_entry(dict(value), base_path)
+            return cls._resolve_mapping_entry(dict(value), base_path, task_info)
         if isinstance(value, list):
             resolved_items: list[Any] = []
             for item in value:
-                item_entry = cls._resolve_entry(item, base_path)
+                item_entry = cls._resolve_entry(item, base_path, task_info)
                 if item_entry.aliases:
                     raise RuntimeConfigError(
                         "Alias definitions are not supported inside lists"
@@ -189,7 +205,7 @@ class RuntimeConfig:
                 resolved_items.append(item_entry.value)
             return _ResolvedEntry(resolved_items, [])
         if isinstance(value, str):
-            callable_result = cls._maybe_call_callable(value.strip())
+            callable_result = cls._maybe_call_callable(value.strip(), task_info)
             if callable_result is not _Sentinel.NO_RESULT:
                 return _ResolvedEntry(callable_result, [])
             return _ResolvedEntry(value, [])
@@ -200,9 +216,10 @@ class RuntimeConfig:
         cls,
         mapping: dict[str, Any],
         base_path: Path,
+        task_info: Mapping[str, Any] | None,
     ) -> "_ResolvedEntry":
         if cls._is_config_entry_mapping(mapping):
-            return cls._resolve_config_entry_mapping(mapping, base_path)
+            return cls._resolve_config_entry_mapping(mapping, base_path, task_info)
 
         include_value = mapping.pop("include", None)
 
@@ -210,7 +227,7 @@ class RuntimeConfig:
         if include_value is not None:
             for include_path in cls._normalise_includes(include_value):
                 include_data_raw = cls._load_include(base_path, include_path)
-                include_entry = cls._resolve_entry(include_data_raw, base_path)
+                include_entry = cls._resolve_entry(include_data_raw, base_path, task_info)
                 include_value_resolved = include_entry.value
                 if not isinstance(include_value_resolved, Mapping):
                     raise RuntimeConfigError(
@@ -225,7 +242,7 @@ class RuntimeConfig:
         for key, raw_value in mapping.items():
             if key == "include":
                 continue
-            resolved_entry = cls._resolve_entry(raw_value, base_path)
+            resolved_entry = cls._resolve_entry(raw_value, base_path, task_info)
             current[key] = resolved_entry.value
             if resolved_entry.aliases:
                 alias_entries.extend(resolved_entry.aliases)
@@ -241,6 +258,7 @@ class RuntimeConfig:
         cls,
         mapping: dict[str, Any],
         base_path: Path,
+        task_info: Mapping[str, Any] | None,
     ) -> "_ResolvedEntry":
         include_value = mapping.pop("include", None)
         if include_value is not None:
@@ -267,7 +285,7 @@ class RuntimeConfig:
                 raise RuntimeConfigError(
                     "Config entry 'function' must be provided as a string"
                 )
-            resolved_function = cls._resolve_entry(function_spec, base_path)
+            resolved_function = cls._resolve_entry(function_spec, base_path, task_info)
             if resolved_function.aliases:
                 raise RuntimeConfigError(
                     "Function specifications cannot define alias entries"
@@ -275,7 +293,7 @@ class RuntimeConfig:
             resolved_value = resolved_function.value
         else:
             value_spec = mapping.pop("value")
-            resolved_value_entry = cls._resolve_entry(value_spec, base_path)
+            resolved_value_entry = cls._resolve_entry(value_spec, base_path, task_info)
             if resolved_value_entry.aliases:
                 raise RuntimeConfigError(
                     "Alias definitions are not supported within config 'value' fields"
@@ -339,7 +357,11 @@ class RuntimeConfig:
         return alias_str
 
     @classmethod
-    def _maybe_call_callable(cls, candidate: str) -> Any:
+    def _maybe_call_callable(
+        cls,
+        candidate: str,
+        task_info: Mapping[str, Any] | None,
+    ) -> Any:
         match = cls._CALLABLE_PATTERN.match(candidate)
         if not match:
             return _Sentinel.NO_RESULT
@@ -360,7 +382,19 @@ class RuntimeConfig:
                 f"Resolved attribute '{attr_path}' from module '{module.__name__}' is not callable"
             )
 
+        signature = inspect.signature(attr)
+        if "task_info" in signature.parameters:
+            payload = cls._prepare_task_info(task_info)
+            return attr(task_info=payload)
+
         return attr()
+
+    @staticmethod
+    def _prepare_task_info(task_info: Mapping[str, Any] | None) -> dict[str, Any]:
+        payload = dict(task_info or {})
+        payload.setdefault("task_name", None)
+        payload.setdefault("task_lang", None)
+        return payload
 
     @classmethod
     def _load_include(cls, base_path: Path, include_entry: str) -> Any:
