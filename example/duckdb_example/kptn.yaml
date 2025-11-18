@@ -22,11 +22,11 @@ graphs:
 
 tasks:
   raw_numbers:
-    file: src/raw_numbers.sql
+    file: src/raw_numbers.sql # file://./src/raw_numbers.sql
     outputs:
     - duckdb://main.raw_numbers
   fruit_metrics:
-    file: src/fruit_metrics.sql
+    file: src/fruit_metrics.sql # file://./src/fruit_metrics.sql
     outputs:
     - duckdb://main.fruit_metrics
   fruit_summary:

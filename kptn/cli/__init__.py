@@ -17,6 +17,7 @@ from kptn.cli.task_validation import (
     _build_pipeline_config,
     _validate_python_tasks,
 )
+from kptn.lineage import SqlLineageAnalyzer, SqlLineageError
 
 try:
     from botocore.exceptions import NoCredentialsError, NoRegionError
@@ -49,6 +50,33 @@ def _infer_language(task_spec: dict[str, Any]) -> str:
     if suffix:
         return suffix.lstrip(".")
     return "unknown"
+
+
+def _infer_lineage_dialect(config: dict[str, Any], requested: Optional[str]) -> str:
+    """Infer the SQL dialect to use for lineage parsing."""
+
+    if requested:
+        return requested
+
+    tasks = config.get("tasks", {})
+    for task_spec in tasks.values():
+        spec_dict = task_spec if isinstance(task_spec, dict) else {}
+        outputs = spec_dict.get("outputs") or []
+        for output in outputs:
+            if isinstance(output, str) and "://" in output:
+                scheme = output.split("://", 1)[0]
+                if scheme:
+                    return scheme
+
+    db_setting = config.get("settings", {}).get("db")
+    if isinstance(db_setting, str) and db_setting:
+        return db_setting
+
+    return "duckdb"
+
+
+lineage_app = typer.Typer(help="Inspect SQL lineage for tasks defined in kptn.yaml.")
+app.add_typer(lineage_app, name="lineage")
 
 
 def _choose_pipeline(kap_conf: dict[str, Any], requested: Optional[str]) -> str:
@@ -458,6 +486,71 @@ def fetch(
             os.chdir(original_dir)
     else:
         _fetch_task()
+
+
+@lineage_app.command("columns")
+def lineage_columns(
+    table: str = typer.Argument(..., help="Table name to inspect (e.g., fruit_metrics)"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-p", help="Project directory containing kptn configuration"),
+    dialect: Optional[str] = typer.Option(None, "--dialect", help="SQL dialect to use for parsing (defaults to inferred value)"),
+):
+    """List the projected columns and upstream dependencies for a SQL-backed table."""
+
+    def _render_columns() -> None:
+        try:
+            kap_conf = read_config()
+        except FileNotFoundError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1)
+
+        resolved_dialect = _infer_lineage_dialect(kap_conf, dialect)
+        analyzer = SqlLineageAnalyzer(kap_conf, Path.cwd(), dialect=resolved_dialect)
+
+        try:
+            analyzer.build()
+        except (SqlLineageError, FileNotFoundError) as exc:
+            typer.echo(f"Failed to build SQL lineage: {exc}")
+            raise typer.Exit(1)
+
+        try:
+            metadata = analyzer.describe_table(table)
+        except KeyError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1)
+
+        dependencies = analyzer.depends_on(metadata.display_name)
+
+        typer.echo(f"Table: {metadata.display_name}")
+        typer.echo(f"Task: {metadata.task_name}")
+        typer.echo(f"SQL: {metadata.file_path}")
+
+        if metadata.columns:
+            typer.echo("Columns:")
+            for column in metadata.columns:
+                sources = metadata.column_sources.get(column)
+                if sources:
+                    typer.echo(f"  - {column}: {', '.join(sources)}")
+                else:
+                    typer.echo(f"  - {column}")
+        else:
+            typer.echo("Columns: <unknown>")
+
+        if dependencies:
+            typer.echo("Depends on:")
+            for dep in dependencies:
+                typer.echo(f"  - {dep}")
+        else:
+            typer.echo("Depends on: <none>")
+
+    if project_dir:
+        original_dir = os.getcwd()
+        os.chdir(project_dir)
+        try:
+            _render_columns()
+        finally:
+            os.chdir(original_dir)
+    else:
+        _render_columns()
 
 
 if __name__ == "__main__":
