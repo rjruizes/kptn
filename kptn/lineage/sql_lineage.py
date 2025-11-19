@@ -237,11 +237,18 @@ class SqlLineageAnalyzer:
         return ["*"]
 
     def _table_sql_name(self, table_expr: exp.Table) -> str:
+        name_expr = table_expr.this
+        name = ""
+        if hasattr(name_expr, "sql"):
+            name = name_expr.sql(dialect=self._dialect)
+        elif name_expr is not None:
+            name = str(name_expr)
+
         db_expr = table_expr.args.get("db")
         if db_expr:
             db_name = db_expr.sql(dialect=self._dialect)
-            return f"{db_name}.{table_expr.name}"
-        return table_expr.sql(dialect=self._dialect)
+            return f"{db_name}.{name}"
+        return name
 
     def _collect_referenced_tables(self, select_expr: exp.Select) -> set[str]:
         table_names: set[str] = set()
@@ -340,9 +347,12 @@ class SqlLineageAnalyzer:
             else:
                 qualifier_key = ""
 
+        alias_target = alias_map.get(qualifier_key)
+        alias_target_norm = self._normalize_identifier(alias_target) if alias_target else ""
+
         if qualifier_key and qualifier_key in cte_map:
             if qualifier_key in visited:
-                return {f"{alias_map.get(qualifier_key, qualifier_raw)}.{column.name}"}
+                return {f"{alias_target or qualifier_raw}.{column.name}"}
             cte_lineage = lineage_cache.get(qualifier_key)
             if cte_lineage is None:
                 visited.add(qualifier_key)
@@ -356,7 +366,23 @@ class SqlLineageAnalyzer:
                 lineage_cache[qualifier_key] = cte_lineage
             return set(cte_lineage.get(column.name, [f"{qualifier_raw}.{column.name}"]))
 
-        source_name = alias_map.get(qualifier_key, qualifier_raw)
+        if alias_target_norm and alias_target_norm in cte_map:
+            if alias_target_norm in visited:
+                return {f"{alias_target}.{column.name}"}
+            cte_lineage = lineage_cache.get(alias_target_norm)
+            if cte_lineage is None:
+                visited.add(alias_target_norm)
+                cte_lineage = self._column_lineage_internal(
+                    cte_map[alias_target_norm],
+                    cte_map,
+                    lineage_cache,
+                    visited,
+                )
+                visited.remove(alias_target_norm)
+                lineage_cache[alias_target_norm] = cte_lineage
+            return set(cte_lineage.get(column.name, [f"{alias_target}.{column.name}"]))
+
+        source_name = alias_target or qualifier_raw
         if source_name and column.name:
             return {f"{source_name}.{column.name}"}
         if column.name:
@@ -403,24 +429,27 @@ class SqlLineageAnalyzer:
             return aliases
 
         def add_source(table_expr: exp.Expression) -> None:
+            display = ""
             if isinstance(table_expr, exp.Table):
-                alias = table_expr.alias_or_name
-                if alias:
-                    key = self._normalize_identifier(alias)
-                    aliases[key] = alias
-                else:
-                    display = self._table_sql_name(table_expr)
-                    aliases[self._normalize_identifier(display)] = display
-            elif hasattr(table_expr, "alias_or_name"):
-                alias = table_expr.alias_or_name
-                if alias:
-                    aliases[self._normalize_identifier(alias)] = alias
+                display = self._table_sql_name(table_expr)
+            elif hasattr(table_expr, "sql"):
+                display = table_expr.sql(dialect=self._dialect)
+
+            alias = table_expr.alias_or_name if hasattr(table_expr, "alias_or_name") else None
+            if alias:
+                key = self._normalize_identifier(alias)
+                aliases[key] = display or alias
+            elif display:
+                aliases[self._normalize_identifier(display)] = display
 
         source = from_clause.this
         if source is not None:
             add_source(source)
 
         for join in from_clause.args.get("joins") or []:
+            add_source(join.this)
+
+        for join in select_expr.args.get("joins") or []:
             add_source(join.this)
 
         return aliases

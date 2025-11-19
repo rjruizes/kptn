@@ -18,6 +18,7 @@ from kptn.cli.task_validation import (
     _validate_python_tasks,
 )
 from kptn.lineage import SqlLineageAnalyzer, SqlLineageError
+from kptn.lineage.html_renderer import render_lineage_html
 
 try:
     from botocore.exceptions import NoCredentialsError, NoRegionError
@@ -75,8 +76,75 @@ def _infer_lineage_dialect(config: dict[str, Any], requested: Optional[str]) -> 
     return "duckdb"
 
 
+def _normalize_identifier(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return str(value).strip().strip('"').lower()
+
+
+def _candidate_table_keys(table_ref: str) -> list[str]:
+    value = table_ref.strip()
+    keys: list[str] = []
+    normalized_full = _normalize_identifier(value)
+    if normalized_full:
+        keys.append(normalized_full)
+    if "." in value:
+        suffix = _normalize_identifier(value.split(".")[-1])
+        if suffix and suffix not in keys:
+            keys.append(suffix)
+    return keys
+
+
 lineage_app = typer.Typer(help="Inspect SQL lineage for tasks defined in kptn.yaml.")
 app.add_typer(lineage_app, name="lineage")
+
+
+def _build_lineage_payload(
+    analyzer: SqlLineageAnalyzer,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Construct table/edge payloads for the lineage visualizer."""
+
+    metadata_entries = list(analyzer.tables().values())
+
+    tables_payload: list[dict[str, Any]] = []
+    table_lookup: dict[str, int] = {}
+    for index, metadata in enumerate(metadata_entries):
+        tables_payload.append(
+            {
+                "name": metadata.display_name,
+                "columns": list(metadata.columns),
+            }
+        )
+        for candidate in {metadata.display_name, metadata.table_key}:
+            key = _normalize_identifier(candidate)
+            if key:
+                table_lookup[key] = index
+
+    lineage_payload: list[dict[str, Any]] = []
+    for destination_index, metadata in enumerate(metadata_entries):
+        for column in metadata.columns:
+            for source in metadata.column_sources.get(column, []):
+                if "." not in source:
+                    continue
+                table_part, column_name = source.rsplit(".", 1)
+                if not column_name:
+                    continue
+                candidates = _candidate_table_keys(table_part)
+                source_index = None
+                for candidate in candidates:
+                    if candidate in table_lookup:
+                        source_index = table_lookup[candidate]
+                        break
+                if source_index is None:
+                    continue
+                lineage_payload.append(
+                    {
+                        "from": [source_index, column_name],
+                        "to": [destination_index, column],
+                    }
+                )
+
+    return tables_payload, lineage_payload
 
 
 def _choose_pipeline(kap_conf: dict[str, Any], requested: Optional[str]) -> str:
@@ -551,6 +619,48 @@ def lineage_columns(
             os.chdir(original_dir)
     else:
         _render_columns()
+
+
+@lineage_app.command("visualize")
+def lineage_visualize(
+    output: Path = typer.Option(Path("lineage.html"), "--output", "-o", help="Destination HTML file for the lineage visualizer"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-p", help="Project directory containing kptn configuration"),
+    dialect: Optional[str] = typer.Option(None, "--dialect", help="SQL dialect to use for parsing (defaults to inferred value)"),
+):
+    """Generate an interactive column-lineage HTML visualization."""
+
+    def _generate_visualizer() -> None:
+        try:
+            kap_conf = read_config()
+        except FileNotFoundError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1)
+
+        resolved_dialect = _infer_lineage_dialect(kap_conf, dialect)
+        analyzer = SqlLineageAnalyzer(kap_conf, Path.cwd(), dialect=resolved_dialect)
+
+        try:
+            analyzer.build()
+        except (SqlLineageError, FileNotFoundError) as exc:
+            typer.echo(f"Failed to build SQL lineage: {exc}")
+            raise typer.Exit(1)
+
+        tables_payload, lineage_payload = _build_lineage_payload(analyzer)
+
+        html = render_lineage_html(tables_payload, lineage_payload)
+        output_path = output if output.is_absolute() else Path.cwd() / output
+        output_path.write_text(html, encoding="utf-8")
+        typer.echo(f"Lineage visualization written to {output_path}")
+
+    if project_dir:
+        original_dir = os.getcwd()
+        os.chdir(project_dir)
+        try:
+            _generate_visualizer()
+        finally:
+            os.chdir(original_dir)
+    else:
+        _generate_visualizer()
 
 
 if __name__ == "__main__":

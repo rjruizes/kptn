@@ -108,3 +108,58 @@ def test_lineage_handles_multistatement_cte(tmp_path):
         "READ_CSV(GETVARIABLE('staging_input'), header = TRUE, union_by_name = TRUE).redcap_event_name",
         "READ_CSV(GETVARIABLE('staging_input'), header = TRUE, union_by_name = TRUE).visit1_date",
     }
+
+
+def test_lineage_resolves_visit_dates_dependencies(tmp_path):
+    sql_file = tmp_path / "visit_dates.sql"
+    sql_file.write_text(
+        """
+        create or replace table analytics.visit_dates as
+        with schedule as (
+            select
+                participant_id,
+                route_id,
+                planned_start,
+                planned_end
+            from staging.visit_plan
+        ),
+        overrides as (
+            select
+                participant_id,
+                start_override,
+                end_override
+            from staging.visit_adjustments
+        )
+        select
+            s.participant_id,
+            coalesce(o.start_override, s.planned_start) as visit_start_date,
+            coalesce(o.end_override, s.planned_end) as visit_end_date
+        from schedule s
+        left join overrides o on s.participant_id = o.participant_id;
+        """,
+        encoding="utf-8",
+    )
+
+    config = {
+        "tasks": {
+            "visit_dates": {
+                "file": str(sql_file.relative_to(tmp_path)),
+                "outputs": ["duckdb://analytics.visit_dates"],
+            }
+        }
+    }
+
+    analyzer = SqlLineageAnalyzer(config, project_root=tmp_path, dialect="duckdb")
+    analyzer.build()
+
+    metadata = analyzer.describe_table("analytics.visit_dates")
+    assert metadata.columns == ["participant_id", "visit_start_date", "visit_end_date"]
+    assert set(metadata.source_tables) == {"visit_plan", "visit_adjustments"}
+    assert set(metadata.column_sources["visit_start_date"]) == {
+        "staging.visit_adjustments.start_override",
+        "staging.visit_plan.planned_start",
+    }
+    assert set(metadata.column_sources["visit_end_date"]) == {
+        "staging.visit_adjustments.end_override",
+        "staging.visit_plan.planned_end",
+    }
