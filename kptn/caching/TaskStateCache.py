@@ -123,6 +123,7 @@ class TaskStateCache():
             self.logger = get_logger()
             self._duckdb_sql_functions: dict[str, Callable[..., object]] = {}
             self._python_module_cache: dict[str, ModuleType] = {}
+            self._task_has_prior_runs: dict[str, bool] = {}
         return self
 
     def __str__(self):
@@ -1031,9 +1032,17 @@ class TaskStateCache():
             start_time=datetime.now().isoformat(),
         )
         task = self.get_task(task_name)
-        if (self.is_python_task(task_name, task) or self.is_duckdb_sql_task(task_name, task)) and self.pipeline_config.SUBSET_MODE:
+        existing_state = self.db_client.get_task(
+            task_name,
+            include_data=False,
+            subset_mode=self.pipeline_config.SUBSET_MODE,
+        )
+        self._task_has_prior_runs[task_name] = bool(existing_state)
+        is_python_task = self.is_python_task(task_name, task)
+        is_duckdb_task = self.is_duckdb_sql_task(task_name, task)
+        if (is_python_task or is_duckdb_task) and self.pipeline_config.SUBSET_MODE:
             # When in subset mode, only create the task if it doesn't exist
-            if not self.db_client.get_task(task_name):
+            if not existing_state:
                 self.db_client.create_task(task_name, initial_state)
         else:
             self.db_client.create_task(task_name, initial_state)
@@ -1046,7 +1055,10 @@ class TaskStateCache():
         dep_states = self.get_dep_states(task_name)
         input_file_hashes = self.get_input_hashes(task_name, dep_states)
         input_data_hashes = self.get_data_hashes(task_name, dep_states)
-        output_hashes = self.hasher.hash_task_outputs(task_name)
+        should_hash_outputs = self._task_has_prior_runs.pop(task_name, False)
+        output_hashes = None
+        if should_hash_outputs:
+            output_hashes = self.hasher.hash_task_outputs(task_name)
 
         # Since this function is called by RunTask, a separate flow from the main flow,
         # recompute the hashes to ensure they are up-to-date

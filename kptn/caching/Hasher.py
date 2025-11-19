@@ -662,12 +662,12 @@ class Hasher:
                 if len(matching_files) > 0:
                     file_list.update(matching_files)
                 else:
-                    print(f"Warning: File {glob_pattern} not found")
+                    logger.warning("File %s not found", glob_pattern)
             else:
                 if (Path(self.output_dir) / output_filepath).exists():
                     file_list.add(output_filepath)
                 else:
-                    print(f"Warning: File {output_filepath} not found")
+                    logger.warning("File %s not found", output_filepath)
         # Sort the files by name
         sorted_file_list = sorted(file_list)
 
@@ -710,7 +710,7 @@ class Hasher:
                 glob_pattern = str(Path(self.output_dir) / pattern)
                 matching_files = glob.glob(glob_pattern)
                 if len(matching_files) == 0:
-                    print(f"Warning: File {glob_pattern} not found")
+                    logger.warning("File %s not found", glob_pattern)
                 else:
                     file_list.update(matching_files)
         # Sort the files by name
