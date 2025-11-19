@@ -177,13 +177,18 @@ def codegen(
     graph: Optional[str] = typer.Option(
         None, "--graph", "-g", help="Graph name to generate flows for"
     ),
+    emit_vanilla_runner: Optional[bool] = typer.Option(
+        None,
+        "--emit-vanilla-runner/--no-emit-vanilla-runner",
+        help="Also emit a vanilla Python runner alongside Step Functions artifacts (default: auto)",
+    ),
 ):
     """
     Generate Prefect flows (Python files) from the kptn.yaml file
     """
     def _generate() -> None:
         try:
-            generate_files(graph=graph)
+            generate_files(graph=graph, emit_vanilla_runner=emit_vanilla_runner)
         except ValueError as exc:
             typer.echo(str(exc))
             raise typer.Exit(1) from exc

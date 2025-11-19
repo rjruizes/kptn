@@ -129,13 +129,34 @@ class TaskStateCache():
         storage_key = get_storage_key(self.pipeline_config)
         return f"TaskStateCache(storage_key={storage_key}, client={self.db_client}, tasks_config={self.tasks_config})"
 
-    def is_flow_prefect(self) -> str:
-        """Check if the workflow type is Prefect"""
-        return self.tasks_config.get("settings", {}).get("flow_type") == "prefect"
+    def _flow_type_override(self) -> str | None:
+        """Return flow type override from environment, if provided."""
+        override = os.getenv("KPTN_FLOW_TYPE")
+        if override:
+            return override.strip().lower()
+        return None
 
-    def is_flow_stepfunctions(self) -> str:
-        """Check if the workflow type is Step Functions"""
-        return self.tasks_config.get("settings", {}).get("flow_type") == "stepfunctions"
+    def _configured_flow_type(self) -> str | None:
+        """Return the flow type configured in kptn.yaml."""
+        settings = self.tasks_config.get("settings")
+        if not isinstance(settings, Mapping):
+            return None
+        configured = settings.get("flow_type")
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip().lower()
+        return None
+
+    def _effective_flow_type(self) -> str:
+        """Compute the effective flow type, honoring environment overrides."""
+        return self._flow_type_override() or self._configured_flow_type() or "vanilla"
+
+    def is_flow_prefect(self) -> bool:
+        """Check if the workflow type should use Prefect execution."""
+        return self._effective_flow_type() == "prefect"
+
+    def is_flow_stepfunctions(self) -> bool:
+        """Check if the workflow type uses Step Functions artifacts."""
+        return self._effective_flow_type() == "stepfunctions"
 
     def get_dep_list(self, task_name: str) -> list[str]:
         """Return the names of the dependencies of a task."""

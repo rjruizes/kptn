@@ -138,6 +138,10 @@ Task `B` will map over the result list, setting `US_STATE=${US_STATE}` as an env
 
 For example, if `A` returned the list `['NC', 'SC']`, `B/run.R` would be called 2 times, once with `US_STATE=NC` and once with `US_STATE=SC`
 
+## Local runners for Step Functions projects
+
+Projects that render AWS Step Functions flows still need a way to run pipelines locally. The `codegen` command emits a vanilla Python runner next to the Step Functions JSON files whenever the project’s `flow_type` is `stepfunctions`.
+
 
 ## Frequently Asked Questions (FAQ)
 

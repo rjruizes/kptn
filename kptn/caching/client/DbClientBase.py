@@ -1,5 +1,6 @@
 import os
 from pydantic import BaseModel
+from typing import Mapping
 
 class DbClientBase(BaseModel):
     def create_task(self, task_name: str, value, data=None):
@@ -27,15 +28,30 @@ class DbClientBase(BaseModel):
         pass
 
 
+def _normalize_db_type(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
 def init_db_client(table_name, storage_key, pipeline, tasks_config=None, tasks_config_path=None) -> DbClientBase:
     """Return a database client; choose between DynamoDB and SQLite based on db setting in config"""
     
     # Default to DynamoDB for backwards compatibility
     db_type = "dynamodb"
-    
-    # Read db type from tasks config if available
-    if tasks_config and "settings" in tasks_config:
-        db_type = tasks_config["settings"].get("db", "dynamodb")
+
+    env_override = _normalize_db_type(os.getenv("KPTN_DB_TYPE"))
+    if env_override:
+        db_type = env_override
+    else:
+        settings_block = None
+        if isinstance(tasks_config, Mapping):
+            settings_block = tasks_config.get("settings")
+        if isinstance(settings_block, Mapping):
+            configured = _normalize_db_type(settings_block.get("db"))
+            if configured:
+                db_type = configured
     
     if db_type == "dynamodb":
         from kptn.caching.client.DbClientDDB import DbClientDDB

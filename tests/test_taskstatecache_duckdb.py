@@ -206,3 +206,25 @@ def test_duckdb_sql_runner_uses_runtime_config_callable(tmp_path):
     json_calls = [call for call in conn.calls if "read_json_auto" in call[0]]
     assert json_calls
     assert json_calls[0][1] == {"config": expected_path}
+
+
+def test_flow_type_override_defaults_to_config(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.tasks_config["settings"] = {"flow_type": "prefect"}
+
+    assert cache._effective_flow_type() == "prefect"
+    assert cache.is_flow_prefect()
+    assert not cache.is_flow_stepfunctions()
+
+
+def test_flow_type_override_honors_env(monkeypatch, tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.tasks_config["settings"] = {"flow_type": "stepfunctions"}
+    assert cache.is_flow_stepfunctions()
+
+    monkeypatch.setenv("KPTN_FLOW_TYPE", "vanilla")
+    assert not cache.is_flow_stepfunctions()
+    assert cache._effective_flow_type() == "vanilla"
+
+    monkeypatch.setenv("KPTN_FLOW_TYPE", "prefect")
+    assert cache.is_flow_prefect()

@@ -1,7 +1,7 @@
 import subprocess
 from os import path
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 import jinja2
 from jinja2 import TemplateNotFound
 
@@ -106,11 +106,21 @@ def relative_path_from_flows_dir_to_r_tasks_dir(kap_conf, r_tasks_dir_entry: str
     r_tasks_dir = Path(r_tasks_dir_entry)
     return path.relpath(r_tasks_dir, flows_dir)
 
-def generate_files(graph: str = None):
+def _create_environment(flow_type: str) -> jinja2.Environment:
+    templates_path = path.join(codegen_dir, "templates", flow_type)
+    environment = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(templates_path),
+    )
+    environment.filters["debug"] = debug
+    return environment
+
+
+def generate_files(graph: str = None, emit_vanilla_runner: Optional[bool] = None):
     kap_conf = read_config()["settings"]
     # flows_dir = path.join(py_dir, 'flows')
     root_dir = Path('.')
     flows_dir = root_dir / kap_conf['flows_dir']
+    flows_dir.mkdir(parents=True, exist_ok=True)
     flow_type = kap_conf.get('flow_type', 'vanilla')
     if flow_type not in FLOW_TYPE_CONFIG:
         flow_type = 'vanilla'
@@ -118,13 +128,9 @@ def generate_files(graph: str = None):
         flow_type,
         DEFAULT_FLOW_CONFIG,
     )
-    templates_path = path.join(codegen_dir, 'templates', flow_type)
-    environment = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(templates_path),
-    )
+    environment = _create_environment(flow_type)
     tasks_conf_path = "kptn.yaml"
     conf = read_tasks_config(root_dir / tasks_conf_path)
-    environment.filters['debug'] = debug
     tasks_dict = conf['tasks']
 
     r_tasks_dir_values: list[str] = []
@@ -151,6 +157,7 @@ def generate_files(graph: str = None):
         graphs = {graph: graphs_block[graph]}
     else:
         graphs = graphs_block
+    render_contexts: dict[str, dict[str, Any]] = {}
     # Write flows/*.py files
     for graph_name in graphs:
         deps_lookup = graphs[graph_name]["tasks"]
@@ -198,6 +205,7 @@ def generate_files(graph: str = None):
         output_file = path.join(flows_dir, f'{graph_name}{flow_extension}')
         with open(output_file, 'w') as f:
             f.write(rendered)
+        render_contexts[graph_name] = render_context
 
     # Write run.py file for stepfunctions (once, not per graph)
     run_template_name = flow_config.get('run_template')
@@ -230,5 +238,23 @@ def generate_files(graph: str = None):
         #     with open(output_file, 'w') as f:
         #         f.write(rendered)
 
-    # print("Formatting code...")
-    # subprocess.run(["black", "-q", "."], cwd=flows_dir)
+    # Emit vanilla runner for stepfunctions projects
+    if emit_vanilla_runner is None:
+        emit_vanilla_runner = flow_type == "stepfunctions"
+
+    if emit_vanilla_runner:
+        vanilla_config = FLOW_TYPE_CONFIG["vanilla"]
+        vanilla_environment = _create_environment("vanilla")
+        vanilla_flow_template = vanilla_config.get("flow_template")
+        vanilla_extension = vanilla_config.get("flow_extension", ".py")
+        for graph_name, render_context in render_contexts.items():
+            if not vanilla_flow_template:
+                continue
+            vanilla_rendered = vanilla_environment.get_template(
+                vanilla_flow_template
+            ).render(**render_context)
+            vanilla_output_file = path.join(
+                flows_dir, f"{graph_name}{vanilla_extension}"
+            )
+            with open(vanilla_output_file, "w") as f:
+                f.write(vanilla_rendered)
