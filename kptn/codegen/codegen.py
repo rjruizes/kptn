@@ -212,6 +212,7 @@ def generate_files(graph: str = None, emit_vanilla_runner: Optional[bool] = None
     if run_template_name:
         run_context = {
             "rel_tasks_conf_path": relative_path_from_flows_dir_to_tasks_conf_path(kap_conf),
+            "imports_slot": kap_conf.get("imports_slot"),
         }
         run_rendered = environment.get_template(run_template_name).render(
             **run_context

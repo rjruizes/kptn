@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+{% if imports_slot -%}
+{{ imports_slot }}
+{%- endif -%}
 from kptn.caching.TaskStateCache import run_task
 from kptn.util.pipeline_config import PipelineConfig
 
