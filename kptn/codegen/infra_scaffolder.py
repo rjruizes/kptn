@@ -25,6 +25,20 @@ class ScaffoldReport:
     terraform_tfvars_path: Path | None
     warnings: list[str]
 
+    @property
+    def state_machine_file(self) -> Path | None:
+        """Backward-compatible accessor for the first state machine definition."""
+        if not self.state_machine_files:
+            return None
+        first_graph = sorted(self.state_machine_files)[0]
+        return self.state_machine_files[first_graph]
+
+    @property
+    def state_machine_file_exists(self) -> bool:
+        """Return True when the first state machine definition file exists."""
+        file_path = self.state_machine_file
+        return file_path.exists() if file_path else False
+
 
 def _ensure_trailing_newline(content: str) -> str:
     return content if content.endswith("\n") else f"{content}\n"
@@ -70,11 +84,48 @@ def _format_tfvars(values: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_state_machines_default(state_machines: dict[str, dict[str, str]]) -> str:
+    """Render a Terraform map for the state_machines variable default."""
+    lines = ["{", ""]
+    for name, config in sorted(state_machines.items()):
+        definition_file = config["definition_file"]
+        lines.extend(
+            [
+                f"  {name} = {{",
+                f'    definition_file = "{definition_file}"',
+                "  }",
+                "",
+            ]
+        )
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _discover_graph_names(flows_dir: Path) -> list[str]:
+    """Return all graph names under flows_dir by inspecting .json/.json.tpl files."""
+
+    def _graph_name(path: Path) -> str:
+        # Handle files like foo.json.tpl by stripping both suffixes
+        base = path.stem  # remove last suffix
+        if base.endswith(".json"):
+            base = Path(base).stem
+        return base
+
+    graph_names = {
+        _graph_name(path)
+        for pattern in ("*.json.tpl", "*.json")
+        for path in flows_dir.glob(pattern)
+    }
+    if not graph_names:
+        raise ValueError(f"No state machine definitions found in {flows_dir}")
+    return sorted(graph_names)
+
+
 def scaffold_stepfunctions_infra(
     *,
     output_dir: Path,
     pipeline_name: str,
-    graph_names: list[str],
+    graph_names: list[str] | None = None,
     flows_dir: Path,
     force: bool = False,
     tfvars_values: dict[str, Any] | None = None,
@@ -82,6 +133,9 @@ def scaffold_stepfunctions_infra(
 ) -> ScaffoldReport:
     output_dir = output_dir.resolve()
     flows_dir = flows_dir.resolve()
+
+    if graph_names is None:
+        graph_names = _discover_graph_names(flows_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -113,7 +167,10 @@ def scaffold_stepfunctions_infra(
         "efs.tf": _load_template("efs.tf"),
         "batch.tf": _load_template("batch.tf"),
         "locals.tf": _load_template("locals.tf"),
-        "variables.tf": _load_template("variables.tf.tpl"),
+        "variables.tf": _load_template("variables.tf.tpl").replace(
+            "STATE_MACHINES_PLACEHOLDER",
+            _format_state_machines_default(state_machines_map),
+        ),
         "outputs.tf": _load_template("outputs.tf"),
         "README.md": _load_template("README.md.tpl").format(pipeline_name=pipeline_name),
         "DOCKER_BUILD.md": _load_template("DOCKER_BUILD.md"),

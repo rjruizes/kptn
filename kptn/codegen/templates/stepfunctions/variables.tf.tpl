@@ -14,6 +14,7 @@ variable "state_machines" {
     definition_file = string
   }))
   description = "Map of state machine configurations where key is the graph name and value contains the definition file path"
+  default     = STATE_MACHINES_PLACEHOLDER
 }
 
 variable "create_decider_lambda" {
