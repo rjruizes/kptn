@@ -17,7 +17,7 @@ from kptn.cli.task_validation import (
     _build_pipeline_config,
     _validate_python_tasks,
 )
-from kptn.lineage import SqlLineageAnalyzer, SqlLineageError
+from kptn.lineage import SqlLineageAnalyzer, SqlLineageError, TableMetadata
 from kptn.lineage.html_renderer import render_lineage_html
 
 try:
@@ -95,33 +95,161 @@ def _candidate_table_keys(table_ref: str) -> list[str]:
     return keys
 
 
+def _task_order_from_graph(
+    kap_conf: dict[str, Any],
+    graph_name: Optional[str],
+) -> Optional[list[str]]:
+    graphs = kap_conf.get("graphs") or {}
+    if not graphs:
+        return None
+
+    if graph_name:
+        graph_spec = graphs.get(graph_name)
+        if graph_spec is None:
+            available = ", ".join(sorted(graphs))
+            raise ValueError(
+                f"Graph '{graph_name}' not found; available graphs: {available}"
+            )
+    else:
+        graph_spec = next(iter(graphs.values()))
+
+    tasks = (graph_spec or {}).get("tasks") or {}
+    if not isinstance(tasks, dict):
+        return None
+    return list(tasks.keys())
+
+
 lineage_app = typer.Typer(help="Inspect SQL lineage for tasks defined in kptn.yaml.")
 app.add_typer(lineage_app, name="lineage")
 
 
 def _build_lineage_payload(
     analyzer: SqlLineageAnalyzer,
+    *,
+    task_order: Optional[list[str]] | None = None,
+    tasks_config: Optional[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Construct table/edge payloads for the lineage visualizer."""
+    """Construct table/edge payloads for the lineage visualizer.
+
+    ``task_order`` preserves the ordering of tables as they appear in kptn.yaml
+    (or a supplied task list) while still adding upstream dependencies that are
+    referenced but not produced by the project. ``tasks_config`` is accepted for
+    future configurability and aligns with the test helper signature.
+    """
+
+    if not task_order and tasks_config:
+        task_order = list(tasks_config.keys())
 
     metadata_entries = list(analyzer.tables().values())
 
+    if task_order:
+        task_to_metadata: dict[str, list[TableMetadata]] = {}
+        for metadata in metadata_entries:
+            task_to_metadata.setdefault(metadata.task_name, []).append(metadata)
+
+        ordered_metadata: list[TableMetadata] = []
+        for task_name in task_order:
+            ordered_metadata.extend(task_to_metadata.pop(task_name, []))
+
+        if task_to_metadata:
+            # Preserve original relative order for any tasks not listed in task_order.
+            for metadata in metadata_entries:
+                if metadata.task_name in task_to_metadata:
+                    ordered_metadata.append(metadata)
+                    remaining = task_to_metadata.get(metadata.task_name)
+                    if remaining and metadata in remaining:
+                        remaining.remove(metadata)
+                    if not remaining:
+                        task_to_metadata.pop(metadata.task_name, None)
+    else:
+        ordered_metadata = metadata_entries
+
     tables_payload: list[dict[str, Any]] = []
     table_lookup: dict[str, int] = {}
-    for index, metadata in enumerate(metadata_entries):
-        tables_payload.append(
-            {
-                "name": metadata.display_name,
-                "columns": list(metadata.columns),
-            }
-        )
-        for candidate in {metadata.display_name, metadata.table_key}:
-            key = _normalize_identifier(candidate)
-            if key:
-                table_lookup[key] = index
 
+    def _register_table(name: str, columns: list[str]) -> int:
+        primary_key = _normalize_identifier(name)
+        if primary_key and primary_key in table_lookup:
+            existing_index = table_lookup[primary_key]
+            entry = tables_payload[existing_index]
+            if (not entry.get("columns")) and columns:
+                entry["columns"] = columns
+            return existing_index
+
+        candidates = {name, *_candidate_table_keys(name)}
+        index = len(tables_payload)
+        tables_payload.append({"name": name, "columns": columns})
+        for candidate in candidates:
+            key = _normalize_identifier(candidate)
+            if key and key not in table_lookup:
+                table_lookup[key] = index
+        return index
+
+    def _register_task_outputs(task_name: str) -> None:
+        if not tasks_config:
+            return
+        task_spec = tasks_config.get(task_name) or {}
+        outputs = task_spec.get("outputs") or []
+        for output in outputs:
+            table_name = SqlLineageAnalyzer._output_identifier(str(output))
+            _register_table(table_name, [])
+
+    # First, register tables produced by tasks (in the requested order).
+    seen_tasks: set[str] = set()
+    for task_name in task_order or []:
+        seen_tasks.add(task_name)
+        metadata_for_task = task_to_metadata.pop(task_name, [])
+        if metadata_for_task:
+            for metadata in metadata_for_task:
+                _register_table(metadata.display_name, list(metadata.columns))
+        else:
+            _register_task_outputs(task_name)
+
+    # Register any remaining SQL-backed tasks preserving their original order.
+    for metadata in metadata_entries:
+        if metadata.task_name in seen_tasks:
+            continue
+        _register_table(metadata.display_name, list(metadata.columns))
+        seen_tasks.add(metadata.task_name)
+
+    # Capture upstream tables that are referenced but not produced by tasks.
+    external_columns: dict[str, set[str]] = {}
+    for metadata in ordered_metadata:
+        for sources in metadata.column_sources.values():
+            for source in sources:
+                if "." not in source:
+                    continue
+                table_part, column_name = source.rsplit(".", 1)
+                if not column_name:
+                    continue
+                existing_index = None
+                for candidate in _candidate_table_keys(table_part):
+                    if candidate in table_lookup:
+                        existing_index = table_lookup[candidate]
+                        break
+                if existing_index is not None:
+                    entry = tables_payload[existing_index]
+                    current_columns = entry.get("columns") or []
+                    if column_name not in current_columns:
+                        entry["columns"] = [*current_columns, column_name]
+                    continue
+                external_columns.setdefault(table_part, set()).add(column_name)
+
+    for table_name in sorted(external_columns):
+        columns = sorted(external_columns[table_name]) or []
+        _register_table(table_name, columns)
+
+    # Build lineage edges now that all source/destination tables are registered.
     lineage_payload: list[dict[str, Any]] = []
-    for destination_index, metadata in enumerate(metadata_entries):
+    for metadata in ordered_metadata:
+        destination_index = None
+        for candidate in (_normalize_identifier(metadata.display_name), _normalize_identifier(metadata.table_key)):
+            if candidate and candidate in table_lookup:
+                destination_index = table_lookup[candidate]
+                break
+        if destination_index is None:
+            continue
+
         for column in metadata.columns:
             for source in metadata.column_sources.get(column, []):
                 if "." not in source:
@@ -129,14 +257,15 @@ def _build_lineage_payload(
                 table_part, column_name = source.rsplit(".", 1)
                 if not column_name:
                     continue
-                candidates = _candidate_table_keys(table_part)
+
                 source_index = None
-                for candidate in candidates:
+                for candidate in _candidate_table_keys(table_part):
                     if candidate in table_lookup:
                         source_index = table_lookup[candidate]
                         break
                 if source_index is None:
                     continue
+
                 lineage_payload.append(
                     {
                         "from": [source_index, column_name],
@@ -631,6 +760,7 @@ def lineage_visualize(
     output: Path = typer.Option(Path("lineage.html"), "--output", "-o", help="Destination HTML file for the lineage visualizer"),
     project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-p", help="Project directory containing kptn configuration"),
     dialect: Optional[str] = typer.Option(None, "--dialect", help="SQL dialect to use for parsing (defaults to inferred value)"),
+    graph: Optional[str] = typer.Option(None, "--graph", "-g", help="Graph name used to order tasks in the visualization (defaults to first graph)"),
 ):
     """Generate an interactive column-lineage HTML visualization."""
 
@@ -650,7 +780,20 @@ def lineage_visualize(
             typer.echo(f"Failed to build SQL lineage: {exc}")
             raise typer.Exit(1)
 
-        tables_payload, lineage_payload = _build_lineage_payload(analyzer)
+        tasks_conf = kap_conf.get("tasks", {}) if isinstance(kap_conf, dict) else {}
+        task_order = None
+        try:
+            task_order = _task_order_from_graph(kap_conf, graph)
+        except ValueError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1)
+        if not task_order and isinstance(tasks_conf, dict):
+            task_order = list(tasks_conf.keys())
+        tables_payload, lineage_payload = _build_lineage_payload(
+            analyzer,
+            task_order=task_order,
+            tasks_config=tasks_conf if isinstance(tasks_conf, dict) else None,
+        )
 
         html = render_lineage_html(tables_payload, lineage_payload)
         output_path = output if output.is_absolute() else Path.cwd() / output

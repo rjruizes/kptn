@@ -91,7 +91,114 @@ def test_build_lineage_payload_preserves_order(tmp_path):
 
     analyzer = SqlLineageAnalyzer(config, project_root=tmp_path, dialect="duckdb")
     analyzer.build()
-    tables_payload, lineage_payload = _build_lineage_payload(analyzer)
+    task_order = list(config["tasks"].keys())
+    tables_payload, lineage_payload = _build_lineage_payload(
+        analyzer,
+        task_order=task_order,
+        tasks_config=config["tasks"],
+    )
 
-    assert [entry["name"] for entry in tables_payload] == ["mart.first", "mart.second"]
+    names = [entry["name"] for entry in tables_payload]
+    assert names[:2] == ["mart.first", "mart.second"]
+    assert "staging.source_a" in names
+    assert "staging.source_b" in names
     assert {"from": [0, "value"], "to": [1, "adjusted"]} in lineage_payload
+
+
+def test_lineage_payload_matches_visit_assignments(tmp_path):
+    sql_enrollments = tmp_path / "enrollments.sql"
+    sql_enrollments.write_text(
+        """
+        create or replace table staging.enrollments as
+        select 1 as participant_id, 'A' as cohort_code;
+        """,
+        encoding="utf-8",
+    )
+    sql_raw_visits = tmp_path / "raw_visits.sql"
+    sql_raw_visits.write_text(
+        """
+        create or replace table staging.raw_visits as
+        select 1 as participant_id, 10 as visit_id, 'X1' as concept_code;
+        """,
+        encoding="utf-8",
+    )
+    sql_concepts = tmp_path / "concepts.sql"
+    sql_concepts.write_text(
+        """
+        create or replace table staging.concepts as
+        select 'X1' as concept_code, 'NX1' as normalized_code;
+        """,
+        encoding="utf-8",
+    )
+    sql_assignments = tmp_path / "visit_assignments.sql"
+    sql_assignments.write_text(
+        """
+        create or replace table analytics.visit_assignments as
+        with enrollments as (
+            select participant_id, cohort_code from staging.enrollments
+        ),
+        visits as (
+            select participant_id, visit_id, concept_code from staging.raw_visits
+        ),
+        concepts as (
+            select concept_code, normalized_code from staging.concepts
+        )
+        select
+            v.participant_id,
+            v.visit_id,
+            coalesce(c.normalized_code, v.concept_code) as visit_concept_code
+        from visits v
+        join enrollments e on v.participant_id = e.participant_id
+        join concepts c on v.concept_code = c.concept_code;
+        """,
+        encoding="utf-8",
+    )
+
+    config = {
+        "tasks": {
+            "enrollments": {
+                "file": str(sql_enrollments.relative_to(tmp_path)),
+                "outputs": ["duckdb://staging.enrollments"],
+            },
+            "raw_visits": {
+                "file": str(sql_raw_visits.relative_to(tmp_path)),
+                "outputs": ["duckdb://staging.raw_visits"],
+            },
+            "concepts": {
+                "file": str(sql_concepts.relative_to(tmp_path)),
+                "outputs": ["duckdb://staging.concepts"],
+            },
+            "visit_assignments": {
+                "file": str(sql_assignments.relative_to(tmp_path)),
+                "outputs": ["duckdb://analytics.visit_assignments"],
+            }
+        }
+    }
+
+    analyzer = SqlLineageAnalyzer(config, project_root=tmp_path, dialect="duckdb")
+    analyzer.build()
+    task_order = list(config["tasks"].keys())
+    tables_payload, lineage_payload = _build_lineage_payload(
+        analyzer,
+        task_order=task_order,
+        tasks_config=config["tasks"],
+    )
+
+    html = render_lineage_html(tables_payload, lineage_payload, title="Visit assignments")
+    tables_data = _extract_const(html, "tablesData")
+    lineage_data = _extract_const(html, "lineageData")
+
+    # Tables appear in kptn.yaml order (tasks order).
+    assert [entry["name"] for entry in tables_data] == [
+        "staging.enrollments",
+        "staging.raw_visits",
+        "staging.concepts",
+        "analytics.visit_assignments",
+    ]
+
+    visit_concept_edges = [
+        edge for edge in lineage_data if edge["to"] == [3, "visit_concept_code"]
+    ]
+    assert len(visit_concept_edges) == 2
+    assert {"from": [2, "normalized_code"], "to": [3, "visit_concept_code"]} in visit_concept_edges
+    assert {"from": [1, "concept_code"], "to": [3, "visit_concept_code"]} in visit_concept_edges
