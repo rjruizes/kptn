@@ -28,8 +28,9 @@ def test_parallel_branches_are_grouped_with_decider_and_trailing_tasks():
 
     state_machine = _build_state_machine(deps_lookup, tasks, ["A", "B", "C", "D"])
 
-    assert state_machine["StartAt"] == "ParallelRoot"
-    parallel_state = state_machine["States"]["ParallelRoot"]
+    start_state = state_machine["StartAt"]
+    assert start_state == "Lane0Parallel"
+    parallel_state = state_machine["States"][start_state]
     assert parallel_state["Type"] == "Parallel"
 
     first_branch = parallel_state["Branches"][0]
@@ -44,18 +45,19 @@ def test_parallel_branches_are_grouped_with_decider_and_trailing_tasks():
     assert payload_params["TASKS_CONFIG_PATH"] == "kptn.yaml"
     assert payload_params["PIPELINE_NAME"] == "example"
     assert branch_states["A_Choice"]["Type"] == "Choice"
-    assert branch_states["A_RunEcs"]["Next"] == "B_Decide"
-    assert branch_states["B_RunEcs"]["End"] is True
+    assert branch_states["A_RunEcs"]["End"] is True
 
     second_branch = parallel_state["Branches"][1]
     assert second_branch["StartAt"] == "C_Decide"
     assert second_branch["States"]["C_RunEcs"]["End"] is True
 
-    assert parallel_state["Next"] == "D_Decide"
+    assert parallel_state["Next"] == "B_Decide"
 
-    d_states = state_machine["States"]
-    assert d_states["D_Decide"]["Parameters"]["FunctionName"] == "arn:aws:lambda:us-east-1:123456789012:function:decider"
-    d_run_ecs = d_states["D_RunEcs"]
+    states = state_machine["States"]
+    assert states["B_RunEcs"]["Next"] == "D_Decide"
+    assert states["B_Skip"]["Next"] == "D_Decide"
+    assert states["D_Decide"]["Parameters"]["FunctionName"] == "arn:aws:lambda:us-east-1:123456789012:function:decider"
+    d_run_ecs = states["D_RunEcs"]
     assert d_run_ecs["Type"] == "Task"
     assert d_run_ecs["Resource"] == DEFAULT_STEP_FUNCTION_RESOURCE_ARN
     params = d_run_ecs["Parameters"]
