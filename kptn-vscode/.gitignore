@@ -1,0 +1,13 @@
+# Build outputs
+out/
+*.vsix
+
+# Dependencies
+node_modules/
+python_libs/
+
+# VS Code test artifacts
+.vscode-test/
+
+# OS cruft
+.DS_Store

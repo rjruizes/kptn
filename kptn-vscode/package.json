@@ -2,33 +2,41 @@
   "name": "kptn",
   "displayName": "kptn",
   "description": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rjruizes/kptn.git",
+    "directory": "kptn-vscode"
+  },
   "version": "0.0.1",
   "engines": {
-    "vscode": "^1.106.1"
+    "vscode": "^1.100.1"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:kptn.helloWorld"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "kptn.helloWorld",
-        "title": "Hello World"
+        "title": "Fetch kptn message"
       }
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run vendor-python && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "vendor-python": "node scripts/vendor-python.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.106.1",
+    "@types/vscode": "^1.100.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "typescript-eslint": "^8.46.3",

@@ -1,71 +1,27 @@
 # kptn README
 
-This is the README for your extension "kptn". After writing up a brief description, we recommend including the following sections.
+# kptn VS Code extension
 
-## Features
+This extension now starts a long-lived Python backend and exchanges JSON-RPC messages with it over stdio. The bundled backend returns a timestamped greeting that is shown via VS Code notifications.
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+## Quick start
 
-For example if there is an image subfolder under your extension project workspace:
+1. Launch the extension in the VS Code extension host (Run and Debug → `Run Extension` or `F5`).
+2. Run the command `Kptn: Fetch kptn message` from the Command Palette.
+3. The extension will spawn `backend.py` with your default `python` (override with `KPTN_VSCODE_PYTHON=/path/to/python`) and send a JSON-RPC `getMessage` request over stdio.
+4. You should see the backend-provided message via `showInformationMessage`. Errors show as an error notification; backend stderr is forwarded to the “kptn backend” Output channel for troubleshooting.
 
-\!\[feature X\]\(images/feature-x.png\)
+## Python path resolution
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- On activation, the extension sets `PYTHONPATH` for the backend: it prefers the sibling checkout `../kptn` if present, then falls back to a vendored copy at `python_libs/` inside the extension. Any existing `PYTHONPATH` is appended.
+- The backend interpreter remains configurable via `KPTN_VSCODE_PYTHON`.
 
-## Requirements
+## Vendoring the kptn library for packaging
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- Run `npm run vendor-python` from `kptn-vscode` to pip install the monorepo root (`../`) into `python_libs/` (it falls back to `../kptn` if the root lacks a `pyproject.toml`/`setup.py`). This is invoked automatically during `vsce package` via the `vscode:prepublish` hook.
+- Ensure `python` (or `KPTN_VSCODE_PYTHON`) has `pip` available and can access the sibling checkout.
+- Generated `python_libs/` is included in the VSIX (it is not excluded by `.vscodeignore`). Remove it or re-run the script to refresh before packaging.
 
-## Extension Settings
+## Packaging
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+- From anywhere inside `kptn-vscode`, run `./scripts/package.sh` to build a VSIX. The script will install dependencies if `node_modules/` is missing and then invoke `vsce package` (which triggers vendoring + compile via `vscode:prepublish`).
