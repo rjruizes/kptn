@@ -202,3 +202,79 @@ def test_lineage_payload_matches_visit_assignments(tmp_path):
     assert len(visit_concept_edges) == 2
     assert {"from": [2, "normalized_code"], "to": [3, "visit_concept_code"]} in visit_concept_edges
     assert {"from": [1, "concept_code"], "to": [3, "visit_concept_code"]} in visit_concept_edges
+
+
+def test_lineage_payload_keeps_table_columns(tmp_path):
+    sql_metrics = tmp_path / "metrics.sql"
+    sql_metrics.write_text(
+        """
+        create or replace table analytics.metrics as
+        select id, value from staging.source_data;
+        """,
+        encoding="utf-8",
+    )
+
+    config = {
+        "tasks": {
+            "metrics": {
+                "file": str(sql_metrics.relative_to(tmp_path)),
+                "outputs": ["duckdb://analytics.metrics"],
+            }
+        }
+    }
+
+    analyzer = SqlLineageAnalyzer(config, project_root=tmp_path, dialect="duckdb")
+    analyzer.build()
+    task_order = list(config["tasks"].keys())
+    tables_payload, _ = _build_lineage_payload(
+        analyzer,
+        task_order=task_order,
+        tasks_config=config["tasks"],
+    )
+
+    metrics_entry = next(entry for entry in tables_payload if entry["name"] == "analytics.metrics")
+    assert metrics_entry["columns"] == ["id", "value"]
+
+
+def test_lineage_payload_skips_empty_table_names(tmp_path):
+    sql_schedule = tmp_path / "schedule.sql"
+    sql_schedule.write_text(
+        """
+        create or replace table analytics.schedule as
+        with event_dates as (
+            select * from (
+                select record_id, redcap_event_name, visit_date from staging.events
+            )
+        )
+        select
+            record_id,
+            max(case when redcap_event_name = 'baseline' then visit_date end)::date as baseline_date
+        from event_dates
+        group by record_id;
+        """,
+        encoding="utf-8",
+    )
+
+    config = {
+        "tasks": {
+            "schedule": {
+                "file": str(sql_schedule.relative_to(tmp_path)),
+                "outputs": ["duckdb://analytics.schedule"],
+            }
+        }
+    }
+
+    analyzer = SqlLineageAnalyzer(config, project_root=tmp_path, dialect="duckdb")
+    analyzer.build()
+    task_order = list(config["tasks"].keys())
+    tables_payload, _ = _build_lineage_payload(
+        analyzer,
+        task_order=task_order,
+        tasks_config=config["tasks"],
+    )
+
+    names = [entry["name"] for entry in tables_payload]
+    assert "" not in names
+
+    schedule_entry = next(entry for entry in tables_payload if entry["name"] == "analytics.schedule")
+    assert schedule_entry["columns"] == ["record_id", "baseline_date"]

@@ -166,7 +166,8 @@ def render_lineage_html(
 
     const columnElements = new Map();
     const connections = [];
-    const adjacency = new Map();
+    const outgoing = new Map();
+    const incoming = new Map();
 
     const columnId = (tableIndex, columnName) => `${{tableIndex}}::${{columnName}}`;
 
@@ -200,11 +201,11 @@ def render_lineage_html(
       }});
     }}
 
-    function addAdjacency(a, b) {{
-      if (!adjacency.has(a)) {{
-        adjacency.set(a, new Set());
+    function addDirected(adj, a, b) {{
+      if (!adj.has(a)) {{
+        adj.set(a, new Set());
       }}
-      adjacency.get(a).add(b);
+      adj.get(a).add(b);
     }}
 
     function buildConnections() {{
@@ -217,8 +218,8 @@ def render_lineage_html(
           return;
         }}
 
-        addAdjacency(fromId, toId);
-        addAdjacency(toId, fromId);
+        addDirected(outgoing, fromId, toId);
+        addDirected(incoming, toId, fromId);
 
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.classList.add("lineage-path");
@@ -270,12 +271,17 @@ def render_lineage_html(
       }});
     }}
 
-    function highlightLineage(targetId) {{
-      const visited = new Set([targetId]);
-      const queue = [targetId];
+    function collectReachable(startId, graph) {{
+      const visited = new Set();
+      const initial = graph.get(startId);
+      if (!initial) {{
+        return visited;
+      }}
+      const queue = [...initial];
+      initial.forEach((neighbor) => visited.add(neighbor));
       while (queue.length) {{
         const current = queue.shift();
-        const neighbors = adjacency.get(current);
+        const neighbors = graph.get(current);
         if (!neighbors) {{
           continue;
         }}
@@ -286,14 +292,19 @@ def render_lineage_html(
           }}
         }});
       }}
+      return visited;
+    }}
 
-      const directNeighbors = adjacency.get(targetId) || new Set();
+    function highlightLineage(targetId) {{
+      const upstream = collectReachable(targetId, incoming);
+      const downstream = collectReachable(targetId, outgoing);
+      const related = new Set([...upstream, ...downstream]);
 
       columnElements.forEach((el, id) => {{
         el.classList.remove("hovered", "related");
         if (id === targetId) {{
           el.classList.add("hovered");
-        }} else if (visited.has(id)) {{
+        }} else if (related.has(id)) {{
           el.classList.add("related");
         }}
       }});
@@ -303,9 +314,11 @@ def render_lineage_html(
       }}) => {{
         path.classList.remove("visible", "direct", "indirect");
         const involvesTarget = fromId === targetId || toId === targetId;
+        const upstreamEdge = upstream.has(fromId) && upstream.has(toId);
+        const downstreamEdge = downstream.has(fromId) && downstream.has(toId);
         if (involvesTarget) {{
           path.classList.add("visible", "direct");
-        }} else if (visited.has(fromId) && visited.has(toId)) {{
+        }} else if (upstreamEdge || downstreamEdge) {{
           path.classList.add("visible", "indirect");
         }}
       }});

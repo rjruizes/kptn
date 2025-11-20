@@ -142,25 +142,26 @@ def _build_lineage_payload(
 
     metadata_entries = list(analyzer.tables().values())
 
+    task_to_metadata: dict[str, list[TableMetadata]] = {}
+    for metadata in metadata_entries:
+        task_to_metadata.setdefault(metadata.task_name, []).append(metadata)
+
     if task_order:
-        task_to_metadata: dict[str, list[TableMetadata]] = {}
-        for metadata in metadata_entries:
-            task_to_metadata.setdefault(metadata.task_name, []).append(metadata)
-
         ordered_metadata: list[TableMetadata] = []
+        remaining_metadata = {task: list(entries) for task, entries in task_to_metadata.items()}
         for task_name in task_order:
-            ordered_metadata.extend(task_to_metadata.pop(task_name, []))
+            ordered_metadata.extend(remaining_metadata.pop(task_name, []))
 
-        if task_to_metadata:
+        if remaining_metadata:
             # Preserve original relative order for any tasks not listed in task_order.
             for metadata in metadata_entries:
-                if metadata.task_name in task_to_metadata:
+                if metadata.task_name in remaining_metadata:
                     ordered_metadata.append(metadata)
-                    remaining = task_to_metadata.get(metadata.task_name)
+                    remaining = remaining_metadata.get(metadata.task_name)
                     if remaining and metadata in remaining:
                         remaining.remove(metadata)
                     if not remaining:
-                        task_to_metadata.pop(metadata.task_name, None)
+                        remaining_metadata.pop(metadata.task_name, None)
     else:
         ordered_metadata = metadata_entries
 
@@ -220,7 +221,7 @@ def _build_lineage_payload(
                 if "." not in source:
                     continue
                 table_part, column_name = source.rsplit(".", 1)
-                if not column_name:
+                if not table_part or not column_name:
                     continue
                 existing_index = None
                 for candidate in _candidate_table_keys(table_part):
@@ -255,7 +256,7 @@ def _build_lineage_payload(
                 if "." not in source:
                     continue
                 table_part, column_name = source.rsplit(".", 1)
-                if not column_name:
+                if not table_part or not column_name:
                     continue
 
                 source_index = None
