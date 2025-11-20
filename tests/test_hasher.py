@@ -64,7 +64,7 @@ def test_Hasher_outputs(cleanup):
     sample_output_file1.write_text("Hello, world!")
     sample_output_file2.write_text("Hello, world!")
     h = Hasher(output_dir=scratch_dir, tasks_config_paths=[tasks_yaml_path])
-    assert h.hash_task_outputs("static_params") == "236cfa1b2566cb51332ad70a05dd56490342ed62"
+    assert h.hash_task_outputs("static_params") == "98d3e3f89b95ed2b9a16e934f151d502a9e56fe8"
 
 def test_Hasher_subtask_outputs(cleanup):
     scratch_dir = Path(mock_dir) / "scratch"
@@ -76,8 +76,8 @@ def test_Hasher_subtask_outputs(cleanup):
     sample_output_file1.write_text("Hello, world!")
     sample_output_file2.write_text("Hello, world!")
     h = Hasher(output_dir=scratch_dir, tasks_config_paths=[tasks_yaml_path])
-    assert h.hash_subtask_outputs("write_param", { "item": "T1" }) == "43018a87cab8498746ac905c6cc4467991c02d90"
-    assert h.hash_subtask_outputs("write_param", { "item": "T2" }) == "06a4364dfa2bd543dd50ecc3cfabd560d0bfc23d"
+    assert h.hash_subtask_outputs("write_param", { "item": "T1" }) == "14b33eb50ce0d754e9b272729cc50215794cce27"
+    assert h.hash_subtask_outputs("write_param", { "item": "T2" }) == "ec52df80076c26f62593312e43c9f533fdc1c6a6"
 
 
 def test_py_function_dependency_hashing(tmp_path):

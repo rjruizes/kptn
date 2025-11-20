@@ -640,6 +640,7 @@ class Hasher:
         if "outputs" not in task:
             return ""
         output_filepaths: list[str] = task["outputs"]
+        resolved_output_dir = Path(self.output_dir).resolve() if self.output_dir else None
         duckdb_targets = [
             output for output in output_filepaths if isinstance(output, str) and output.startswith(DUCKDB_OUTPUT_PREFIX)
         ]
@@ -649,7 +650,7 @@ class Hasher:
         if self.output_dir is None and file_patterns:
             raise ValueError("Output directory not set")
         # Search for all output files in the scratch directory
-        file_list = set()
+        file_list: set[Path] = set()
         for output_filepath in file_patterns:
             if "$" in output_filepath:
                 # Check if all variables in the pattern are in the environment
@@ -660,12 +661,17 @@ class Hasher:
                 glob_pattern = str(Path(self.output_dir) / output_filepath)
                 matching_files = glob.glob(glob_pattern)
                 if len(matching_files) > 0:
-                    file_list.update(matching_files)
+                    file_list.update(Path(match).resolve() for match in matching_files)
                 else:
                     logger.warning("File %s not found", glob_pattern)
             else:
-                if (Path(self.output_dir) / output_filepath).exists():
-                    file_list.add(output_filepath)
+                candidate = (
+                    (resolved_output_dir / output_filepath).resolve()
+                    if resolved_output_dir
+                    else Path(output_filepath).resolve()
+                )
+                if candidate.exists():
+                    file_list.add(candidate)
                 else:
                     logger.warning("File %s not found", output_filepath)
         # Sort the files by name
@@ -674,9 +680,14 @@ class Hasher:
         hashed_outputs: list[dict[str, str]] = []
         if len(sorted_file_list) > 0:
             # Hash the contents of the files
-            hashed_outputs.extend(
-                {file: hash_file(Path(self.output_dir) / file)} for file in sorted_file_list
-            )
+            for file_path in sorted_file_list:
+                key = str(file_path)
+                if resolved_output_dir:
+                    try:
+                        key = str(file_path.relative_to(resolved_output_dir))
+                    except ValueError:
+                        key = str(file_path)
+                hashed_outputs.append({key: hash_file(file_path)})
 
         if duckdb_targets:
             hashed_outputs.extend(self._hash_duckdb_outputs(duckdb_targets))
@@ -693,7 +704,8 @@ class Hasher:
         if "outputs" not in task:
             return ""
         filename_patterns: list[str] = task["outputs"]
-        file_list = set()
+        file_list: set[Path] = set()
+        resolved_output_dir = Path(self.output_dir).resolve()
         for pattern in filename_patterns:
             # If the pattern contains a variable, replace it with the value from the environment
             if "$" in pattern:
@@ -712,13 +724,17 @@ class Hasher:
                 if len(matching_files) == 0:
                     logger.warning("File %s not found", glob_pattern)
                 else:
-                    file_list.update(matching_files)
+                    file_list.update(Path(match).resolve() for match in matching_files)
         # Sort the files by name
         sorted_file_list = sorted(file_list)
         if len(file_list) == 0:
             return
         # Hash the contents of the files
-        hashed_output_files = [
-            {file: hash_file(str(Path(self.output_dir) / file))} for file in sorted_file_list
-        ]
+        hashed_output_files: list[dict[str, str]] = []
+        for file_path in sorted_file_list:
+            try:
+                key = str(file_path.relative_to(resolved_output_dir))
+            except ValueError:
+                key = str(file_path)
+            hashed_output_files.append({key: hash_file(file_path)})
         return hash_obj(hashed_output_files)
