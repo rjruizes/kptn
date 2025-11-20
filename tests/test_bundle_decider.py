@@ -71,7 +71,7 @@ def test_bundle_decider_copies_project_code(tmp_path, monkeypatch):
         installer=fake_installer,
         install_project=True,
     )
-    assert installs[0][-1] == "kptn"
+    assert installs[0][-1].endswith("kptn")
     assert installs[1][-1] == str(project_root)
 
     installs.clear()

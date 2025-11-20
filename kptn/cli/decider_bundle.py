@@ -242,6 +242,8 @@ def bundle_decider_lambda(
 
     install_targets: list[str] = []
     chosen_kptn_source = kptn_source
+
+    # Prefer a locally checked-out kptn source when available unless explicitly disabled.
     if prefer_local_kptn and not chosen_kptn_source:
         candidate = _resolve_local_kptn_root()
         if candidate is not None:
