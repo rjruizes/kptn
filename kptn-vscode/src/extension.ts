@@ -20,21 +20,24 @@ class BackendClient implements vscode.Disposable {
 	private nextId = 1;
 	private disposed = false;
 	private readonly output: vscode.OutputChannel;
+	private startPromise?: Promise<void>;
 
 	constructor(private readonly context: vscode.ExtensionContext) {
 		this.output = vscode.window.createOutputChannel('kptn backend');
 	}
 
-	start(): void {
+	async start(): Promise<void> {
 		if (this.child || this.disposed) {
 			return;
 		}
 
-		const pythonExecutable = process.env.KPTN_VSCODE_PYTHON ?? 'python';
+		const { executable: pythonExecutable, source: pythonSource } = await this.resolvePythonExecutable();
 		const scriptPath = path.join(this.context.extensionPath, 'backend.py');
-		const { pythonPath, sources } = this.resolvePythonPath();
+		const useVendored = pythonSource === 'PATH default';
+		const { pythonPath, sources } = this.resolvePythonPath(useVendored);
 		const env = { ...process.env };
 
+		this.output.appendLine(`Using Python executable from ${pythonSource}: ${pythonExecutable}`);
 		if (pythonPath) {
 			env.PYTHONPATH = pythonPath;
 			this.output.appendLine(`Using PYTHONPATH from: ${sources.join(' -> ')}`);
@@ -55,6 +58,7 @@ class BackendClient implements vscode.Disposable {
 			const reason = signal ? `signal ${signal}` : `code ${code}`;
 			this.output.appendLine(`Backend exited (${reason}).`);
 			this.rejectAllPending(new Error(`Backend exited (${reason})`));
+			this.startPromise = undefined;
 			this.child = undefined;
 		});
 		this.child.on('error', (error: Error) => {
@@ -108,15 +112,29 @@ class BackendClient implements vscode.Disposable {
 		throw new Error('Lineage server is not available');
 	}
 
-	private ensureStarted(): void {
-		if (!this.child && !this.disposed) {
-			this.start();
-		}
+	async getTablePreview(configUri: vscode.Uri, table: string): Promise<{ columns?: string[]; row?: unknown[]; message?: string; resolvedTable?: string }> {
+		const result = await this.sendRequest('getTablePreview', {
+			configPath: configUri.fsPath,
+			table,
+		});
+
+		const payload = result as { columns?: unknown; row?: unknown; message?: unknown; resolvedTable?: unknown };
+		const columns = Array.isArray(payload?.columns) ? payload.columns.map((entry) => String(entry)) : undefined;
+		const row = Array.isArray(payload?.row) ? payload.row : undefined;
+		const message = typeof payload?.message === 'string' ? payload.message : undefined;
+		const resolvedTable = typeof payload?.resolvedTable === 'string' ? payload.resolvedTable : undefined;
+		return { columns, row, message, resolvedTable };
 	}
 
-	private sendRequest(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-		this.ensureStarted();
+	private async ensureStarted(): Promise<void> {
+		if (!this.child && !this.disposed) {
+			this.startPromise = this.startPromise ?? this.start();
+		}
+		await this.startPromise;
+	}
 
+	private async sendRequest(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+		await this.ensureStarted();
 		if (!this.child?.stdin || !this.child.stdin.writable) {
 			return Promise.reject(new Error('Backend process is not running'));
 		}
@@ -176,7 +194,7 @@ class BackendClient implements vscode.Disposable {
 		this.pending.clear();
 	}
 
-	private resolvePythonPath(): { pythonPath?: string; sources: string[] } {
+	private resolvePythonPath(includeVendored: boolean): { pythonPath?: string; sources: string[] } {
 		const sources: string[] = [];
 		const segments: string[] = [];
 		const siblingPath = path.resolve(this.context.extensionPath, '..', 'kptn');
@@ -187,9 +205,11 @@ class BackendClient implements vscode.Disposable {
 			sources.push('sibling ../kptn');
 		}
 
-		if (fs.existsSync(vendoredPath)) {
+		if (includeVendored && fs.existsSync(vendoredPath)) {
 			segments.push(vendoredPath);
 			sources.push('vendored python_libs');
+		} else if (!includeVendored) {
+			this.output.appendLine('Skipping vendored python_libs in favor of workspace/active environment.');
 		}
 
 		if (process.env.PYTHONPATH) {
@@ -202,6 +222,106 @@ class BackendClient implements vscode.Disposable {
 		}
 
 		return { pythonPath: segments.join(path.delimiter), sources };
+	}
+
+	private async resolvePythonExecutable(): Promise<{ executable: string; source: string }> {
+		const envOverride = process.env.KPTN_VSCODE_PYTHON;
+		if (envOverride && envOverride.trim()) {
+			return { executable: envOverride, source: 'KPTN_VSCODE_PYTHON' };
+		}
+
+		const active = await this.getActiveInterpreterFromPythonExtension();
+		if (active?.executable) {
+			return active as { executable: string; source: string };
+		}
+
+		const pythonConfig = vscode.workspace.getConfiguration('python');
+		const defaultInterpreter = pythonConfig.get<string>('defaultInterpreterPath');
+		if (defaultInterpreter && defaultInterpreter.trim()) {
+			return { executable: defaultInterpreter, source: 'python.defaultInterpreterPath' };
+		}
+
+		const legacyInterpreter = pythonConfig.get<string>('pythonPath');
+		if (legacyInterpreter && legacyInterpreter.trim()) {
+			return { executable: legacyInterpreter, source: 'python.pythonPath' };
+		}
+
+		const venv = process.env.VIRTUAL_ENV;
+		if (venv && venv.trim()) {
+			const binDir = process.platform === 'win32' ? 'Scripts' : 'bin';
+			const exeName = process.platform === 'win32' ? 'python.exe' : 'python';
+			const candidate = path.join(venv, binDir, exeName);
+			return { executable: candidate, source: 'VIRTUAL_ENV' };
+		}
+
+		return { executable: 'python', source: 'PATH default' };
+	}
+
+	private async getActiveInterpreterFromPythonExtension(): Promise<{ executable?: string; source?: string }> {
+		const resource = vscode.workspace.workspaceFolders?.[0]?.uri;
+
+		try {
+			const envPath = await vscode.commands.executeCommand<unknown>('python.environment.getActiveEnvironmentPath', resource);
+			const executable = this.extractInterpreterPath(envPath);
+			if (executable) {
+				return { executable, source: 'python.environment.getActiveEnvironmentPath' };
+			}
+		} catch (error) {
+			this.output.appendLine(`Unable to resolve active environment via python.environment.getActiveEnvironmentPath: ${error instanceof Error ? error.message : String(error)}`);
+		}
+
+		const pythonExt = vscode.extensions.getExtension<any>('ms-python.python');
+		if (pythonExt) {
+			try {
+				const api = pythonExt.isActive ? pythonExt.exports : await pythonExt.activate();
+				const envPath = await api?.environments?.getActiveEnvironmentPath?.(resource);
+				const executable = this.extractInterpreterPath(envPath);
+				if (executable) {
+					return { executable, source: 'ms-python.python active interpreter' };
+				}
+			} catch (error) {
+				this.output.appendLine(`Unable to resolve active environment via ms-python.python: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+
+		return {};
+	}
+
+	private extractInterpreterPath(candidate: unknown): string | undefined {
+		if (!candidate) {
+			return undefined;
+		}
+		if (typeof candidate === 'string') {
+			return candidate;
+		}
+
+		if (typeof candidate === 'object') {
+			const data = candidate as Record<string, unknown>;
+			const executable = data.executable;
+			if (typeof executable === 'string' && executable.trim()) {
+				return executable;
+			}
+			if (executable && typeof executable === 'object') {
+				const execObj = executable as Record<string, unknown>;
+				if (typeof execObj.path === 'string' && execObj.path.trim()) {
+					return execObj.path;
+				}
+				const execUri = execObj.uri as vscode.Uri | undefined;
+				if (execUri && typeof execUri.fsPath === 'string') {
+					return execUri.fsPath;
+				}
+			}
+
+			if (typeof data.path === 'string' && data.path.trim()) {
+				return data.path;
+			}
+			const dataUri = data.uri as vscode.Uri | undefined;
+			if (dataUri && typeof dataUri.fsPath === 'string') {
+				return dataUri.fsPath;
+			}
+		}
+
+		return undefined;
 	}
 }
 
@@ -522,17 +642,22 @@ class LineagePanel implements vscode.Disposable {
 		this.hoverDecoration = vscode.window.createTextEditorDecorationType({
 			backgroundColor: new vscode.ThemeColor('editor.hoverHighlightBackground'),
 			isWholeLine: true,
-		});
-		this.messageSubscription = this.panel.webview.onDidReceiveMessage(async (event) => {
-			if (!event || typeof event?.type !== 'string') {
-				return;
-			}
+			});
+			this.messageSubscription = this.panel.webview.onDidReceiveMessage(async (event) => {
+				if (!event || typeof event?.type !== 'string') {
+					return;
+				}
 
-			if (event.type === 'openFile' && typeof event.path === 'string') {
-				try {
-					const uri = vscode.Uri.file(event.path);
-					const doc = await vscode.workspace.openTextDocument(uri);
-					await vscode.window.showTextDocument(doc, { preview: false });
+				if (event.type === 'tableMeta' && typeof event.table === 'string') {
+					await this.handleTablePreview(event.table);
+					return;
+				}
+
+				if (event.type === 'openFile' && typeof event.path === 'string') {
+					try {
+						const uri = vscode.Uri.file(event.path);
+						const doc = await vscode.workspace.openTextDocument(uri);
+						await vscode.window.showTextDocument(doc, { preview: false });
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					vscode.window.showErrorMessage(`Could not open file: ${message}`);
@@ -600,6 +725,28 @@ class LineagePanel implements vscode.Disposable {
 
 		const tableMap = await this.buildTableFileMap();
 		this.panel.webview.html = this.injectClickHandlers(html, tableMap);
+	}
+
+	private async handleTablePreview(tableName: string): Promise<void> {
+		try {
+			const preview = await this.backend.getTablePreview(this.configUri, tableName);
+			await this.panel.webview.postMessage({
+				type: 'tablePreview',
+				table: tableName,
+				columns: preview.columns,
+				row: preview.row,
+				message: preview.message,
+				resolvedTable: preview.resolvedTable,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			vscode.window.showErrorMessage(`Unable to load table details: ${message}`);
+			await this.panel.webview.postMessage({
+				type: 'tablePreview',
+				table: tableName,
+				message,
+			});
+		}
 	}
 
 	private async buildTableFileMap(): Promise<Record<string, string>> {
@@ -674,11 +821,95 @@ class LineagePanel implements vscode.Disposable {
 		'.kptn-open-file, .kptn-open-table { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; border: none; background: rgba(255,255,255,0.04); color: #e2e8f0; cursor: pointer; padding: 2px; transition: background 0.15s ease, color 0.15s ease; }',
 		'.kptn-open-file:hover, .kptn-open-table:hover { background: rgba(255,255,255,0.1); color: #fbbf24; }',
 		'.kptn-open-file svg, .kptn-open-table svg { width: 16px; height: 16px; }',
+		'.table-preview { margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,0.02); border: 1px solid rgba(226,232,240,0.06); display: flex; flex-direction: column; gap: 8px; }',
+		'.preview-heading { font-size: 12px; color: #94a3b8; letter-spacing: 0.02em; }',
+		'.preview-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }',
+		'.preview-cell { padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(226,232,240,0.08); display: flex; flex-direction: column; gap: 4px; }',
+		'.preview-col { font-size: 12px; color: #aab4c8; }',
+		'.preview-val { font-size: 13px; color: #e2e8f0; word-break: break-all; }',
+		'.preview-status { font-size: 13px; color: #cbd5e1; }',
 	].join('');
 	document.head.appendChild(style);
 
 	function normalize(name) {
 		return (name || '').trim().replace(/^[^:]*:\\/\\//, '').split('.').slice(-1)[0]?.toLowerCase() || '';
+	}
+	function findTableElement(tableName) {
+		const target = (tableName || '').trim().toLowerCase();
+		if (!target) return null;
+		const tables = document.querySelectorAll('.table');
+		for (const table of tables) {
+			if (!(table instanceof HTMLElement)) continue;
+			const nameEl = table.querySelector('.table-name');
+			if (!(nameEl instanceof HTMLElement)) continue;
+			const textNode = Array.from(nameEl.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
+			const label = (textNode?.textContent || nameEl.textContent || '').trim().toLowerCase();
+			if (label === target) {
+				return table;
+			}
+		}
+		return null;
+	}
+	function formatCellValue(value) {
+		if (value === null || value === undefined) return 'null';
+		if (typeof value === 'object') {
+			try {
+				return JSON.stringify(value);
+			} catch {
+				return String(value);
+			}
+		}
+		return String(value);
+	}
+	function renderPreview(tableName, payload) {
+		const tableEl = findTableElement(tableName);
+		if (!tableEl) return;
+		let previewEl = tableEl.querySelector('.table-preview');
+		if (!(previewEl instanceof HTMLElement)) {
+			previewEl = document.createElement('div');
+			previewEl.className = 'table-preview';
+			tableEl.appendChild(previewEl);
+		} else {
+			previewEl.innerHTML = '';
+		}
+
+		const heading = document.createElement('div');
+		heading.className = 'preview-heading';
+		const resolved = typeof payload?.resolvedTable === 'string' ? payload.resolvedTable : tableName;
+		heading.textContent = resolved && resolved !== tableName ? 'Preview (' + resolved + ')' : 'Preview';
+		previewEl.appendChild(heading);
+
+		if (payload?.message) {
+			const status = document.createElement('div');
+			status.className = 'preview-status';
+			status.textContent = payload.message;
+			previewEl.appendChild(status);
+		}
+
+		const columns = Array.isArray(payload?.columns) ? payload.columns : [];
+		const row = Array.isArray(payload?.row) ? payload.row : [];
+		if (!columns.length || !row.length) {
+			refreshConnections();
+			return;
+		}
+
+		const rowEl = document.createElement('div');
+		rowEl.className = 'preview-row';
+		columns.forEach((column, index) => {
+			const cell = document.createElement('div');
+			cell.className = 'preview-cell';
+			const colEl = document.createElement('div');
+			colEl.className = 'preview-col';
+			colEl.textContent = String(column);
+			const valEl = document.createElement('div');
+			valEl.className = 'preview-val';
+			valEl.textContent = formatCellValue(index < row.length ? row[index] : null);
+			cell.appendChild(colEl);
+			cell.appendChild(valEl);
+			rowEl.appendChild(cell);
+		});
+		previewEl.appendChild(rowEl);
+		refreshConnections();
 	}
 	function refreshConnections() {
 		if (typeof updateConnectionPaths === 'function') {
@@ -722,6 +953,7 @@ class LineagePanel implements vscode.Disposable {
 				metaBtn.innerHTML = tableSvg;
 				metaBtn.addEventListener('click', (event) => {
 					event.stopPropagation();
+					renderPreview(name, { table: name, message: 'Loading table details...' });
 					vscode.postMessage({ type: 'tableMeta', table: name, path: path || null });
 				});
 				nameEl.appendChild(metaBtn);
@@ -731,6 +963,14 @@ class LineagePanel implements vscode.Disposable {
 	}
 
 	ensureButtons();
+
+	window.addEventListener('message', (event) => {
+		const payload = event.data;
+		if (!payload || payload.type !== 'tablePreview') {
+			return;
+		}
+		renderPreview(payload.table, payload);
+	});
 
 	document.addEventListener('mouseover', (event) => {
 		const target = event.target;

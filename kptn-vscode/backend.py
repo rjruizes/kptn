@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from threading import Thread
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -21,6 +21,7 @@ from kptn.cli import _build_lineage_payload, _infer_lineage_dialect, _task_order
 from kptn.lineage import SqlLineageAnalyzer, SqlLineageError
 from kptn.lineage.html_renderer import render_lineage_html
 from kptn.read_config import read_config
+from kptn.util.runtime_config import RuntimeConfig, RuntimeConfigError
 
 
 def build_response(request_id: Any, result: Any = None, error: str | None = None) -> Dict[str, Any]:
@@ -65,6 +66,20 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
 
         return build_response(request_id, result={"html": html, "tables": tables_count, "edges": edges_count})
 
+    if method == "getTablePreview":
+        params = request.get("params") or {}
+        config_path = params.get("configPath")
+        table_name = params.get("table") or params.get("tableName")
+        if not isinstance(config_path, str) or not isinstance(table_name, str):
+            return build_response(request_id, error="Missing configPath or table")
+
+        try:
+            preview = _get_duckdb_preview(Path(config_path), table_name)
+        except Exception as exc:  # noqa: BLE001 - expose original message for debugging
+            return build_response(request_id, error=f"Failed to load table details: {exc}")
+
+        return build_response(request_id, result=preview)
+
     if method == "getLineageServer":
         if LINEAGE_PORT is None:
             return build_response(request_id, error="Lineage server not available")
@@ -108,6 +123,161 @@ def _generate_lineage_html(config_path: Path, graph: Optional[str]) -> Tuple[str
         raise RuntimeError(str(exc)) from exc
     finally:
         os.chdir(original_dir)
+
+
+def _quote_duckdb_identifier(identifier: str) -> str:
+    escaped = identifier.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _split_table_identifier(name: str) -> tuple[Optional[str], str]:
+    cleaned = name.strip().strip('"')
+    if "." in cleaned:
+        schema, table = cleaned.split(".", 1)
+        schema = schema or None
+    else:
+        schema, table = None, cleaned
+    return schema, table
+
+
+def _resolve_duckdb_output_table(tasks_conf: Any, table_name: str) -> Optional[str]:
+    if not isinstance(tasks_conf, dict):
+        return None
+
+    requested = SqlLineageAnalyzer._output_identifier(table_name).strip()
+    if not requested:
+        return None
+
+    requested_normalized = SqlLineageAnalyzer._normalize_table(requested)
+    fallback: Optional[str] = None
+
+    for task in tasks_conf.values():
+        if not isinstance(task, dict):
+            continue
+        outputs = task.get("outputs") or []
+        if not isinstance(outputs, list):
+            continue
+        for output in outputs:
+            if not isinstance(output, str) or not output.startswith("duckdb://"):
+                continue
+            cleaned_output = SqlLineageAnalyzer._output_identifier(output)
+            normalized_output = SqlLineageAnalyzer._normalize_table(cleaned_output)
+            if cleaned_output.lower() == requested.lower():
+                return cleaned_output
+            if normalized_output and normalized_output == requested_normalized and fallback is None:
+                fallback = cleaned_output
+
+    return fallback
+
+
+def _duckdb_connection_from_runtime_config(runtime_config: RuntimeConfig) -> tuple[Optional[object], Optional[str]]:
+    try:
+        import duckdb  # type: ignore import-not-found
+        have_duckdb = True
+    except ImportError:
+        duckdb = None  # type: ignore[assignment]
+        have_duckdb = False
+
+    def _is_duckdb_conn(candidate: object) -> bool:
+        if candidate is None:
+            return False
+        if have_duckdb and isinstance(candidate, duckdb.DuckDBPyConnection):  # type: ignore[arg-type]
+            return True
+        return hasattr(candidate, "execute")
+
+    candidates: list[tuple[str, object]] = []
+
+    primary = getattr(runtime_config, "duckdb", None)
+    candidates.append(("duckdb", primary))
+
+    try:
+        mapping = runtime_config.as_dict()
+        for key, value in mapping.items():
+            if key == "duckdb" or _is_duckdb_conn(value):
+                candidates.append((key, value))
+    except Exception:
+        # as_dict is best-effort; ignore if unavailable
+        pass
+
+    for key, candidate in candidates:
+        if _is_duckdb_conn(candidate):
+            return candidate, None
+
+    keys = [key for key, value in candidates if value is not None]
+    keys_label = f" (checked {', '.join(keys)})" if keys else ""
+    if have_duckdb:
+        return None, f"Runtime config has no DuckDB connection{keys_label}"
+    return None, f"duckdb is not installed and no connection-like value was found{keys_label}"
+
+
+def _coerce_json_value(value: object) -> object:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _preview_duckdb_table(conn: object, table_name: str) -> dict[str, Any]:
+    schema, table = _split_table_identifier(table_name)
+    qualified = _quote_duckdb_identifier(table)
+    if schema:
+        qualified = f"{_quote_duckdb_identifier(schema)}.{qualified}"
+
+    query = f"SELECT * FROM {qualified} LIMIT 1"
+    try:
+        cursor = conn.execute(query)
+    except Exception as exc:  # noqa: BLE001 - surface duckdb binder/runtime errors
+        return {"message": f"Unable to query '{table_name}': {exc}"}
+
+    columns = [col[0] for col in cursor.description] if cursor.description else []
+    row = cursor.fetchone()
+    if row is None:
+        return {"columns": columns, "row": [], "message": f"Table '{table_name}' is empty"}
+
+    return {
+        "columns": columns,
+        "row": [_coerce_json_value(value) for value in row],
+    }
+
+
+def _get_duckdb_preview(config_path: Path, table_name: str) -> dict[str, Any]:
+    if not config_path.exists():
+        raise FileNotFoundError(f"kptn.yaml not found at {config_path}")
+
+    original_dir = Path.cwd()
+    project_dir = config_path.parent
+    os.chdir(project_dir)
+
+    try:
+        kap_conf = read_config()
+        tasks_conf = kap_conf.get("tasks", {}) if isinstance(kap_conf, dict) else {}
+        config_block = kap_conf.get("config", {}) if isinstance(kap_conf, dict) else {}
+
+        resolved_table = _resolve_duckdb_output_table(tasks_conf, table_name)
+        if not resolved_table:
+            return {"message": "Table is not configured as a DuckDB output in kptn.yaml"}
+
+        try:
+            runtime_config = RuntimeConfig.from_config(config_block, base_dir=project_dir)
+        except RuntimeConfigError as exc:
+            return {"message": f"Unable to build runtime config: {exc}"}
+
+        conn, conn_message = _duckdb_connection_from_runtime_config(runtime_config)
+        if conn is None:
+            return {"message": conn_message or "DuckDB connection unavailable"}
+
+        preview = _preview_duckdb_table(conn, resolved_table)
+        preview["resolvedTable"] = resolved_table
+        return preview
+    finally:
+        os.chdir(original_dir)
+
 
 
 class _LineageHandler(BaseHTTPRequestHandler):
