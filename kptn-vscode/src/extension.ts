@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as yaml from 'js-yaml';
 
 type JsonRpcResponse = {
 	jsonrpc: '2.0';
@@ -79,6 +80,32 @@ class BackendClient implements vscode.Disposable {
 		this.child?.kill();
 		this.child = undefined;
 		this.output.dispose();
+	}
+
+	async getLineageHtml(configUri: vscode.Uri, graph?: string): Promise<{ html: string; tables?: number; edges?: number }> {
+		const result = await this.sendRequest('generateLineageHtml', {
+			configPath: configUri.fsPath,
+			graph,
+		});
+
+		const payload = result as { html?: unknown; tables?: unknown; edges?: unknown };
+		if (typeof payload?.html === 'string') {
+			const tables = typeof payload.tables === 'number' ? payload.tables : undefined;
+			const edges = typeof payload.edges === 'number' ? payload.edges : undefined;
+			return { html: payload.html, tables, edges };
+		}
+
+		throw new Error('Backend response missing lineage HTML');
+	}
+
+	async getLineageServerBaseUrl(): Promise<string> {
+		const result = await this.sendRequest('getLineageServer');
+		const payload = result as { baseUrl?: unknown };
+		if (typeof payload?.baseUrl === 'string') {
+			return payload.baseUrl;
+		}
+
+		throw new Error('Lineage server is not available');
 	}
 
 	private ensureStarted(): void {
@@ -178,6 +205,482 @@ class BackendClient implements vscode.Disposable {
 	}
 }
 
+async function fetchHelloMessage(backend: BackendClient): Promise<string> {
+	try {
+		return await backend.getMessage();
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		return `Hello from kptn — backend unavailable (${errorMessage}).`;
+	}
+}
+
+function escapeHtml(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
+}
+
+function buildHelloHtml(message: string): string {
+	const safeMessage = escapeHtml(message);
+
+	return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>kptn Hello World</title>
+	<style>
+		:root {
+			color-scheme: light dark;
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		}
+
+		body {
+			margin: 0;
+			min-height: 100vh;
+			display: grid;
+			place-items: center;
+			background: radial-gradient(circle at 25% 25%, rgba(59, 130, 246, 0.12), transparent 30%),
+			            radial-gradient(circle at 75% 35%, rgba(16, 185, 129, 0.12), transparent 25%),
+			            radial-gradient(circle at 50% 80%, rgba(236, 72, 153, 0.1), transparent 20%),
+			            #0f172a;
+			color: #e2e8f0;
+			text-align: center;
+		}
+
+		.card {
+			padding: 32px 40px;
+			border-radius: 16px;
+			backdrop-filter: blur(10px);
+			background: rgba(15, 23, 42, 0.7);
+			box-shadow: 0 25px 50px rgba(0, 0, 0, 0.35);
+			border: 1px solid rgba(226, 232, 240, 0.08);
+		}
+
+		h1 {
+			margin: 0 0 12px;
+			font-size: 26px;
+			letter-spacing: 0.5px;
+		}
+
+		p {
+			margin: 0;
+			font-size: 16px;
+			opacity: 0.9;
+		}
+	</style>
+</head>
+<body>
+	<div class="card">
+		<h1>Welcome to kptn</h1>
+		<p>${safeMessage}</p>
+	</div>
+</body>
+</html>`;
+}
+
+class HelloWorldPanel implements vscode.Disposable {
+	private static currentPanel: HelloWorldPanel | undefined;
+	private readonly panel: vscode.WebviewPanel;
+	private readonly disposables: vscode.Disposable[] = [];
+	private disposed = false;
+
+	private constructor(panel: vscode.WebviewPanel, private readonly backend: BackendClient) {
+		this.panel = panel;
+		this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+	}
+
+	static async render(context: vscode.ExtensionContext, backend: BackendClient): Promise<void> {
+		const column = vscode.window.activeTextEditor?.viewColumn;
+
+		if (HelloWorldPanel.currentPanel) {
+			HelloWorldPanel.currentPanel.panel.reveal(column);
+			await HelloWorldPanel.currentPanel.update();
+			return;
+		}
+
+		const panel = vscode.window.createWebviewPanel(
+			'kptnHelloWorld',
+			'kptn: Hello World',
+			column ?? vscode.ViewColumn.One,
+			{
+				enableScripts: false,
+				retainContextWhenHidden: true,
+			},
+		);
+
+		const instance = new HelloWorldPanel(panel, backend);
+		HelloWorldPanel.currentPanel = instance;
+		context.subscriptions.push(instance);
+		context.subscriptions.push(panel);
+
+		await instance.update();
+	}
+
+	dispose(): void {
+		if (this.disposed) {
+			return;
+		}
+
+		this.disposed = true;
+		HelloWorldPanel.currentPanel = undefined;
+
+		while (this.disposables.length) {
+			const disposable = this.disposables.pop();
+			disposable?.dispose();
+		}
+
+		this.panel.dispose();
+	}
+
+	private async update(): Promise<void> {
+		const message = await fetchHelloMessage(this.backend);
+		this.panel.webview.html = buildHelloHtml(message);
+	}
+}
+
+class KptnTreeItem extends vscode.TreeItem {
+	constructor(label: string, collapsibleState: vscode.TreeItemCollapsibleState) {
+		super(label, collapsibleState);
+	}
+}
+
+class KptnConfigItem extends KptnTreeItem {
+	constructor(readonly uri: vscode.Uri, label: string) {
+		super(label, vscode.TreeItemCollapsibleState.Collapsed);
+		this.resourceUri = uri;
+		this.tooltip = uri.fsPath;
+	}
+}
+
+class KptnGraphItem extends KptnTreeItem {
+	constructor(readonly graphName: string, readonly tasks: string[]) {
+		super(graphName, vscode.TreeItemCollapsibleState.Collapsed);
+		this.description = `${tasks.length} task${tasks.length === 1 ? '' : 's'}`;
+		this.contextValue = 'kptnGraph';
+	}
+}
+
+const KPTN_CONFIG_GLOB = '**/kptn.yaml';
+const KPTN_CONFIG_EXCLUDE = '**/{.git,node_modules,dist,out,.venv,.mypy_cache,.pytest_cache,.ruff_cache}/**';
+
+class KptnTreeDataProvider implements vscode.TreeDataProvider<KptnTreeItem>, vscode.Disposable {
+	private readonly emitter = new vscode.EventEmitter<KptnTreeItem | void>();
+	readonly onDidChangeTreeData = this.emitter.event;
+	private disposed = false;
+
+	constructor(private readonly backend: BackendClient) {}
+
+	refresh(): void {
+		this.emitter.fire();
+	}
+
+	dispose(): void {
+		if (this.disposed) {
+			return;
+		}
+		this.disposed = true;
+		this.emitter.dispose();
+	}
+
+	getTreeItem(element: KptnTreeItem): vscode.TreeItem {
+		return element;
+	}
+
+	async getChildren(element?: KptnTreeItem): Promise<KptnTreeItem[]> {
+		if (!vscode.workspace.workspaceFolders?.length) {
+			return [new KptnTreeItem('Open a folder to view kptn configs', vscode.TreeItemCollapsibleState.None)];
+		}
+
+		if (!element) {
+			return this.buildRootItems();
+		}
+
+		if (element instanceof KptnConfigItem) {
+			return this.buildConfigChildren(element);
+		}
+
+		if (element instanceof KptnGraphItem) {
+			if (!element.tasks.length) {
+				return [new KptnTreeItem('No tasks in graph', vscode.TreeItemCollapsibleState.None)];
+			}
+
+			return element.tasks.map((taskName) => {
+				const taskItem = new KptnTreeItem(taskName, vscode.TreeItemCollapsibleState.None);
+				taskItem.description = 'Task';
+				return taskItem;
+			});
+		}
+
+		return [];
+	}
+
+	private async buildRootItems(): Promise<KptnTreeItem[]> {
+		const configs = await vscode.workspace.findFiles(KPTN_CONFIG_GLOB, KPTN_CONFIG_EXCLUDE, 50);
+		if (!configs.length) {
+			return [new KptnTreeItem('No kptn.yaml found in workspace', vscode.TreeItemCollapsibleState.None)];
+		}
+
+		return configs.map((uri) => {
+			const folder = vscode.workspace.getWorkspaceFolder(uri);
+			const label = folder ? path.relative(folder.uri.fsPath, uri.fsPath) || folder.name : uri.fsPath;
+			const item = new KptnConfigItem(uri, label);
+			item.description = folder ? folder.name : undefined;
+			item.contextValue = 'kptnConfig';
+			return item;
+		});
+	}
+
+	private async buildConfigChildren(config: KptnConfigItem): Promise<KptnTreeItem[]> {
+		const parsed = await this.parseConfig(config.uri);
+		if ('error' in parsed) {
+			const errorItem = new KptnTreeItem(parsed.error, vscode.TreeItemCollapsibleState.None);
+			errorItem.tooltip = parsed.details;
+			return [errorItem];
+		}
+
+		if (!parsed.graphs.length) {
+			return [new KptnTreeItem('No graphs defined in kptn.yaml', vscode.TreeItemCollapsibleState.None)];
+		}
+
+		return parsed.graphs.map((graph) => new KptnGraphItem(graph.name, graph.tasks));
+	}
+
+	private async parseConfig(uri: vscode.Uri): Promise<{ graphs: { name: string; tasks: string[] }[] } | { error: string; details?: string }> {
+		let raw: string;
+		try {
+			raw = await fs.promises.readFile(uri.fsPath, 'utf8');
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { error: 'Unable to read kptn.yaml', details: message };
+		}
+
+		let doc: unknown;
+		try {
+			doc = yaml.load(raw);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { error: 'Invalid YAML', details: message };
+		}
+
+		if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+			return { error: 'Unexpected kptn.yaml shape', details: 'Expected a mapping at the top level' };
+		}
+
+		const graphs = (doc as Record<string, unknown>).graphs;
+		if (!graphs || typeof graphs !== 'object') {
+			return { error: 'No graphs section found', details: 'Add a top-level "graphs" mapping' };
+		}
+
+		const parsedGraphs: { name: string; tasks: string[] }[] = [];
+		for (const [graphName, value] of Object.entries(graphs as Record<string, unknown>)) {
+			if (!value || typeof value !== 'object') {
+				continue;
+			}
+
+			const tasks = (value as Record<string, unknown>).tasks;
+			const taskNames = tasks && typeof tasks === 'object' ? Object.keys(tasks as Record<string, unknown>) : [];
+			parsedGraphs.push({ name: graphName, tasks: taskNames });
+		}
+
+		return { graphs: parsedGraphs };
+	}
+}
+
+class HelloWorldViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+	private disposed = false;
+
+	constructor(private readonly backend: BackendClient) {}
+
+	async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
+		webviewView.webview.options = { enableScripts: false };
+		const message = await fetchHelloMessage(this.backend);
+		webviewView.webview.html = buildHelloHtml(message);
+	}
+
+	dispose(): void {
+		this.disposed = true;
+	}
+}
+
+class LineagePanel implements vscode.Disposable {
+	private static panels = new Map<string, LineagePanel>();
+	private disposed = false;
+	private readonly messageSubscription: vscode.Disposable;
+
+	private constructor(
+		private readonly panel: vscode.WebviewPanel,
+		private readonly backend: BackendClient,
+		private readonly configUri: vscode.Uri,
+	) {
+		this.panel.onDidDispose(() => this.dispose());
+		this.messageSubscription = this.panel.webview.onDidReceiveMessage(async (event) => {
+			if (event?.type !== 'openFile' || typeof event?.path !== 'string') {
+				return;
+			}
+
+			try {
+				const uri = vscode.Uri.file(event.path);
+				const doc = await vscode.workspace.openTextDocument(uri);
+				await vscode.window.showTextDocument(doc, { preview: false });
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				vscode.window.showErrorMessage(`Could not open file: ${message}`);
+			}
+		});
+	}
+
+	static async show(context: vscode.ExtensionContext, backend: BackendClient, configUri: vscode.Uri, graph?: string): Promise<void> {
+		const key = configUri.fsPath;
+		const existing = LineagePanel.panels.get(key);
+		if (existing) {
+			existing.panel.reveal();
+			await existing.update(graph);
+			return;
+		}
+
+		const panel = vscode.window.createWebviewPanel(
+			'kptnLineage',
+			`SQL Graph: ${path.basename(configUri.fsPath)}`,
+			vscode.ViewColumn.Active,
+			{
+				enableScripts: true,
+				retainContextWhenHidden: true,
+			},
+		);
+
+		const instance = new LineagePanel(panel, backend, configUri);
+		LineagePanel.panels.set(key, instance);
+		context.subscriptions.push(instance);
+		context.subscriptions.push(panel);
+
+		await instance.update(graph);
+	}
+
+	dispose(): void {
+		if (this.disposed) {
+			return;
+		}
+
+		this.disposed = true;
+		LineagePanel.panels.delete(this.configUri.fsPath);
+		this.messageSubscription.dispose();
+		this.panel.dispose();
+	}
+
+	private async update(graph?: string): Promise<void> {
+		const { html, tables, edges } = await this.backend.getLineageHtml(this.configUri, graph);
+		if (tables === 0 || edges === 0) {
+			this.panel.webview.html = this.buildFallbackHtml('No SQL lineage data found for this kptn.yaml. Ensure SQL tasks are present and configured.');
+			return;
+		}
+
+		const tableMap = await this.buildTableFileMap();
+		this.panel.webview.html = this.injectClickHandlers(html, tableMap);
+	}
+
+	private async buildTableFileMap(): Promise<Record<string, string>> {
+		try {
+			const raw = await fs.promises.readFile(this.configUri.fsPath, 'utf8');
+			const doc = yaml.load(raw) as unknown;
+			if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+				return {};
+			}
+
+			const tasks = (doc as Record<string, unknown>).tasks;
+			if (!tasks || typeof tasks !== 'object') {
+				return {};
+			}
+
+			const map: Record<string, string> = {};
+			for (const [taskName, value] of Object.entries(tasks as Record<string, unknown>)) {
+				if (!value || typeof value !== 'object') {
+					continue;
+				}
+
+				const spec = value as Record<string, unknown>;
+				const fileEntry = typeof spec.file === 'string' ? spec.file : undefined;
+				const file = fileEntry ? fileEntry.split(':')[0] : undefined;
+				const outputs = Array.isArray(spec.outputs) ? spec.outputs.filter((o) => typeof o === 'string') as string[] : [];
+				if (!file || !outputs.length) {
+					continue;
+				}
+
+				for (const output of outputs) {
+					const normalized = this.normalizeTableName(output);
+					if (normalized) {
+						const absolute = path.isAbsolute(file) ? file : path.join(path.dirname(this.configUri.fsPath), file);
+						map[normalized] = absolute;
+					}
+				}
+
+				const normalizedTaskName = this.normalizeTableName(taskName);
+				if (normalizedTaskName && file) {
+					const absolute = path.isAbsolute(file) ? file : path.join(path.dirname(this.configUri.fsPath), file);
+					map[normalizedTaskName] = absolute;
+				}
+			}
+
+			return map;
+		} catch {
+			return {};
+		}
+	}
+
+	private buildFallbackHtml(message: string): string {
+		const escaped = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+		return `<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px;">
+<h2>SQL lineage not available</h2>
+<p>${escaped}</p>
+</body></html>`;
+	}
+
+	private injectClickHandlers(html: string, tableMap: Record<string, string>): string {
+		const script = `
+<script>
+(function() {
+	const vscode = acquireVsCodeApi();
+	const tableMap = ${JSON.stringify(tableMap)};
+	function normalize(name) {
+		return (name || '').trim().replace(/^[^:]*:\\/\\//, '').split('.').slice(-1)[0]?.toLowerCase() || '';
+	}
+	document.addEventListener('click', (event) => {
+		const target = event.target;
+		if (!(target instanceof HTMLElement)) return;
+		const tableEl = target.closest('.table-name');
+		if (!tableEl) return;
+		const name = tableEl.textContent || '';
+		const key = normalize(name);
+		const path = tableMap[key];
+		if (path) {
+			vscode.postMessage({ type: 'openFile', path });
+		} else {
+			vscode.postMessage({ type: 'openFileMissing', table: name });
+		}
+	});
+})();
+</script>`;
+
+		if (html.includes('</body>')) {
+			return html.replace('</body>', `${script}</body>`);
+		}
+
+		return `${html}${script}`;
+	}
+
+	private normalizeTableName(value: string): string | undefined {
+		const cleaned = value.replace(/^[^:]+:\/\//, '').split('.').slice(-1)[0];
+		if (!cleaned) {
+			return undefined;
+		}
+		return cleaned.trim().toLowerCase();
+	}
+}
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -193,16 +696,45 @@ export function activate(context: vscode.ExtensionContext) {
 	// The commandId parameter must match the command field in package.json
 	const disposable = vscode.commands.registerCommand('kptn.helloWorld', async () => {
 		try {
-			const backendMessage = await backend.getMessage();
-			vscode.window.showInformationMessage(backendMessage);
+			await HelloWorldPanel.render(context, backend);
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
-			vscode.window.showErrorMessage(`Could not reach backend: ${errorMessage}`);
+			vscode.window.showErrorMessage(`Could not open kptn hello view: ${errorMessage}`);
 		}
 	});
 
+	const viewProvider = new HelloWorldViewProvider(backend);
+	context.subscriptions.push(vscode.window.registerWebviewViewProvider('kptn.helloView', viewProvider));
+
+	const treeDataProvider = new KptnTreeDataProvider(backend);
+	context.subscriptions.push(vscode.window.createTreeView('kptn.tree', { treeDataProvider }));
+	context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => treeDataProvider.refresh()));
+
+	const viewLineageCommand = vscode.commands.registerCommand('kptn.viewLineage', async (item?: KptnConfigItem) => {
+		if (!(item instanceof KptnConfigItem)) {
+			vscode.window.showErrorMessage('Select a kptn.yaml to view the SQL graph');
+			return;
+		}
+
+		try {
+			await LineagePanel.show(context, backend, item.uri);
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			vscode.window.showErrorMessage(`Could not render SQL graph: ${errorMessage}`);
+		}
+	});
+
+	const watcher = vscode.workspace.createFileSystemWatcher(KPTN_CONFIG_GLOB);
+	watcher.onDidCreate(() => treeDataProvider.refresh());
+	watcher.onDidChange(() => treeDataProvider.refresh());
+	watcher.onDidDelete(() => treeDataProvider.refresh());
+	context.subscriptions.push(watcher);
+
 	context.subscriptions.push(disposable);
 	context.subscriptions.push(backend);
+	context.subscriptions.push(viewProvider);
+	context.subscriptions.push(treeDataProvider);
+	context.subscriptions.push(viewLineageCommand);
 }
 
 // This method is called when your extension is deactivated

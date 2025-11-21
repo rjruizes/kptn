@@ -15,14 +15,52 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:kptn.helloWorld"
+    "onCommand:kptn.helloWorld",
+    "onCommand:kptn.viewLineage",
+    "onView:kptn.helloView",
+    "onView:kptn.tree"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "kptn",
+          "title": "kptn",
+          "icon": "k-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "kptn": [
+        {
+          "id": "kptn.helloView",
+          "name": "Hello World"
+        },
+        {
+          "id": "kptn.tree",
+          "name": "kptn"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "kptn.viewLineage",
+          "when": "view == kptn.tree && viewItem == kptnConfig",
+          "group": "inline"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "kptn.helloWorld",
-        "title": "Fetch kptn message"
+        "title": "Open kptn hello view"
+      },
+      {
+        "command": "kptn.viewLineage",
+        "title": "View SQL Graph",
+        "icon": "$(outline-view-icon)"
       }
     ]
   },
@@ -35,7 +73,11 @@
     "test": "vscode-test",
     "vendor-python": "node scripts/vendor-python.js"
   },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/vscode": "^1.100.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
