@@ -38,7 +38,7 @@ def render_lineage_html(
     }}
     body {{
       margin: 0;
-      padding: 16px;
+      padding: 0;
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
@@ -50,10 +50,7 @@ def render_lineage_html(
     }}
     #visualizer {{
       position: relative;
-      border: 1px solid var(--border);
-      background: var(--panel);
-      border-radius: 12px;
-      padding: 20px 28px;
+      padding: 12px 16px;
       overflow: hidden;
     }}
     #tables {{
