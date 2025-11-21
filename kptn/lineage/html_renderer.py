@@ -71,16 +71,19 @@ def render_lineage_html(
       letter-spacing: 0.03em;
     }}
     .columns {{
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
     }}
     .column {{
       position: relative;
       cursor: pointer;
-      padding: 2px 6px;
-      border-radius: 4px;
+      padding: 6px 8px;
+      border-radius: 0;
       transition: background 0.2s ease, color 0.2s ease;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }}
     .column:hover {{
       background: rgba(245, 197, 66, 0.15);
@@ -178,22 +181,31 @@ def render_lineage_html(
         nameEl.textContent = table.name;
         tableEl.appendChild(nameEl);
 
-        const columnsEl = document.createElement("div");
-        columnsEl.className = "columns";
+        const headerTable = document.createElement("table");
+        headerTable.className = "columns preview-table";
+        const thead = document.createElement("thead");
+        const headerRow = document.createElement("tr");
 
         table.columns.forEach((columnName) => {{
-          const columnEl = document.createElement("span");
-          columnEl.className = "column";
-          columnEl.textContent = columnName;
-          columnEl.tabIndex = 0;
+          const th = document.createElement("th");
+          th.className = "column";
+          th.textContent = columnName;
+          th.tabIndex = 0;
 
           const id = columnId(tableIndex, columnName);
-          columnEl.dataset.columnId = id;
-          columnsEl.appendChild(columnEl);
-          columnElements.set(id, columnEl);
+          th.dataset.columnId = id;
+          headerRow.appendChild(th);
+          columnElements.set(id, th);
         }});
 
-        tableEl.appendChild(columnsEl);
+        thead.appendChild(headerRow);
+        headerTable.appendChild(thead);
+
+        const previewBody = document.createElement("tbody");
+        previewBody.className = "preview-body";
+        headerTable.appendChild(previewBody);
+
+        tableEl.appendChild(headerTable);
         tablesRoot.appendChild(tableEl);
       }});
     }}

@@ -653,11 +653,16 @@ class LineagePanel implements vscode.Disposable {
 					return;
 				}
 
-				if (event.type === 'openFile' && typeof event.path === 'string') {
-					try {
-						const uri = vscode.Uri.file(event.path);
-						const doc = await vscode.workspace.openTextDocument(uri);
-						await vscode.window.showTextDocument(doc, { preview: false });
+			if (event.type === 'openFile' && typeof event.path === 'string') {
+				try {
+					const uri = vscode.Uri.file(event.path);
+					const doc = await vscode.workspace.openTextDocument(uri);
+					const targetColumn = this.getAlternateViewColumn();
+					const showOptions: vscode.TextDocumentShowOptions = { preview: false };
+					if (targetColumn) {
+						showOptions.viewColumn = targetColumn;
+					}
+					await vscode.window.showTextDocument(doc, showOptions);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					vscode.window.showErrorMessage(`Could not open file: ${message}`);
@@ -729,24 +734,43 @@ class LineagePanel implements vscode.Disposable {
 
 	private async handleTablePreview(tableName: string): Promise<void> {
 		try {
-			const preview = await this.backend.getTablePreview(this.configUri, tableName);
-			await this.panel.webview.postMessage({
-				type: 'tablePreview',
-				table: tableName,
-				columns: preview.columns,
-				row: preview.row,
-				message: preview.message,
-				resolvedTable: preview.resolvedTable,
-			});
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			vscode.window.showErrorMessage(`Unable to load table details: ${message}`);
-			await this.panel.webview.postMessage({
+		const preview = await this.backend.getTablePreview(this.configUri, tableName);
+		await this.panel.webview.postMessage({
+			type: 'tablePreview',
+			table: tableName,
+			columns: preview.columns,
+			row: preview.row,
+			message: preview.message,
+			resolvedTable: preview.resolvedTable,
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		vscode.window.showErrorMessage(`Unable to load table details: ${message}`);
+		await this.panel.webview.postMessage({
 				type: 'tablePreview',
 				table: tableName,
 				message,
 			});
 		}
+	}
+
+	private getAlternateViewColumn(): vscode.ViewColumn | undefined {
+		const current = this.panel.viewColumn;
+		if (current) {
+			for (const group of vscode.window.tabGroups.all) {
+				if (group.viewColumn && group.viewColumn !== current) {
+					return group.viewColumn;
+				}
+			}
+		}
+
+		for (const editor of vscode.window.visibleTextEditors) {
+			if (editor.viewColumn && editor.viewColumn !== current) {
+				return editor.viewColumn;
+			}
+		}
+
+		return undefined;
 	}
 
 	private async buildTableFileMap(): Promise<Record<string, string>> {
@@ -821,12 +845,10 @@ class LineagePanel implements vscode.Disposable {
 		'.kptn-open-file, .kptn-open-table { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; border: none; background: rgba(255,255,255,0.04); color: #e2e8f0; cursor: pointer; padding: 2px; transition: background 0.15s ease, color 0.15s ease; }',
 		'.kptn-open-file:hover, .kptn-open-table:hover { background: rgba(255,255,255,0.1); color: #fbbf24; }',
 		'.kptn-open-file svg, .kptn-open-table svg { width: 16px; height: 16px; }',
-		'.table-preview { margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,0.02); border: 1px solid rgba(226,232,240,0.06); display: flex; flex-direction: column; gap: 8px; }',
-		'.preview-heading { font-size: 12px; color: #94a3b8; letter-spacing: 0.02em; }',
-		'.preview-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }',
-		'.preview-cell { padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(226,232,240,0.08); display: flex; flex-direction: column; gap: 4px; }',
-		'.preview-col { font-size: 12px; color: #aab4c8; }',
-		'.preview-val { font-size: 13px; color: #e2e8f0; word-break: break-all; }',
+		'.table-preview { margin-top: 6px; }',
+		'.preview-table { width: 100%; border-collapse: collapse; table-layout: fixed; }',
+		'.preview-table th, .preview-table td { border: 1px solid rgba(226,232,240,0.2); padding: 6px 8px; font-size: 12px; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
+		'.preview-table th { background: rgba(255,255,255,0.05); color: #cbd5e1; text-align: left; }',
 		'.preview-status { font-size: 13px; color: #cbd5e1; }',
 	].join('');
 	document.head.appendChild(style);
@@ -864,28 +886,6 @@ class LineagePanel implements vscode.Disposable {
 	function renderPreview(tableName, payload) {
 		const tableEl = findTableElement(tableName);
 		if (!tableEl) return;
-		let previewEl = tableEl.querySelector('.table-preview');
-		if (!(previewEl instanceof HTMLElement)) {
-			previewEl = document.createElement('div');
-			previewEl.className = 'table-preview';
-			tableEl.appendChild(previewEl);
-		} else {
-			previewEl.innerHTML = '';
-		}
-
-		const heading = document.createElement('div');
-		heading.className = 'preview-heading';
-		const resolved = typeof payload?.resolvedTable === 'string' ? payload.resolvedTable : tableName;
-		heading.textContent = resolved && resolved !== tableName ? 'Preview (' + resolved + ')' : 'Preview';
-		previewEl.appendChild(heading);
-
-		if (payload?.message) {
-			const status = document.createElement('div');
-			status.className = 'preview-status';
-			status.textContent = payload.message;
-			previewEl.appendChild(status);
-		}
-
 		const columns = Array.isArray(payload?.columns) ? payload.columns : [];
 		const row = Array.isArray(payload?.row) ? payload.row : [];
 		if (!columns.length || !row.length) {
@@ -893,22 +893,38 @@ class LineagePanel implements vscode.Disposable {
 			return;
 		}
 
-		const rowEl = document.createElement('div');
-		rowEl.className = 'preview-row';
-		columns.forEach((column, index) => {
-			const cell = document.createElement('div');
-			cell.className = 'preview-cell';
-			const colEl = document.createElement('div');
-			colEl.className = 'preview-col';
-			colEl.textContent = String(column);
-			const valEl = document.createElement('div');
-			valEl.className = 'preview-val';
-			valEl.textContent = formatCellValue(index < row.length ? row[index] : null);
-			cell.appendChild(colEl);
-			cell.appendChild(valEl);
-			rowEl.appendChild(cell);
+		let previewTable = tableEl.querySelector('table.columns');
+		if (!(previewTable instanceof HTMLTableElement)) {
+			previewTable = document.createElement('table');
+			previewTable.className = 'columns preview-table';
+			const thead = document.createElement('thead');
+			const headerRow = document.createElement('tr');
+			columns.forEach((column) => {
+				const th = document.createElement('th');
+				th.className = 'column';
+				th.textContent = String(column);
+				headerRow.appendChild(th);
+			});
+			thead.appendChild(headerRow);
+			previewTable.appendChild(thead);
+			tableEl.appendChild(previewTable);
+		}
+
+		let tbody = previewTable.querySelector('tbody');
+		if (!(tbody instanceof HTMLTableSectionElement)) {
+			tbody = document.createElement('tbody');
+			previewTable.appendChild(tbody);
+		}
+		tbody.innerHTML = '';
+		tbody.className = 'preview-body';
+		const dataRow = document.createElement('tr');
+		columns.forEach((_, index) => {
+			const td = document.createElement('td');
+			td.textContent = formatCellValue(index < row.length ? row[index] : null);
+			dataRow.appendChild(td);
 		});
-		previewEl.appendChild(rowEl);
+		tbody.appendChild(dataRow);
+
 		refreshConnections();
 	}
 	function refreshConnections() {
