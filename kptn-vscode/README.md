@@ -13,15 +13,11 @@ This extension now starts a long-lived Python backend and exchanges JSON-RPC mes
 
 ## Python path resolution
 
-- On activation, the extension sets `PYTHONPATH` for the backend: it prefers the sibling checkout `../kptn` if present, then falls back to a vendored copy at `python_libs/` inside the extension. Any existing `PYTHONPATH` is appended.
+- **Prerequisite**: The extension requires `kptn` to be installed in your active Python environment. Install it with `pip install kptn` or activate an environment where it's already installed.
+- On activation, the extension sets `PYTHONPATH` for the backend: it uses the sibling checkout `../kptn` if present (for development in the monorepo). Any existing `PYTHONPATH` is appended.
 - The backend interpreter remains configurable via `KPTN_VSCODE_PYTHON`.
-
-## Vendoring the kptn library for packaging
-
-- Run `npm run vendor-python` from `kptn-vscode` to pip install the monorepo root (`../`) into `python_libs/` (it falls back to `../kptn` if the root lacks a `pyproject.toml`/`setup.py`). This is invoked automatically during `vsce package` via the `vscode:prepublish` hook.
-- Ensure `python` (or `KPTN_VSCODE_PYTHON`) has `pip` available and can access the sibling checkout.
-- Generated `python_libs/` is included in the VSIX (it is not excluded by `.vscodeignore`). Remove it or re-run the script to refresh before packaging.
 
 ## Packaging
 
-- From anywhere inside `kptn-vscode`, run `./scripts/package.sh` to build a VSIX. The script will install dependencies if `node_modules/` is missing and then invoke `vsce package` (which triggers vendoring + compile via `vscode:prepublish`).
+- From anywhere inside `kptn-vscode`, run `./scripts/package.sh` to build a VSIX. The script will install dependencies if `node_modules/` is missing and then invoke `vsce package` (which triggers TypeScript compilation via `vscode:prepublish`).
+- Users of the packaged extension must have `kptn` installed in their Python environment.

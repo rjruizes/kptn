@@ -1,0 +1,27 @@
+{% set columns = payload.get("columns") or [] %}
+{% set row = payload.get("row") or [] %}
+{% set message = payload.get("message") %}
+<div class="table-preview">
+    {% if message and not columns %}
+        <p class="preview-status">{{ message }}</p>
+    {% elif columns and row %}
+        <table class="preview-table">
+            <thead>
+                <tr>
+                    {% for col in columns %}
+                    <th>{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    {% for value in row %}
+                    <td>{{ value }}</td>
+                    {% endfor %}
+                </tr>
+            </tbody>
+        </table>
+    {% else %}
+        <p class="preview-status">No preview available.</p>
+    {% endif %}
+</div>

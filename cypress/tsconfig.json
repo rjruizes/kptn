@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "CommonJS",
+    "types": ["cypress"],
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"]
+}

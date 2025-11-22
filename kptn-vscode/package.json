@@ -65,13 +65,12 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run vendor-python && npm run compile",
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "vscode-test",
-    "vendor-python": "node scripts/vendor-python.js"
+    "test": "vscode-test"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

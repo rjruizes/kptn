@@ -33,16 +33,13 @@ class BackendClient implements vscode.Disposable {
 
 		const { executable: pythonExecutable, source: pythonSource } = await this.resolvePythonExecutable();
 		const scriptPath = path.join(this.context.extensionPath, 'backend.py');
-		const useVendored = pythonSource === 'PATH default';
-		const { pythonPath, sources } = this.resolvePythonPath(useVendored);
+		const { pythonPath, sources } = this.resolvePythonPath();
 		const env = { ...process.env };
 
 		this.output.appendLine(`Using Python executable from ${pythonSource}: ${pythonExecutable}`);
 		if (pythonPath) {
 			env.PYTHONPATH = pythonPath;
 			this.output.appendLine(`Using PYTHONPATH from: ${sources.join(' -> ')}`);
-		} else {
-			this.output.appendLine('No PYTHONPATH set (sibling ../kptn and python_libs missing).');
 		}
 
 		this.child = spawn(pythonExecutable, [scriptPath], {
@@ -194,22 +191,15 @@ class BackendClient implements vscode.Disposable {
 		this.pending.clear();
 	}
 
-	private resolvePythonPath(includeVendored: boolean): { pythonPath?: string; sources: string[] } {
+	private resolvePythonPath(): { pythonPath?: string; sources: string[] } {
 		const sources: string[] = [];
 		const segments: string[] = [];
 		const siblingPath = path.resolve(this.context.extensionPath, '..', 'kptn');
-		const vendoredPath = path.join(this.context.extensionPath, 'python_libs');
 
+		// For development: use sibling kptn package if it exists
 		if (fs.existsSync(siblingPath)) {
 			segments.push(siblingPath);
 			sources.push('sibling ../kptn');
-		}
-
-		if (includeVendored && fs.existsSync(vendoredPath)) {
-			segments.push(vendoredPath);
-			sources.push('vendored python_libs');
-		} else if (!includeVendored) {
-			this.output.appendLine('Skipping vendored python_libs in favor of workspace/active environment.');
 		}
 
 		if (process.env.PYTHONPATH) {
@@ -218,6 +208,7 @@ class BackendClient implements vscode.Disposable {
 		}
 
 		if (!segments.length) {
+			this.output.appendLine('No additional PYTHONPATH configured. Relying on active Python environment to have kptn installed.');
 			return { pythonPath: undefined, sources };
 		}
 
@@ -728,8 +719,7 @@ class LineagePanel implements vscode.Disposable {
 			return;
 		}
 
-		const tableMap = await this.buildTableFileMap();
-		this.panel.webview.html = this.injectClickHandlers(html, tableMap);
+		this.panel.webview.html = html;
 	}
 
 	private async handleTablePreview(tableName: string): Promise<void> {
@@ -773,54 +763,6 @@ class LineagePanel implements vscode.Disposable {
 		return undefined;
 	}
 
-	private async buildTableFileMap(): Promise<Record<string, string>> {
-		try {
-			const raw = await fs.promises.readFile(this.configUri.fsPath, 'utf8');
-			const doc = yaml.load(raw) as unknown;
-			if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
-				return {};
-			}
-
-			const tasks = (doc as Record<string, unknown>).tasks;
-			if (!tasks || typeof tasks !== 'object') {
-				return {};
-			}
-
-			const map: Record<string, string> = {};
-			for (const [taskName, value] of Object.entries(tasks as Record<string, unknown>)) {
-				if (!value || typeof value !== 'object') {
-					continue;
-				}
-
-				const spec = value as Record<string, unknown>;
-				const fileEntry = typeof spec.file === 'string' ? spec.file : undefined;
-				const file = fileEntry ? fileEntry.split(':')[0] : undefined;
-				const outputs = Array.isArray(spec.outputs) ? spec.outputs.filter((o) => typeof o === 'string') as string[] : [];
-				if (!file || !outputs.length) {
-					continue;
-				}
-
-				for (const output of outputs) {
-					const normalized = this.normalizeTableName(output);
-					if (normalized) {
-						const absolute = path.isAbsolute(file) ? file : path.join(path.dirname(this.configUri.fsPath), file);
-						map[normalized] = absolute;
-					}
-				}
-
-				const normalizedTaskName = this.normalizeTableName(taskName);
-				if (normalizedTaskName && file) {
-					const absolute = path.isAbsolute(file) ? file : path.join(path.dirname(this.configUri.fsPath), file);
-					map[normalizedTaskName] = absolute;
-				}
-			}
-
-			return map;
-		} catch {
-			return {};
-		}
-	}
-
 	private buildFallbackHtml(message: string): string {
 		const escaped = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 		return `<!DOCTYPE html>
@@ -828,207 +770,6 @@ class LineagePanel implements vscode.Disposable {
 <h2>SQL lineage not available</h2>
 <p>${escaped}</p>
 </body></html>`;
-	}
-
-	private injectClickHandlers(html: string, tableMap: Record<string, string>): string {
-		const script = `
-<script>
-(function() {
-	const vscode = acquireVsCodeApi();
-	const tableMap = ${JSON.stringify(tableMap)};
-	const openSvg = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h7l3 3v8H3z"/><path d="M10 2.5v3h3"/><path d="M7 6 5 8l2 2"/><path d="M9 10l2-2-2-2"/></svg>';
-	const tableSvg = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 6.5h11"/><path d="M2.5 9.5h11"/><path d="M6 3.5v9"/><path d="M10 3.5v9"/></svg>';
-
-	const style = document.createElement('style');
-	style.textContent = [
-		'.table-name { display: flex; align-items: center; gap: 6px; }',
-		'.kptn-open-file, .kptn-open-table { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; border: none; background: rgba(255,255,255,0.04); color: #e2e8f0; cursor: pointer; padding: 2px; transition: background 0.15s ease, color 0.15s ease; }',
-		'.kptn-open-file:hover, .kptn-open-table:hover { background: rgba(255,255,255,0.1); color: #fbbf24; }',
-		'.kptn-open-file svg, .kptn-open-table svg { width: 16px; height: 16px; }',
-		'.table-preview { margin-top: 6px; }',
-		'.preview-table { width: 100%; border-collapse: collapse; table-layout: fixed; }',
-		'.preview-table th, .preview-table td { border: 1px solid rgba(226,232,240,0.2); padding: 6px 8px; font-size: 12px; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
-		'.preview-table th { background: rgba(255,255,255,0.05); color: #cbd5e1; text-align: left; }',
-		'.preview-status { font-size: 13px; color: #cbd5e1; }',
-	].join('');
-	document.head.appendChild(style);
-
-	function normalize(name) {
-		return (name || '').trim().replace(/^[^:]*:\\/\\//, '').split('.').slice(-1)[0]?.toLowerCase() || '';
-	}
-	function findTableElement(tableName) {
-		const target = (tableName || '').trim().toLowerCase();
-		if (!target) return null;
-		const tables = document.querySelectorAll('.table');
-		for (const table of tables) {
-			if (!(table instanceof HTMLElement)) continue;
-			const nameEl = table.querySelector('.table-name');
-			if (!(nameEl instanceof HTMLElement)) continue;
-			const textNode = Array.from(nameEl.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
-			const label = (textNode?.textContent || nameEl.textContent || '').trim().toLowerCase();
-			if (label === target) {
-				return table;
-			}
-		}
-		return null;
-	}
-	function formatCellValue(value) {
-		if (value === null || value === undefined) return 'null';
-		if (typeof value === 'object') {
-			try {
-				return JSON.stringify(value);
-			} catch {
-				return String(value);
-			}
-		}
-		return String(value);
-	}
-	function renderPreview(tableName, payload) {
-		const tableEl = findTableElement(tableName);
-		if (!tableEl) return;
-		const columns = Array.isArray(payload?.columns) ? payload.columns : [];
-		const row = Array.isArray(payload?.row) ? payload.row : [];
-		if (!columns.length || !row.length) {
-			refreshConnections();
-			return;
-		}
-
-		let previewTable = tableEl.querySelector('table.columns');
-		if (!(previewTable instanceof HTMLTableElement)) {
-			previewTable = document.createElement('table');
-			previewTable.className = 'columns preview-table';
-			const thead = document.createElement('thead');
-			const headerRow = document.createElement('tr');
-			columns.forEach((column) => {
-				const th = document.createElement('th');
-				th.className = 'column';
-				th.textContent = String(column);
-				headerRow.appendChild(th);
-			});
-			thead.appendChild(headerRow);
-			previewTable.appendChild(thead);
-			tableEl.appendChild(previewTable);
-		}
-
-		let tbody = previewTable.querySelector('tbody');
-		if (!(tbody instanceof HTMLTableSectionElement)) {
-			tbody = document.createElement('tbody');
-			previewTable.appendChild(tbody);
-		}
-		tbody.innerHTML = '';
-		tbody.className = 'preview-body';
-		const dataRow = document.createElement('tr');
-		columns.forEach((_, index) => {
-			const td = document.createElement('td');
-			td.textContent = formatCellValue(index < row.length ? row[index] : null);
-			dataRow.appendChild(td);
-		});
-		tbody.appendChild(dataRow);
-
-		refreshConnections();
-	}
-	function refreshConnections() {
-		if (typeof updateConnectionPaths === 'function') {
-			updateConnectionPaths();
-		} else {
-			window.dispatchEvent(new Event('resize'));
-		}
-	}
-	function ensureButtons() {
-		document.querySelectorAll('.table-name').forEach((nameEl) => {
-			if (!(nameEl instanceof HTMLElement)) return;
-			const hasOpen = nameEl.querySelector('.kptn-open-file');
-			const hasMeta = nameEl.querySelector('.kptn-open-table');
-			const textNode = Array.from(nameEl.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
-			const name = (textNode?.textContent || nameEl.textContent || '').trim();
-			const key = normalize(name);
-			const path = tableMap[key];
-
-			if (!hasOpen) {
-				const openBtn = document.createElement('button');
-				openBtn.className = 'kptn-open-file';
-				openBtn.type = 'button';
-				openBtn.title = 'Open source';
-				openBtn.innerHTML = openSvg;
-				openBtn.addEventListener('click', (event) => {
-					event.stopPropagation();
-					if (path) {
-						vscode.postMessage({ type: 'openFile', path });
-					} else {
-						vscode.postMessage({ type: 'openFileMissing', table: name });
-					}
-				});
-				nameEl.appendChild(openBtn);
-			}
-
-			if (!hasMeta) {
-				const metaBtn = document.createElement('button');
-				metaBtn.className = 'kptn-open-table';
-				metaBtn.type = 'button';
-				metaBtn.title = 'Table details';
-				metaBtn.innerHTML = tableSvg;
-				metaBtn.addEventListener('click', (event) => {
-					event.stopPropagation();
-					renderPreview(name, { table: name, message: 'Loading table details...' });
-					vscode.postMessage({ type: 'tableMeta', table: name, path: path || null });
-				});
-				nameEl.appendChild(metaBtn);
-			}
-		});
-		refreshConnections();
-	}
-
-	ensureButtons();
-
-	window.addEventListener('message', (event) => {
-		const payload = event.data;
-		if (!payload || payload.type !== 'tablePreview') {
-			return;
-		}
-		renderPreview(payload.table, payload);
-	});
-
-	document.addEventListener('mouseover', (event) => {
-		const target = event.target;
-		if (!(target instanceof HTMLElement)) return;
-		const tableEl = target.closest('.table');
-		if (!tableEl) return;
-		const nameEl = tableEl.querySelector('.table-name');
-		const name = nameEl ? nameEl.textContent || '' : '';
-		const key = normalize(name);
-		const path = tableMap[key];
-		if (path) {
-			vscode.postMessage({ type: 'hoverFile', path });
-		}
-	});
-
-	document.addEventListener('mouseout', (event) => {
-		const target = event.target;
-		if (!(target instanceof HTMLElement)) return;
-		if (!event.relatedTarget || !(event.relatedTarget instanceof HTMLElement)) {
-			return;
-		}
-		const leavingTable = target.closest('.table') && !event.relatedTarget.closest('.table');
-		if (leavingTable) {
-			vscode.postMessage({ type: 'hoverExit' });
-		}
-	});
-})();
-</script>`;
-
-		if (html.includes('</body>')) {
-			return html.replace('</body>', `${script}</body>`);
-		}
-
-		return `${html}${script}`;
-	}
-
-	private normalizeTableName(value: string): string | undefined {
-		const cleaned = value.replace(/^[^:]+:\/\//, '').split('.').slice(-1)[0];
-		if (!cleaned) {
-			return undefined;
-		}
-		return cleaned.trim().toLowerCase();
 	}
 
 	private applyHoverHighlight(filePath: string): void {

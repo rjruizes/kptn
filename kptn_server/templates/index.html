@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>kptn Lineage Viewer</title>
+    <script src="/static/alpine.min.js" defer></script>
+    <style>
+        :root { color-scheme: dark; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at 25% 25%, rgba(59, 130, 246, 0.08), transparent 30%),
+                        radial-gradient(circle at 75% 35%, rgba(16, 185, 129, 0.08), transparent 25%),
+                        radial-gradient(circle at 50% 80%, rgba(236, 72, 153, 0.08), transparent 20%),
+                        #0b1021;
+            color: #e2e8f0;
+        }
+        .page {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        .card {
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(226, 232, 240, 0.1);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+        label { display: block; font-weight: 600; margin-bottom: 6px; }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(226,232,240,0.25);
+            background: rgba(15,23,42,0.8);
+            color: #e2e8f0;
+        }
+        input:focus { outline: 2px solid #38bdf8; border-color: #38bdf8; }
+        .actions { margin-top: 12px; display: flex; gap: 10px; }
+        button {
+            padding: 10px 14px;
+            border-radius: 10px;
+            border: none;
+            background: linear-gradient(135deg, #22d3ee, #a855f7);
+            color: #0b1021;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        #lineage-host { margin-top: 20px; }
+        .config-list { display: grid; gap: 8px; margin: 10px 0; }
+        .config-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(226,232,240,0.12);
+        }
+        .config-item input { margin: 0; }
+        .muted { color: #94a3b8; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="card">
+            <form id="lineage-form">
+                <label>kptn.yaml in {{ root }}</label>
+                {% if configs %}
+                <div class="config-list">
+                    {% for cfg in configs %}
+                    <label class="config-item">
+                        <input type="radio" name="configPath" value="{{ cfg.path }}" {% if loop.first %}checked{% endif %}>
+                        <span>{{ cfg.label }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+                {% else %}
+                    <p class="muted">No kptn.yaml found under {{ root }}. Specify a path manually.</p>
+                    <input type="text" name="configPath" placeholder="/path/to/kptn.yaml" value="{{ config_path }}">
+                {% endif %}
+                <label for="graph" style="margin-top: 10px;">Graph (optional)</label>
+                <input id="graph" name="graph" placeholder="graph name" value="{{ graph }}" type="text">
+                <div class="actions">
+                    <button type="submit">Render lineage</button>
+                </div>
+            </form>
+        </div>
+        <div id="lineage-host"></div>
+    </div>
+    <script>
+    (function() {
+        const form = document.getElementById('lineage-form');
+        const host = document.getElementById('lineage-host');
+        async function renderLineage(event) {
+            event.preventDefault();
+            const formData = new FormData(form);
+            const configPath = formData.get('configPath') || '';
+            const graph = formData.get('graph') || '';
+            if (!configPath) {
+                host.innerHTML = '<p class="muted">Select a kptn.yaml first.</p>';
+                return;
+            }
+            const params = new URLSearchParams({ configPath: String(configPath) });
+            if (graph) params.set('graph', String(graph));
+            host.innerHTML = '<p class="muted">Loading lineage...</p>';
+            const iframe = document.createElement('iframe');
+            iframe.src = `/lineage-page?${params.toString()}`;
+            iframe.style.width = '100%';
+            iframe.style.height = '80vh';
+            iframe.style.border = '1px solid rgba(226,232,240,0.12)';
+            iframe.style.borderRadius = '12px';
+            iframe.onload = () => {
+                // allow the iframe content to size itself once loaded
+                try {
+                    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+                    if (doc?.body?.scrollHeight) {
+                        iframe.style.height = `${doc.body.scrollHeight + 40}px`;
+                    }
+                } catch {
+                    // ignore cross-origin protections; same-origin by default
+                }
+            };
+            host.innerHTML = '';
+            host.appendChild(iframe);
+        }
+        form.addEventListener('submit', renderLineage);
+    })();
+    </script>
+</body>
+</html>

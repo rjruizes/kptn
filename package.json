@@ -1,0 +1,30 @@
+{
+  "name": "kptn",
+  "version": "1.0.0",
+  "description": "kptn is a meta orchestration framework for building R and Python data pipelines. It right-sizes tasks, tests changes, and streamlines development and operation.",
+  "main": "index.js",
+  "directories": {
+    "example": "example",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "cypress:open": "cypress open",
+    "cypress:run": "cypress run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rjruizes/kptn.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "vscode": "^1.100.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "cypress": "^15.7.0",
+    "typescript": "^5.9.3"
+  }
+}

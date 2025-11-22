@@ -34,11 +34,16 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["kptn"]
+packages = ["kptn", "kptn_server"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"kptn_server/templates" = "kptn_server/templates"
+"kptn_server/static" = "kptn_server/static"
 
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "ruff>=0.14.6",
 ]
 
 [tool.pytest.ini_options]
