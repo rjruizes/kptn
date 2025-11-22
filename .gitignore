@@ -330,6 +330,7 @@ tmp/
 
 shared-local-instance.db
 *.db
+*.ddb
 
 # Local .terraform directories
 **/.terraform/*

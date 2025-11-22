@@ -828,9 +828,7 @@ class TaskStateCache():
         func_name = self._get_task_function(task_name, task)
         if func_name:
             return func_name
-        file_path = self._get_task_file(task_name, task)
-        stem = Path(file_path).stem
-        return stem or task_name
+        return task_name
 
     def get_py_func_args(self, task_name: str) -> dict|None:
         """Return the args of a task."""

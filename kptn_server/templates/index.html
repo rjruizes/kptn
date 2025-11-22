@@ -29,7 +29,7 @@
             box-shadow: 0 20px 40px rgba(0,0,0,0.4);
         }
         label { display: block; font-weight: 600; margin-bottom: 6px; }
-        input[type="text"] {
+        input[type="text"], select {
             width: 100%;
             padding: 10px 12px;
             border-radius: 10px;
@@ -37,30 +37,8 @@
             background: rgba(15,23,42,0.8);
             color: #e2e8f0;
         }
-        input:focus { outline: 2px solid #38bdf8; border-color: #38bdf8; }
-        .actions { margin-top: 12px; display: flex; gap: 10px; }
-        button {
-            padding: 10px 14px;
-            border-radius: 10px;
-            border: none;
-            background: linear-gradient(135deg, #22d3ee, #a855f7);
-            color: #0b1021;
-            font-weight: 700;
-            cursor: pointer;
-        }
-        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        input:focus, select:focus { outline: 2px solid #38bdf8; border-color: #38bdf8; }
         #lineage-host { margin-top: 20px; }
-        .config-list { display: grid; gap: 8px; margin: 10px 0; }
-        .config-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 12px;
-            border-radius: 10px;
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(226,232,240,0.12);
-        }
-        .config-item input { margin: 0; }
         .muted { color: #94a3b8; font-size: 13px; }
     </style>
 </head>
@@ -68,25 +46,17 @@
     <div class="page">
         <div class="card">
             <form id="lineage-form">
-                <label>kptn.yaml in {{ root }}</label>
+                <label for="configPath">kptn.yaml in {{ root }}</label>
                 {% if configs %}
-                <div class="config-list">
+                <select id="configPath" name="configPath">
                     {% for cfg in configs %}
-                    <label class="config-item">
-                        <input type="radio" name="configPath" value="{{ cfg.path }}" {% if loop.first %}checked{% endif %}>
-                        <span>{{ cfg.label }}</span>
-                    </label>
+                    <option value="{{ cfg.path }}" {% if loop.first %}selected{% endif %}>{{ cfg.label }}</option>
                     {% endfor %}
-                </div>
+                </select>
                 {% else %}
                     <p class="muted">No kptn.yaml found under {{ root }}. Specify a path manually.</p>
                     <input type="text" name="configPath" placeholder="/path/to/kptn.yaml" value="{{ config_path }}">
                 {% endif %}
-                <label for="graph" style="margin-top: 10px;">Graph (optional)</label>
-                <input id="graph" name="graph" placeholder="graph name" value="{{ graph }}" type="text">
-                <div class="actions">
-                    <button type="submit">Render lineage</button>
-                </div>
             </form>
         </div>
         <div id="lineage-host"></div>
@@ -95,17 +65,16 @@
     (function() {
         const form = document.getElementById('lineage-form');
         const host = document.getElementById('lineage-host');
-        async function renderLineage(event) {
-            event.preventDefault();
+        const select = document.getElementById('configPath');
+
+        async function renderLineage() {
             const formData = new FormData(form);
             const configPath = formData.get('configPath') || '';
-            const graph = formData.get('graph') || '';
             if (!configPath) {
                 host.innerHTML = '<p class="muted">Select a kptn.yaml first.</p>';
                 return;
             }
             const params = new URLSearchParams({ configPath: String(configPath) });
-            if (graph) params.set('graph', String(graph));
             host.innerHTML = '<p class="muted">Loading lineage...</p>';
             const iframe = document.createElement('iframe');
             iframe.src = `/lineage-page?${params.toString()}`;
@@ -127,7 +96,12 @@
             host.innerHTML = '';
             host.appendChild(iframe);
         }
-        form.addEventListener('submit', renderLineage);
+
+        if (select) {
+            select.addEventListener('change', renderLineage);
+            // Render on page load if a config is selected
+            renderLineage();
+        }
     })();
     </script>
 </body>

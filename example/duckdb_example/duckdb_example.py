@@ -1,9 +1,12 @@
 
 from pathlib import Path
+import os
 from kptn.caching.submit import submit
 from kptn.runner import cli_parser, parse_and_validate_tasks
 from kptn.util.pipeline_config import PipelineConfig
 
+os.environ["KPTN_FLOW_TYPE"] = "vanilla"
+os.environ.setdefault("KPTN_DB_TYPE", "sqlite")
 
 VALID_TASKS: set[str] = { "raw_numbers", "fruit_metrics", "fruit_summary" }
 
@@ -20,7 +23,7 @@ def duckdb_example(task_list: list[str] = [], ignore_cache: bool = False):
         set(task_list),
         ignore_cache,
     )
-    
+
     submit("raw_numbers", opts)  # file://./src/raw_numbers.sql
     submit("fruit_metrics", opts)  # file://./src/fruit_metrics.sql
     submit("fruit_summary", opts)  # file://./src/fruit_tasks.py
