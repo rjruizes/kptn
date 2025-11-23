@@ -227,22 +227,13 @@
                     previewSlot.innerHTML = '';
                 }
 
-                const tableHost = previewSlot || tableEl;
-                let previewTable = tableHost.querySelector('table.columns');
+                let previewTable = tableEl.querySelector('table.columns');
                 if (!(previewTable instanceof HTMLTableElement)) {
-                    previewTable = document.createElement('table');
-                    previewTable.className = 'columns preview-table';
-                    const thead = document.createElement('thead');
-                    const headerRow = document.createElement('tr');
-                    columns.forEach((column) => {
-                        const th = document.createElement('th');
-                        th.className = 'column';
-                        th.textContent = String(column);
-                        headerRow.appendChild(th);
-                    });
-                    thead.appendChild(headerRow);
-                    previewTable.appendChild(thead);
-                    tableHost.appendChild(previewTable);
+                    if (previewSlot) {
+                        previewSlot.innerHTML = '<p class="preview-status" style="color: #fca5a5;">Unable to render preview table.</p>';
+                    }
+                    refreshConnections();
+                    return;
                 }
 
                 let tbody = previewTable.querySelector('tbody');
