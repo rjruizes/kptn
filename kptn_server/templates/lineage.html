@@ -21,12 +21,38 @@
         .container {
             padding: 16px;
         }
+        .kptn-toolbar {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            position: sticky;
+            top: 0;
+            padding-top: 4px;
+            background: linear-gradient(180deg, rgba(11,16,33,0.85) 0%, rgba(11,16,33,0) 100%);
+        }
+        .kptn-preview-all {
+            border: 1px solid rgba(226,232,240,0.1);
+            background: rgba(255,255,255,0.06);
+            color: #e2e8f0;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+        .kptn-preview-all:hover {
+            background: rgba(255,255,255,0.12);
+            border-color: rgba(226,232,240,0.2);
+            color: #fbbf24;
+        }
         .table-name {
             display: flex;
             align-items: center;
             gap: 6px;
         }
-        .kptn-open-file, .kptn-open-table {
+        .kptn-open-file, .kptn-open-table, .kptn-toggle-sql {
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -40,11 +66,11 @@
             padding: 2px;
             transition: background 0.15s ease, color 0.15s ease;
         }
-        .kptn-open-file:hover, .kptn-open-table:hover {
+        .kptn-open-file:hover, .kptn-open-table:hover, .kptn-toggle-sql:hover {
             background: rgba(255,255,255,0.1);
             color: #fbbf24;
         }
-        .kptn-open-file svg, .kptn-open-table svg {
+        .kptn-open-file svg, .kptn-open-table svg, .kptn-toggle-sql svg {
             width: 16px;
             height: 16px;
         }
@@ -71,12 +97,41 @@
             font-size: 13px;
             color: #cbd5e1;
         }
+        .kptn-sql-input {
+            display: none;
+            align-items: center;
+            gap: 4px;
+            margin-left: 4px;
+        }
+        .kptn-sql-input.is-visible {
+            display: inline-flex;
+        }
+        .kptn-sql-input input {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: #cbd5e1;
+            border-radius: 4px;
+            padding: 2px 4px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 10px;
+            height: 18px;
+            min-width: 80px;
+            max-width: 180px;
+            box-sizing: border-box;
+        }
+        .kptn-sql-input input:focus {
+            outline: 1px solid rgba(56,189,248,0.4);
+            border-color: rgba(56,189,248,0.3);
+        }
     </style>
 {% if not is_fragment %}
 </head>
 <body>
 {% endif %}
     <div class="container" id="kptn-lineage-root">
+        <div class="kptn-toolbar">
+            <button id="kptn-preview-all" class="kptn-preview-all" type="button">Preview All</button>
+        </div>
         {{ lineage_html | safe }}
     </div>
 
@@ -88,7 +143,9 @@
             const configPath = {{ config_path_json | safe }};
             const baseUrl = {{ base_url_json | safe }};
             const openSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h7l3 3v8H3z"/><path d="M10 2.5v3h3"/><path d="M7 6 5 8l2 2"/><path d="M9 10l2-2-2-2"/></svg>';
-            const tableSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 6.5h11"/><path d="M2.5 9.5h11"/><path d="M6 3.5v9"/><path d="M10 3.5v9"/></svg>';
+            const tableSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 4.75 11.25 8l-5 3.25z" fill="currentColor" stroke="none"/></svg>';
+            const filterSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5h11l-4 4v3l-3 1v-4z"/></svg>';
+            const DEFAULT_LIMIT = 50;
 
             function normalize(name) {
                 return (name || '').trim().replace(/^[^:]*:\/\//, '').split('.').slice(-1)[0]?.toLowerCase() || '';
@@ -97,6 +154,15 @@
                 const div = document.createElement('div');
                 div.textContent = text;
                 return div.innerHTML;
+            }
+            function buildPreviewSql(name, filterClause) {
+                const parts = (name || '').split('.').map((segment) => `"${segment.replace(/"/g, '""')}"`).filter(Boolean);
+                const qualified = parts.length ? parts.join('.') : '""';
+                const rawFilter = typeof filterClause === 'string' ? filterClause : '';
+                const trimmedFilter = rawFilter.trim();
+                const hasFilter = trimmedFilter && trimmedFilter.toUpperCase() !== 'WHERE';
+                const filterSegment = hasFilter ? ` ${trimmedFilter}` : '';
+                return `SELECT * FROM ${qualified}${filterSegment} LIMIT ${DEFAULT_LIMIT}`;
             }
             function findTableElement(tableName) {
                 const target = (tableName || '').trim().toLowerCase();
@@ -204,14 +270,22 @@
                 return slot;
             }
             async function loadTablePreview(name, path) {
+                await loadTablePreviewWithSql(name, path, null);
+            }
+            async function loadTablePreviewWithSql(name, path, sqlOverride) {
                 const tableEl = findTableElement(name);
                 const previewSlot = ensurePreviewSlot(tableEl);
+                const sql = typeof sqlOverride === 'string' && sqlOverride.trim() ? sqlOverride : buildPreviewSql(name);
                 if (vscode) {
-                    vscode.postMessage({ type: 'tableMeta', table: name, path: path || null });
+                    vscode.postMessage({ type: 'tableMeta', table: name, path: path || null, sql });
                     return;
                 }
                 try {
-                    const response = await fetch(`${baseUrl || ''}/table-preview?configPath=${encodeURIComponent(configPath)}&table=${encodeURIComponent(name)}`);
+                    const response = await fetch(`${baseUrl || ''}/table-preview-query`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ configPath, table: name, sql }),
+                    });
                     const payload = await response.json();
                     renderPreview(name, payload);
                 } catch (error) {
@@ -226,12 +300,41 @@
                     if (!(nameEl instanceof HTMLElement)) return;
                     const hasOpen = nameEl.querySelector('.kptn-open-file');
                     const hasMeta = nameEl.querySelector('.kptn-open-table');
+                    const hasFilterToggle = nameEl.querySelector('.kptn-toggle-sql');
+                    let sqlContainer = nameEl.querySelector('.kptn-sql-input');
+                    let sqlInput = sqlContainer ? sqlContainer.querySelector('input') : null;
                     const textNode = Array.from(nameEl.childNodes).find((node) => node.nodeType === Node.TEXT_NODE);
                     const name = (textNode?.textContent || nameEl.textContent || '').trim();
                     const key = normalize(name);
                     const path = tableMap[key];
                     const tableEl = nameEl.closest('.table');
                     const previewSlot = ensurePreviewSlot(tableEl);
+                    const defaultSql = buildPreviewSql(name);
+                    const defaultFilterValue = 'WHERE ';
+                    let metaBtn = nameEl.querySelector('.kptn-open-table');
+
+                    function bindInputHandlers(inputEl) {
+                        if (!inputEl || inputEl.dataset.kptnBound === '1') return;
+                        inputEl.addEventListener('click', (event) => event.stopPropagation());
+                        inputEl.addEventListener('keydown', (event) => {
+                            if (event.key === 'Enter') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                runPreview();
+                            }
+                        });
+                        inputEl.dataset.kptnBound = '1';
+                    }
+
+                    const runPreview = () => {
+                        if (previewSlot) {
+                            previewSlot.innerHTML = '<p class="preview-status">Loading table details...</p>';
+                        } else {
+                            renderPreview(name, { table: name, message: 'Loading table details...' });
+                        }
+                        const sqlValue = sqlInput ? buildPreviewSql(name, sqlInput.value) : defaultSql;
+                        loadTablePreviewWithSql(name, path || null, sqlValue);
+                    };
 
                     if (!hasOpen) {
                         const openBtn = document.createElement('button');
@@ -250,28 +353,97 @@
                         nameEl.appendChild(openBtn);
                     }
 
+                    if (!sqlContainer) {
+                        sqlContainer = document.createElement('div');
+                        sqlContainer.className = 'kptn-sql-input';
+                        sqlInput = document.createElement('input');
+                        sqlInput.type = 'text';
+                        sqlInput.className = 'kptn-sql-input-field';
+                        sqlInput.spellcheck = false;
+                        sqlInput.value = defaultFilterValue;
+                        sqlInput.title = 'Add a WHERE clause for preview';
+                        bindInputHandlers(sqlInput);
+                        sqlContainer.appendChild(sqlInput);
+                        nameEl.appendChild(sqlContainer);
+                    } else if (!sqlInput) {
+                        sqlInput = document.createElement('input');
+                        sqlInput.type = 'text';
+                        sqlInput.className = 'kptn-sql-input-field';
+                        sqlInput.spellcheck = false;
+                        sqlInput.value = defaultFilterValue;
+                        sqlInput.title = 'Add a WHERE clause for preview';
+                        bindInputHandlers(sqlInput);
+                        sqlContainer.appendChild(sqlInput);
+                    } else {
+                        bindInputHandlers(sqlInput);
+                    }
+
+                    if (!hasFilterToggle) {
+                        const filterBtn = document.createElement('button');
+                        filterBtn.className = 'kptn-toggle-sql';
+                        filterBtn.type = 'button';
+                        filterBtn.title = 'Toggle SQL filter';
+                        filterBtn.innerHTML = filterSvg;
+                        filterBtn.addEventListener('click', (event) => {
+                            event.stopPropagation();
+                            if (sqlContainer) {
+                                sqlContainer.classList.toggle('is-visible');
+                                if (sqlContainer.classList.contains('is-visible') && sqlInput) {
+                                    sqlInput.focus();
+                                    const length = sqlInput.value.length;
+                                    sqlInput.setSelectionRange(length, length);
+                                }
+                            }
+                        });
+                        nameEl.appendChild(filterBtn);
+                    }
+
                     if (!hasMeta) {
-                        const metaBtn = document.createElement('button');
+                        metaBtn = document.createElement('button');
                         metaBtn.className = 'kptn-open-table';
                         metaBtn.type = 'button';
                         metaBtn.title = 'Table details';
                         metaBtn.innerHTML = tableSvg;
                         metaBtn.addEventListener('click', (event) => {
                             event.stopPropagation();
-                            if (previewSlot) {
-                                previewSlot.innerHTML = '<p class="preview-status">Loading table details...</p>';
-                            } else {
-                                renderPreview(name, { table: name, message: 'Loading table details...' });
-                            }
-                            loadTablePreview(name, path || null);
+                            runPreview();
                         });
+                        metaBtn.dataset.kptnBound = '1';
                         nameEl.appendChild(metaBtn);
+                    } else if (metaBtn && metaBtn.dataset.kptnBound !== '1') {
+                        metaBtn.addEventListener('click', (event) => {
+                            event.stopPropagation();
+                            runPreview();
+                        });
+                        metaBtn.dataset.kptnBound = '1';
                     }
                 });
                 refreshConnections();
             }
 
+            function previewAllTables() {
+                const metaButtons = Array.from(document.querySelectorAll('.kptn-open-table'));
+                metaButtons.forEach((btn) => {
+                    if (btn instanceof HTMLElement) {
+                        btn.click();
+                    }
+                });
+            }
+
+            function wirePreviewAll() {
+                const previewAllBtn = document.getElementById('kptn-preview-all');
+                if (!(previewAllBtn instanceof HTMLButtonElement) || previewAllBtn.dataset.kptnBound === '1') {
+                    return;
+                }
+                previewAllBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    previewAllTables();
+                });
+                previewAllBtn.dataset.kptnBound = '1';
+            }
+
             ensureButtons();
+            wirePreviewAll();
 
             if (vscode) {
                 window.addEventListener('message', (event) => {

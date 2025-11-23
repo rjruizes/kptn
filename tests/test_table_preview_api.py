@@ -95,3 +95,30 @@ def test_table_preview_with_schema_prefix(duckdb_example_dir, run_pipeline):
     assert "columns" in preview
     assert "row" in preview
     assert preview["resolvedTable"] == "main.fruit_summary"
+
+
+def test_table_preview_client_sql_with_limit_injected(duckdb_example_dir, run_pipeline):
+    """Client-supplied SQL should be executed with an auto-limit when missing."""
+    config_path = duckdb_example_dir / "kptn.yaml"
+
+    preview = get_duckdb_preview(
+        config_path,
+        sql="SELECT fruit, score FROM main.fruit_metrics ORDER BY score DESC",
+    )
+
+    assert "columns" in preview
+    assert "row" in preview
+    assert preview.get("resolvedTable") is None
+    assert preview.get("sql")
+    assert "fruit" in preview["columns"]
+    assert "score" in preview["columns"]
+
+
+def test_table_preview_client_sql_rejects_multi_statement(duckdb_example_dir, run_pipeline):
+    """Multiple statements should be rejected to avoid batch execution."""
+    config_path = duckdb_example_dir / "kptn.yaml"
+
+    preview = get_duckdb_preview(config_path, sql="SELECT 1; SELECT 2")
+
+    assert "message" in preview
+    assert "single" in preview["message"].lower()

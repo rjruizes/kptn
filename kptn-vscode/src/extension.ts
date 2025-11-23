@@ -109,18 +109,20 @@ class BackendClient implements vscode.Disposable {
 		throw new Error('Lineage server is not available');
 	}
 
-	async getTablePreview(configUri: vscode.Uri, table: string): Promise<{ columns?: string[]; row?: unknown[]; message?: string; resolvedTable?: string }> {
+	async getTablePreview(configUri: vscode.Uri, table?: string, sql?: string): Promise<{ columns?: string[]; row?: unknown[]; message?: string; resolvedTable?: string; sql?: string }> {
 		const result = await this.sendRequest('getTablePreview', {
 			configPath: configUri.fsPath,
 			table,
+			sql,
 		});
 
-		const payload = result as { columns?: unknown; row?: unknown; message?: unknown; resolvedTable?: unknown };
+		const payload = result as { columns?: unknown; row?: unknown; message?: unknown; resolvedTable?: unknown; sql?: unknown };
 		const columns = Array.isArray(payload?.columns) ? payload.columns.map((entry) => String(entry)) : undefined;
 		const row = Array.isArray(payload?.row) ? payload.row : undefined;
 		const message = typeof payload?.message === 'string' ? payload.message : undefined;
 		const resolvedTable = typeof payload?.resolvedTable === 'string' ? payload.resolvedTable : undefined;
-		return { columns, row, message, resolvedTable };
+		const normalizedSql = typeof payload?.sql === 'string' ? payload.sql : undefined;
+		return { columns, row, message, resolvedTable, sql: normalizedSql };
 	}
 
 	private async ensureStarted(): Promise<void> {
@@ -639,10 +641,11 @@ class LineagePanel implements vscode.Disposable {
 					return;
 				}
 
-				if (event.type === 'tableMeta' && typeof event.table === 'string') {
-					await this.handleTablePreview(event.table);
-					return;
-				}
+			if (event.type === 'tableMeta' && typeof event.table === 'string') {
+				const sql = typeof event.sql === 'string' ? event.sql : undefined;
+				await this.handleTablePreview(event.table, sql);
+				return;
+			}
 
 			if (event.type === 'openFile' && typeof event.path === 'string') {
 				try {
@@ -722,9 +725,9 @@ class LineagePanel implements vscode.Disposable {
 		this.panel.webview.html = html;
 	}
 
-	private async handleTablePreview(tableName: string): Promise<void> {
+	private async handleTablePreview(tableName: string, sql?: string): Promise<void> {
 		try {
-		const preview = await this.backend.getTablePreview(this.configUri, tableName);
+		const preview = await this.backend.getTablePreview(this.configUri, tableName, sql);
 		await this.panel.webview.postMessage({
 			type: 'tablePreview',
 			table: tableName,
@@ -732,6 +735,7 @@ class LineagePanel implements vscode.Disposable {
 			row: preview.row,
 			message: preview.message,
 			resolvedTable: preview.resolvedTable,
+			sql: preview.sql,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

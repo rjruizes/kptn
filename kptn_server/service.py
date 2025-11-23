@@ -6,6 +6,7 @@ import json
 import os
 from datetime import date, datetime
 from pathlib import Path
+import re
 from typing import Any, Optional, Tuple
 
 import yaml
@@ -203,8 +204,49 @@ def _preview_duckdb_table(conn: object, table_name: str) -> dict[str, Any]:
     }
 
 
-def get_duckdb_preview(config_path: Path, table_name: str) -> dict[str, Any]:
-    """Return DuckDB table sample and metadata for a configured output."""
+def _prepare_client_sql(sql: str, limit: int) -> tuple[Optional[str], Optional[str]]:
+    cleaned = sql.strip()
+    if not cleaned:
+        return None, "SQL query is empty"
+
+    # Only allow a single statement (optional trailing semicolon)
+    stripped_semicolon = cleaned.rstrip(";")
+    if ";" in stripped_semicolon:
+        return None, "Only a single SQL statement is allowed for preview"
+
+    target = stripped_semicolon
+    has_limit = bool(re.search(r"\blimit\b", target, flags=re.IGNORECASE))
+    if not has_limit:
+        target = f"{target} LIMIT {limit}"
+
+    return target, None
+
+
+def _preview_duckdb_sql(conn: object, sql: str) -> dict[str, Any]:
+    try:
+        cursor = conn.execute(sql)
+    except Exception as exc:  # noqa: BLE001 - surface precise DuckDB errors
+        return {"message": f"Unable to run preview query: {exc}"}
+
+    columns = [col[0] for col in cursor.description] if cursor.description else []
+    row = cursor.fetchone()
+    if row is None:
+        return {
+            "columns": columns,
+            "row": [],
+            "message": "Query returned no rows",
+        }
+
+    return {
+        "columns": columns,
+        "row": [_coerce_json_value(value) for value in row],
+    }
+
+
+def get_duckdb_preview(
+    config_path: Path, table_name: Optional[str] = None, sql: Optional[str] = None, limit: int = 50
+) -> dict[str, Any]:
+    """Return DuckDB sample and metadata for either a configured output or client SQL."""
     if not config_path.exists():
         raise FileNotFoundError(f"kptn.yaml not found at {config_path}")
 
@@ -217,12 +259,6 @@ def get_duckdb_preview(config_path: Path, table_name: str) -> dict[str, Any]:
         tasks_conf = kap_conf.get("tasks", {}) if isinstance(kap_conf, dict) else {}
         config_block = kap_conf.get("config", {}) if isinstance(kap_conf, dict) else {}
 
-        resolved_table = _resolve_duckdb_output_table(tasks_conf, table_name)
-        if not resolved_table:
-            return {
-                "message": "Table is not configured as a DuckDB output in kptn.yaml"
-            }
-
         try:
             runtime_config = RuntimeConfig.from_config(
                 config_block, base_dir=project_dir
@@ -233,6 +269,22 @@ def get_duckdb_preview(config_path: Path, table_name: str) -> dict[str, Any]:
         conn, conn_message = _duckdb_connection_from_runtime_config(runtime_config)
         if conn is None:
             return {"message": conn_message or "DuckDB connection unavailable"}
+
+        if sql is not None:
+            prepared_sql, error = _prepare_client_sql(sql, limit=limit)
+            if error:
+                return {"message": error}
+
+            preview = _preview_duckdb_sql(conn, prepared_sql)
+            preview["resolvedTable"] = None
+            preview["sql"] = prepared_sql
+            return preview
+
+        resolved_table = _resolve_duckdb_output_table(tasks_conf, table_name or "")
+        if not resolved_table:
+            return {
+                "message": "Table is not configured as a DuckDB output in kptn.yaml"
+            }
 
         preview = _preview_duckdb_table(conn, resolved_table)
         preview["resolvedTable"] = resolved_table

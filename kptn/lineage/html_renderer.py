@@ -50,7 +50,6 @@ def render_lineage_html(
     }}
     #visualizer {{
       position: relative;
-      padding: 12px 16px;
       overflow: hidden;
     }}
     #tables {{

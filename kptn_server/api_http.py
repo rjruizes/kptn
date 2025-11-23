@@ -9,6 +9,7 @@ try:
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
+    from pydantic import BaseModel
 except (
     ImportError
 ) as exc:  # pragma: no cover - import guard for environments without extras
@@ -28,6 +29,13 @@ app.mount(
     StaticFiles(directory=Path(__file__).parent / "static"),
     name="static",
 )
+
+
+class TablePreviewQuery(BaseModel):
+    configPath: str
+    sql: str
+    table: Optional[str] = None
+    limit: Optional[int] = None
 
 
 @app.get("/healthz")
@@ -94,3 +102,15 @@ def table_preview_fragment(configPath: str, table: str) -> HTMLResponse:  # noqa
 
     html = render_table_preview_fragment(payload)
     return HTMLResponse(content=html)
+
+
+@app.post("/table-preview-query")
+def table_preview_query(body: TablePreviewQuery) -> dict[str, object]:
+    try:
+        return get_duckdb_preview(
+            Path(body.configPath), body.table, sql=body.sql, limit=body.limit or 50
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

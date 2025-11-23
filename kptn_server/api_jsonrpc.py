@@ -79,11 +79,21 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
         params = request.get("params") or {}
         config_path = params.get("configPath")
         table_name = params.get("table") or params.get("tableName")
-        if not isinstance(config_path, str) or not isinstance(table_name, str):
-            return build_response(request_id, error="Missing configPath or table")
+        sql = params.get("sql")
+        limit = params.get("limit")
+        limit_value = limit if isinstance(limit, int) else 50
+        if not isinstance(config_path, str) or (
+            not isinstance(table_name, str) and not isinstance(sql, str)
+        ):
+            return build_response(request_id, error="Missing configPath or table/sql")
 
         try:
-            preview = get_duckdb_preview(Path(config_path), table_name)
+            preview = get_duckdb_preview(
+                Path(config_path),
+                table_name if isinstance(table_name, str) else None,
+                sql=sql if isinstance(sql, str) else None,
+                limit=limit_value,
+            )
         except Exception as exc:  # noqa: BLE001 - expose original message for debugging
             return build_response(
                 request_id, error=f"Failed to load table details: {exc}"
