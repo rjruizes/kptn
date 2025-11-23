@@ -1,0 +1,22 @@
+create or replace table main.wide_table as
+select
+    1 as colname_00000001,
+    2 as colname_00000002,
+    3 as colname_00000003,
+    4 as colname_00000004,
+    5 as colname_00000005,
+    6 as colname_00000006,
+    7 as colname_00000007,
+    8 as colname_00000008,
+    9 as colname_00000009,
+    10 as colname_00000010,
+    11 as colname_00000011,
+    12 as colname_00000012,
+    13 as colname_00000013,
+    14 as colname_00000014,
+    15 as colname_00000015,
+    16 as colname_00000016,
+    17 as colname_00000017,
+    18 as colname_00000018,
+    19 as colname_00000019,
+    20 as colname_00000020;

@@ -50,7 +50,8 @@ def render_lineage_html(
     }}
     #visualizer {{
       position: relative;
-      overflow: hidden;
+      overflow-x: auto;
+      overflow-y: hidden;
     }}
     #tables {{
       display: flex;
@@ -70,14 +71,16 @@ def render_lineage_html(
       letter-spacing: 0.03em;
     }}
     .columns {{
-      width: 100%;
+      width: max-content;
+      min-width: 100%;
       border-collapse: collapse;
-      table-layout: fixed;
+      table-layout: auto;
     }}
     .column {{
       position: relative;
       cursor: pointer;
       padding: 6px 8px;
+      min-width: 110px;
       border-radius: 0;
       transition: background 0.2s ease, color 0.2s ease;
       white-space: nowrap;
