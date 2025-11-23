@@ -38,10 +38,12 @@ def test_table_preview_raw_numbers(duckdb_example_dir, run_pipeline):
 
     assert "columns" in preview
     assert "row" in preview
+    assert "rows" in preview
     assert preview["resolvedTable"] == "main.raw_numbers"
     assert "id" in preview["columns"]
     assert "fruit" in preview["columns"]
     assert len(preview["row"]) == len(preview["columns"])
+    assert len(preview["rows"]) <= 5
 
 
 def test_table_preview_fruit_metrics(duckdb_example_dir, run_pipeline):
@@ -52,10 +54,12 @@ def test_table_preview_fruit_metrics(duckdb_example_dir, run_pipeline):
 
     assert "columns" in preview
     assert "row" in preview
+    assert "rows" in preview
     assert preview["resolvedTable"] == "main.fruit_metrics"
     assert "fruit" in preview["columns"]
     assert "score" in preview["columns"]
     assert len(preview["row"]) == len(preview["columns"])
+    assert len(preview["rows"]) <= 5
 
 
 def test_table_preview_fruit_summary(duckdb_example_dir, run_pipeline):
@@ -66,6 +70,7 @@ def test_table_preview_fruit_summary(duckdb_example_dir, run_pipeline):
 
     assert "columns" in preview
     assert "row" in preview
+    assert "rows" in preview
     assert preview["resolvedTable"] == "main.fruit_summary"
     expected_columns = ["fruit_count", "total_score", "avg_score", "max_score", "min_score"]
     for col in expected_columns:
@@ -108,6 +113,7 @@ def test_table_preview_client_sql_with_limit_injected(duckdb_example_dir, run_pi
 
     assert "columns" in preview
     assert "row" in preview
+    assert "rows" in preview
     assert preview.get("resolvedTable") is None
     assert preview.get("sql")
     assert "fruit" in preview["columns"]

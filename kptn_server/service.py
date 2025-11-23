@@ -177,21 +177,21 @@ def _coerce_json_value(value: object) -> object:
     return str(value)
 
 
-def _preview_duckdb_table(conn: object, table_name: str) -> dict[str, Any]:
+def _preview_duckdb_table(conn: object, table_name: str, limit: int) -> dict[str, Any]:
     schema, table = _split_table_identifier(table_name)
     qualified = _quote_duckdb_identifier(table)
     if schema:
         qualified = f"{_quote_duckdb_identifier(schema)}.{qualified}"
 
-    query = f"SELECT * FROM {qualified} LIMIT 1"
+    query = f"SELECT * FROM {qualified} LIMIT {limit}"
     try:
         cursor = conn.execute(query)
     except Exception as exc:  # noqa: BLE001 - surface duckdb binder/runtime errors
         return {"message": f"Unable to query '{table_name}': {exc}"}
 
     columns = [col[0] for col in cursor.description] if cursor.description else []
-    row = cursor.fetchone()
-    if row is None:
+    rows = cursor.fetchmany(limit) if cursor else []
+    if not rows:
         return {
             "columns": columns,
             "row": [],
@@ -200,7 +200,9 @@ def _preview_duckdb_table(conn: object, table_name: str) -> dict[str, Any]:
 
     return {
         "columns": columns,
-        "row": [_coerce_json_value(value) for value in row],
+        "row": [_coerce_json_value(value) for value in rows[0]],
+        "rows": [[_coerce_json_value(value) for value in row] for row in rows],
+        "limit": limit,
     }
 
 
@@ -222,15 +224,15 @@ def _prepare_client_sql(sql: str, limit: int) -> tuple[Optional[str], Optional[s
     return target, None
 
 
-def _preview_duckdb_sql(conn: object, sql: str) -> dict[str, Any]:
+def _preview_duckdb_sql(conn: object, sql: str, limit: int) -> dict[str, Any]:
     try:
         cursor = conn.execute(sql)
     except Exception as exc:  # noqa: BLE001 - surface precise DuckDB errors
         return {"message": f"Unable to run preview query: {exc}"}
 
     columns = [col[0] for col in cursor.description] if cursor.description else []
-    row = cursor.fetchone()
-    if row is None:
+    rows = cursor.fetchmany(limit) if cursor else []
+    if not rows:
         return {
             "columns": columns,
             "row": [],
@@ -239,12 +241,14 @@ def _preview_duckdb_sql(conn: object, sql: str) -> dict[str, Any]:
 
     return {
         "columns": columns,
-        "row": [_coerce_json_value(value) for value in row],
+        "row": [_coerce_json_value(value) for value in rows[0]],
+        "rows": [[_coerce_json_value(value) for value in row] for row in rows],
+        "limit": limit,
     }
 
 
 def get_duckdb_preview(
-    config_path: Path, table_name: Optional[str] = None, sql: Optional[str] = None, limit: int = 50
+    config_path: Path, table_name: Optional[str] = None, sql: Optional[str] = None, limit: int = 5
 ) -> dict[str, Any]:
     """Return DuckDB sample and metadata for either a configured output or client SQL."""
     if not config_path.exists():
@@ -275,7 +279,7 @@ def get_duckdb_preview(
             if error:
                 return {"message": error}
 
-            preview = _preview_duckdb_sql(conn, prepared_sql)
+            preview = _preview_duckdb_sql(conn, prepared_sql, limit)
             preview["resolvedTable"] = None
             preview["sql"] = prepared_sql
             return preview
@@ -286,7 +290,7 @@ def get_duckdb_preview(
                 "message": "Table is not configured as a DuckDB output in kptn.yaml"
             }
 
-        preview = _preview_duckdb_table(conn, resolved_table)
+        preview = _preview_duckdb_table(conn, resolved_table, limit)
         preview["resolvedTable"] = resolved_table
         return preview
     finally:

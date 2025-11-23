@@ -129,7 +129,7 @@
             width: 100%;
             display: block;
             overflow-x: auto;
-            margin-top: 6px;
+            margin-top: -1px;
         }
         .preview-table {
             width: max-content;
@@ -146,6 +146,43 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        .kptn-preview-controls {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
+            margin: 1px 0 0 0;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        .kptn-preview-controls .kptn-view-more {
+            color: #94a3b8;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .kptn-preview-controls .kptn-view-more:hover {
+            text-decoration: underline;
+        }
+        .kptn-limit-input {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .kptn-limit-input input {
+            width: 30px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: #cbd5e1;
+            border-radius: 6px;
+            padding: 4px 6px;
+            font-size: 12px;
+            height: 26px;
+            box-sizing: border-box;
+        }
+        .kptn-limit-input input:focus {
+            outline: 1px solid rgba(56,189,248,0.4);
+            border-color: rgba(56,189,248,0.3);
         }
         .preview-table th {
             background: rgba(255,255,255,0.05);
@@ -212,7 +249,9 @@
             const openSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h7l3 3v8H3z"/><path d="M10 2.5v3h3"/><path d="M7 6 5 8l2 2"/><path d="M9 10l2-2-2-2"/></svg>';
             const tableSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 4.75 11.25 8l-5 3.25z" fill="currentColor" stroke="none"/></svg>';
             const filterSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5h11l-4 4v3l-3 1v-4z"/></svg>';
-            const DEFAULT_LIMIT = 50;
+            const DEFAULT_LIMIT = 5;
+            const MAX_LIMIT = 200;
+            const previewState = new Map(); // tableName -> {limit, expanded}
 
             function normalize(name) {
                 return (name || '').trim().replace(/^[^:]*:\/\//, '').split('.').slice(-1)[0]?.toLowerCase() || '';
@@ -238,7 +277,19 @@
                 const combined = parts.map((clause) => `(${clause})`).join(' OR ');
                 return `WHERE ${combined}`;
             }
-            function buildPreviewSql(name, filterClause, columns) {
+            function getPreviewState(tableName) {
+                const key = normalize(tableName);
+                if (!previewState.has(key)) {
+                    previewState.set(key, { limit: DEFAULT_LIMIT, expanded: false });
+                }
+                return previewState.get(key);
+            }
+            function setPreviewState(tableName, updates) {
+                const key = normalize(tableName);
+                const existing = getPreviewState(tableName);
+                previewState.set(key, { ...existing, ...updates });
+            }
+            function buildPreviewSql(name, filterClause, columns, limit) {
                 const columnList = Array.isArray(columns) && columns.length
                     ? columns.map((col) => `"${String(col).replace(/"/g, '""')}"`).join(', ')
                     : '*';
@@ -246,7 +297,8 @@
                 const qualified = parts.length ? parts.join('.') : '""';
                 const normalizedFilter = typeof filterClause === 'string' ? filterClause.trim() : '';
                 const filterSegment = normalizedFilter ? ` ${normalizedFilter}` : '';
-                return `SELECT ${columnList} FROM ${qualified}${filterSegment} LIMIT ${DEFAULT_LIMIT}`;
+                const effectiveLimit = Math.max(1, Math.min(limit || DEFAULT_LIMIT, MAX_LIMIT));
+                return `SELECT ${columnList} FROM ${qualified}${filterSegment} LIMIT ${effectiveLimit}`;
             }
             function findTableElement(tableName) {
                 const target = (tableName || '').trim().toLowerCase();
@@ -311,6 +363,10 @@
             function renderPreview(tableName, payload) {
                 const tableEl = findTableElement(tableName);
                 if (!tableEl) return;
+                const state = getPreviewState(tableName);
+                if (typeof payload?.limit === 'number') {
+                    state.limit = Math.max(1, Math.min(payload.limit, MAX_LIMIT));
+                }
 
                 // Check for error message
                 if (payload?.message) {
@@ -323,8 +379,10 @@
                 }
 
                 const columns = Array.isArray(payload?.columns) ? payload.columns : [];
+                const rowsPayload = Array.isArray(payload?.rows) ? payload.rows : [];
                 const row = Array.isArray(payload?.row) ? payload.row : [];
-                if (!columns.length || !row.length) {
+                const rows = rowsPayload.length ? rowsPayload : (row.length ? [row] : []);
+                if (!columns.length || !rows.length) {
                     refreshConnections();
                     return;
                 }
@@ -333,6 +391,13 @@
                 const previewSlot = ensurePreviewSlot(tableEl);
                 if (previewSlot) {
                     previewSlot.innerHTML = '';
+                }
+
+                let controls = tableEl.querySelector('.kptn-preview-controls');
+                if (!(controls instanceof HTMLElement) && previewSlot) {
+                    controls = document.createElement('div');
+                    controls.className = 'kptn-preview-controls';
+                    previewSlot.appendChild(controls);
                 }
 
                 let previewTable = tableEl.querySelector('table.columns');
@@ -351,13 +416,58 @@
                 }
                 tbody.innerHTML = '';
                 tbody.className = 'preview-body';
-                const dataRow = document.createElement('tr');
-                columns.forEach((_, index) => {
-                    const td = document.createElement('td');
-                    td.textContent = formatCellValue(index < row.length ? row[index] : null);
-                    dataRow.appendChild(td);
+
+                const stateExpanded = !!state.expanded;
+                const rowsToRender = stateExpanded ? rows : [rows[0]];
+
+                rowsToRender.forEach((rowValues) => {
+                    const dataRow = document.createElement('tr');
+                    columns.forEach((_, index) => {
+                        const td = document.createElement('td');
+                        td.textContent = formatCellValue(index < rowValues.length ? rowValues[index] : null);
+                        dataRow.appendChild(td);
+                    });
+                    tbody.appendChild(dataRow);
                 });
-                tbody.appendChild(dataRow);
+
+                if (controls) {
+                    controls.innerHTML = '';
+                    if (rows.length > 1) {
+                        const viewMoreLink = document.createElement('a');
+                        viewMoreLink.className = 'kptn-view-more';
+                        viewMoreLink.textContent = stateExpanded ? 'View less' : `View more (${rows.length})`;
+                        viewMoreLink.addEventListener('click', (event) => {
+                            event.preventDefault();
+                            setPreviewState(tableName, { expanded: !stateExpanded });
+                            renderPreview(tableName, payload);
+                        });
+                        controls.appendChild(viewMoreLink);
+                    }
+
+                    const limitWrapper = document.createElement('div');
+                    limitWrapper.className = 'kptn-limit-input';
+                    const limitLabel = document.createElement('span');
+                    limitLabel.textContent = 'Limit';
+                    const limitInput = document.createElement('input');
+                    limitInput.type = 'text';
+                    limitInput.value = String(state.limit || DEFAULT_LIMIT);
+                    limitInput.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const next = Math.max(1, Math.min(parseInt(limitInput.value, 10) || DEFAULT_LIMIT, MAX_LIMIT));
+                            setPreviewState(tableName, { limit: next, expanded: false });
+                            ensurePreviewSlot(tableEl).innerHTML = '<p class="preview-status">Loading table details...</p>';
+                            const columnList = getTableColumns(tableEl);
+                            const filterClause = resolveFilter(columnList, null, null);
+                            const sqlValue = buildPreviewSql(tableName, filterClause, columnList, next);
+                            loadTablePreviewWithSql(tableName, tableMap[normalize(tableName)] || null, sqlValue, next);
+                        }
+                    });
+                    limitWrapper.appendChild(limitLabel);
+                    limitWrapper.appendChild(limitInput);
+                    controls.appendChild(limitWrapper);
+                }
 
                 refreshConnections();
             }
@@ -381,23 +491,26 @@
             async function loadTablePreview(name, path) {
                 await loadTablePreviewWithSql(name, path, null);
             }
-            async function loadTablePreviewWithSql(name, path, sqlOverride) {
+            async function loadTablePreviewWithSql(name, path, sqlOverride, limitOverride) {
                 const tableEl = findTableElement(name);
                 const previewSlot = ensurePreviewSlot(tableEl);
                 const columnList = getTableColumns(tableEl);
+                const state = getPreviewState(name);
+                const limit = Math.max(1, Math.min(limitOverride || state.limit || DEFAULT_LIMIT, MAX_LIMIT));
+                setPreviewState(name, { limit });
                 const filterClause = resolveFilter(columnList, null, null);
                 const sql = typeof sqlOverride === 'string' && sqlOverride.trim()
                     ? sqlOverride
-                    : buildPreviewSql(name, filterClause, columnList);
+                    : buildPreviewSql(name, filterClause, columnList, limit);
                 if (vscode) {
-                    vscode.postMessage({ type: 'tableMeta', table: name, path: path || null, sql });
+                    vscode.postMessage({ type: 'tableMeta', table: name, path: path || null, sql, limit });
                     return;
                 }
                 try {
                     const response = await fetch(`${baseUrl || ''}/table-preview-query`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ configPath, table: name, sql }),
+                        body: JSON.stringify({ configPath, table: name, sql, limit }),
                     });
                     const payload = await response.json();
                     renderPreview(name, payload);
@@ -445,9 +558,10 @@
                         } else {
                             renderPreview(name, { table: name, message: 'Loading table details...' });
                         }
+                        const state = getPreviewState(name);
                         const filterClause = resolveFilter(columnList, sqlInput, sqlContainer);
-                        const sqlValue = buildPreviewSql(name, filterClause, columnList);
-                        loadTablePreviewWithSql(name, path || null, sqlValue);
+                        const sqlValue = buildPreviewSql(name, filterClause, columnList, state.limit);
+                        loadTablePreviewWithSql(name, path || null, sqlValue, state.limit);
                     };
 
                     if (!hasOpen) {
