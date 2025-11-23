@@ -19,6 +19,8 @@ graphs:
       fruit_metrics: raw_numbers
       fruit_summary: fruit_metrics
       wide_table:
+      python_source:
+      python_consumer: python_source
 
 tasks:
   raw_numbers:
@@ -37,3 +39,11 @@ tasks:
     file: src/wide_table.sql
     outputs:
     - duckdb://main.wide_table
+  python_source:
+    file: src/python_source.py:run
+    outputs:
+    - duckdb://main.python_source_table
+  python_consumer:
+    file: src/python_consumer.sql
+    outputs:
+    - duckdb://main.python_consumer

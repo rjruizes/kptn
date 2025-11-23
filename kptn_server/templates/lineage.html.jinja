@@ -21,23 +21,28 @@
         .container {
             padding: 16px;
         }
-        .kptn-toolbar {
+        .kptn-omnibar {
             display: flex;
-            justify-content: flex-end;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
             position: sticky;
             top: 0;
-            padding-top: 4px;
-            background: linear-gradient(180deg, rgba(11,16,33,0.85) 0%, rgba(11,16,33,0) 100%);
+            padding: 6px 0;
+            background: linear-gradient(180deg, rgba(11,16,33,0.9) 0%, rgba(11,16,33,0) 100%);
+            z-index: 3;
+        }
+        .kptn-omnibar-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
         .kptn-preview-all {
             border: 1px solid rgba(226,232,240,0.1);
             background: rgba(255,255,255,0.06);
             color: #e2e8f0;
             border-radius: 6px;
-            padding: 6px 10px;
+            padding: 6px 12px;
             font-size: 12px;
             cursor: pointer;
             transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
@@ -46,6 +51,51 @@
             background: rgba(255,255,255,0.12);
             border-color: rgba(226,232,240,0.2);
             color: #fbbf24;
+        }
+        .kptn-filter-all {
+            border: 1px solid rgba(226,232,240,0.1);
+            background: rgba(255,255,255,0.03);
+            color: #e2e8f0;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .kptn-filter-all:hover {
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(226,232,240,0.2);
+            color: #38bdf8;
+        }
+        .kptn-global-filter {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            flex: 1 1 260px;
+        }
+        .kptn-global-filter.is-visible {
+            display: inline-flex;
+        }
+        .kptn-global-filter input {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: #cbd5e1;
+            border-radius: 6px;
+            padding: 6px 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12px;
+            height: 28px;
+            width: 100%;
+            min-width: 260px;
+            max-width: 520px;
+            box-sizing: border-box;
+        }
+        .kptn-global-filter input:focus {
+            outline: 1px solid rgba(56,189,248,0.4);
+            border-color: rgba(56,189,248,0.3);
         }
         .table-name {
             display: flex;
@@ -138,8 +188,14 @@
 <body>
 {% endif %}
     <div class="container" id="kptn-lineage-root">
-        <div class="kptn-toolbar">
-            <button id="kptn-preview-all" class="kptn-preview-all" type="button">Preview All</button>
+        <div class="kptn-omnibar">
+            <div class="kptn-omnibar-actions">
+                <button id="kptn-preview-all" class="kptn-preview-all" type="button">Preview All</button>
+                <button id="kptn-filter-all" class="kptn-filter-all" type="button">Filter All</button>
+            </div>
+            <div id="kptn-global-filter-container" class="kptn-global-filter">
+                <input id="kptn-global-filter" type="text" value="WHERE " spellcheck="false" placeholder="WHERE column = value" />
+            </div>
         </div>
         {{ lineage_html | safe }}
     </div>
@@ -151,6 +207,8 @@
             const tableMap = {{ table_map_json | safe }};
             const configPath = {{ config_path_json | safe }};
             const baseUrl = {{ base_url_json | safe }};
+            const globalFilterInput = document.getElementById('kptn-global-filter');
+            const globalFilterContainer = document.getElementById('kptn-global-filter-container');
             const openSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h7l3 3v8H3z"/><path d="M10 2.5v3h3"/><path d="M7 6 5 8l2 2"/><path d="M9 10l2-2-2-2"/></svg>';
             const tableSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.25 4.75 11.25 8l-5 3.25z" fill="currentColor" stroke="none"/></svg>';
             const filterSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5h11l-4 4v3l-3 1v-4z"/></svg>';
@@ -164,14 +222,31 @@
                 div.textContent = text;
                 return div.innerHTML;
             }
-            function buildPreviewSql(name, filterClause) {
+            function parseClauses(rawFilter) {
+                const raw = typeof rawFilter === 'string' ? rawFilter : '';
+                return raw
+                    .split(';')
+                    .map((part) => part.trim())
+                    .filter(Boolean)
+                    .map((part) => part.replace(/^where\b/i, '').trim())
+                    .filter(Boolean);
+            }
+            function composeWhere(clauses) {
+                const parts = Array.isArray(clauses) ? clauses.filter(Boolean) : [];
+                if (!parts.length) return '';
+                if (parts.length === 1) return `WHERE ${parts[0]}`;
+                const combined = parts.map((clause) => `(${clause})`).join(' OR ');
+                return `WHERE ${combined}`;
+            }
+            function buildPreviewSql(name, filterClause, columns) {
+                const columnList = Array.isArray(columns) && columns.length
+                    ? columns.map((col) => `"${String(col).replace(/"/g, '""')}"`).join(', ')
+                    : '*';
                 const parts = (name || '').split('.').map((segment) => `"${segment.replace(/"/g, '""')}"`).filter(Boolean);
                 const qualified = parts.length ? parts.join('.') : '""';
-                const rawFilter = typeof filterClause === 'string' ? filterClause : '';
-                const trimmedFilter = rawFilter.trim();
-                const hasFilter = trimmedFilter && trimmedFilter.toUpperCase() !== 'WHERE';
-                const filterSegment = hasFilter ? ` ${trimmedFilter}` : '';
-                return `SELECT * FROM ${qualified}${filterSegment} LIMIT ${DEFAULT_LIMIT}`;
+                const normalizedFilter = typeof filterClause === 'string' ? filterClause.trim() : '';
+                const filterSegment = normalizedFilter ? ` ${normalizedFilter}` : '';
+                return `SELECT ${columnList} FROM ${qualified}${filterSegment} LIMIT ${DEFAULT_LIMIT}`;
             }
             function findTableElement(tableName) {
                 const target = (tableName || '').trim().toLowerCase();
@@ -199,6 +274,39 @@
                     }
                 }
                 return String(value);
+            }
+            function getTableColumns(tableEl) {
+                if (!(tableEl instanceof HTMLElement)) return [];
+                const headers = tableEl.querySelectorAll('th.column');
+                return Array.from(headers)
+                    .map((th) => (th instanceof HTMLElement ? th.textContent || '' : ''))
+                    .map((text) => text.trim())
+                    .filter(Boolean);
+            }
+            function clauseMatchesColumns(clause, columns) {
+                if (!clause || !Array.isArray(columns) || !columns.length) return false;
+                const normalized = clause.toLowerCase();
+                return columns.some((col) => {
+                    const safe = col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    return new RegExp(`\\b${safe.toLowerCase()}\\b`).test(normalized);
+                });
+            }
+            function resolveFilter(tableColumns, localInput, localContainer) {
+                const localClauses = parseClauses(localInput?.value || '');
+                const localEnabled = localContainer?.classList.contains('is-visible') && localClauses.length > 0;
+                if (localEnabled) {
+                    return composeWhere(localClauses);
+                }
+
+                const globalVisible = globalFilterContainer?.classList.contains('is-visible');
+                const globalClauses = parseClauses(globalFilterInput?.value || '');
+                if (globalVisible && globalClauses.length) {
+                    const applicable = globalClauses.filter((clause) => clauseMatchesColumns(clause, tableColumns));
+                    if (applicable.length) {
+                        return composeWhere(applicable);
+                    }
+                }
+                return '';
             }
             function renderPreview(tableName, payload) {
                 const tableEl = findTableElement(tableName);
@@ -276,7 +384,11 @@
             async function loadTablePreviewWithSql(name, path, sqlOverride) {
                 const tableEl = findTableElement(name);
                 const previewSlot = ensurePreviewSlot(tableEl);
-                const sql = typeof sqlOverride === 'string' && sqlOverride.trim() ? sqlOverride : buildPreviewSql(name);
+                const columnList = getTableColumns(tableEl);
+                const filterClause = resolveFilter(columnList, null, null);
+                const sql = typeof sqlOverride === 'string' && sqlOverride.trim()
+                    ? sqlOverride
+                    : buildPreviewSql(name, filterClause, columnList);
                 if (vscode) {
                     vscode.postMessage({ type: 'tableMeta', table: name, path: path || null, sql });
                     return;
@@ -310,7 +422,7 @@
                     const path = tableMap[key];
                     const tableEl = nameEl.closest('.table');
                     const previewSlot = ensurePreviewSlot(tableEl);
-                    const defaultSql = buildPreviewSql(name);
+                    const columnList = getTableColumns(tableEl);
                     const defaultFilterValue = 'WHERE ';
                     let metaBtn = nameEl.querySelector('.kptn-open-table');
 
@@ -333,7 +445,8 @@
                         } else {
                             renderPreview(name, { table: name, message: 'Loading table details...' });
                         }
-                        const sqlValue = sqlInput ? buildPreviewSql(name, sqlInput.value) : defaultSql;
+                        const filterClause = resolveFilter(columnList, sqlInput, sqlContainer);
+                        const sqlValue = buildPreviewSql(name, filterClause, columnList);
                         loadTablePreviewWithSql(name, path || null, sqlValue);
                     };
 
@@ -442,9 +555,38 @@
                 });
                 previewAllBtn.dataset.kptnBound = '1';
             }
+            function wireGlobalFilter() {
+                const filterBtn = document.getElementById('kptn-filter-all');
+                if (!(filterBtn instanceof HTMLButtonElement) || filterBtn.dataset.kptnBound === '1') {
+                    return;
+                }
+                if (globalFilterInput && globalFilterInput.dataset.kptnBound !== '1') {
+                    globalFilterInput.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            previewAllTables();
+                        }
+                    });
+                    globalFilterInput.dataset.kptnBound = '1';
+                }
+                filterBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    if (globalFilterContainer) {
+                        globalFilterContainer.classList.toggle('is-visible');
+                        if (globalFilterContainer.classList.contains('is-visible') && globalFilterInput) {
+                            globalFilterInput.focus();
+                            const length = globalFilterInput.value.length;
+                            globalFilterInput.setSelectionRange(length, length);
+                        }
+                    }
+                });
+                filterBtn.dataset.kptnBound = '1';
+            }
 
             ensureButtons();
             wirePreviewAll();
+            wireGlobalFilter();
 
             if (vscode) {
                 window.addEventListener('message', (event) => {
