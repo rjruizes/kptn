@@ -177,6 +177,41 @@ def _coerce_json_value(value: object) -> object:
     return str(value)
 
 
+def _duckdb_table_columns(conn: object, table_name: str) -> tuple[list[str], Optional[str]]:
+    schema, table = _split_table_identifier(table_name)
+    if not table:
+        return [], "Table name is empty"
+
+    qualified = _quote_duckdb_identifier(table)
+    if schema:
+        qualified = f"{_quote_duckdb_identifier(schema)}.{qualified}"
+
+    query = f"PRAGMA table_info({qualified})"
+    try:
+        cursor = conn.execute(query)
+    except Exception as exc:  # noqa: BLE001 - surface DuckDB errors
+        return [], f"Unable to read columns for '{table_name}': {exc}"
+
+    rows = cursor.fetchall() if cursor else []
+    columns: list[str] = []
+    for row in rows:
+        name: Optional[str] = None
+        for key in ("column_name", "name"):
+            try:
+                candidate = row[key]  # type: ignore[index]
+            except Exception:
+                candidate = None
+            if isinstance(candidate, str):
+                name = candidate
+                break
+        if name is None and isinstance(row, (list, tuple)) and len(row) > 1 and isinstance(row[1], str):
+            name = row[1]
+        if name:
+            columns.append(name)
+
+    return columns, None
+
+
 def _preview_duckdb_table(conn: object, table_name: str, limit: int) -> dict[str, Any]:
     schema, table = _split_table_identifier(table_name)
     qualified = _quote_duckdb_identifier(table)
@@ -224,7 +259,31 @@ def _prepare_client_sql(sql: str, limit: int) -> tuple[Optional[str], Optional[s
     return target, None
 
 
-def _preview_duckdb_sql(conn: object, sql: str, limit: int) -> dict[str, Any]:
+def _pad_rows_with_requested_columns(
+    rows: list[tuple[Any, ...]],
+    result_columns: list[str],
+    requested_columns: Optional[list[str]],
+) -> tuple[list[list[Any]], list[str]]:
+    """Pad DuckDB rows to requested columns for consistent display."""
+    if not requested_columns:
+        padded = [[_coerce_json_value(value) for value in row] for row in rows]
+        return padded, result_columns
+
+    normalized = {str(col).lower(): idx for idx, col in enumerate(result_columns)}
+    padded_rows: list[list[Any]] = []
+    for row in rows:
+        padded_row: list[Any] = []
+        for col in requested_columns:
+            idx = normalized.get(str(col).lower())
+            value = row[idx] if idx is not None and idx < len(row) else None
+            padded_row.append(_coerce_json_value(value))
+        padded_rows.append(padded_row)
+    return padded_rows, requested_columns
+
+
+def _preview_duckdb_sql(
+    conn: object, sql: str, limit: int, requested_columns: Optional[list[str]] = None
+) -> dict[str, Any]:
     try:
         cursor = conn.execute(sql)
     except Exception as exc:  # noqa: BLE001 - surface precise DuckDB errors
@@ -232,23 +291,70 @@ def _preview_duckdb_sql(conn: object, sql: str, limit: int) -> dict[str, Any]:
 
     columns = [col[0] for col in cursor.description] if cursor.description else []
     rows = cursor.fetchmany(limit) if cursor else []
+    padded_rows, display_columns = _pad_rows_with_requested_columns(
+        rows, columns, requested_columns
+    )
     if not rows:
         return {
-            "columns": columns,
+            "columns": display_columns,
             "row": [],
             "message": "Query returned no rows",
         }
 
     return {
-        "columns": columns,
-        "row": [_coerce_json_value(value) for value in rows[0]],
-        "rows": [[_coerce_json_value(value) for value in row] for row in rows],
+        "columns": display_columns,
+        "row": padded_rows[0] if padded_rows else [],
+        "rows": padded_rows,
         "limit": limit,
     }
 
 
+def get_duckdb_table_columns(config_path: Path, table_name: str) -> dict[str, Any]:
+    """Return column metadata for a DuckDB table configured in kptn.yaml."""
+    if not config_path.exists():
+        raise FileNotFoundError(f"kptn.yaml not found at {config_path}")
+
+    original_dir = Path.cwd()
+    project_dir = config_path.parent
+    os.chdir(project_dir)
+
+    try:
+        kap_conf = read_config()
+        tasks_conf = kap_conf.get("tasks", {}) if isinstance(kap_conf, dict) else {}
+        config_block = kap_conf.get("config", {}) if isinstance(kap_conf, dict) else {}
+
+        try:
+            runtime_config = RuntimeConfig.from_config(
+                config_block, base_dir=project_dir
+            )
+        except RuntimeConfigError as exc:
+            return {"message": f"Unable to build runtime config: {exc}"}
+
+        conn, conn_message = _duckdb_connection_from_runtime_config(runtime_config)
+        if conn is None:
+            return {"message": conn_message or "DuckDB connection unavailable"}
+
+        resolved_table = _resolve_duckdb_output_table(tasks_conf, table_name or "")
+        if not resolved_table:
+            return {
+                "message": "Table is not configured as a DuckDB output in kptn.yaml"
+            }
+
+        columns, error = _duckdb_table_columns(conn, resolved_table)
+        if error:
+            return {"message": error, "resolvedTable": resolved_table}
+
+        return {"columns": columns, "resolvedTable": resolved_table}
+    finally:
+        os.chdir(original_dir)
+
+
 def get_duckdb_preview(
-    config_path: Path, table_name: Optional[str] = None, sql: Optional[str] = None, limit: int = 5
+    config_path: Path,
+    table_name: Optional[str] = None,
+    sql: Optional[str] = None,
+    limit: int = 5,
+    requested_columns: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Return DuckDB sample and metadata for either a configured output or client SQL."""
     if not config_path.exists():
@@ -279,7 +385,9 @@ def get_duckdb_preview(
             if error:
                 return {"message": error}
 
-            preview = _preview_duckdb_sql(conn, prepared_sql, limit)
+            preview = _preview_duckdb_sql(
+                conn, prepared_sql, limit, requested_columns=requested_columns
+            )
             preview["resolvedTable"] = None
             preview["sql"] = prepared_sql
             return preview

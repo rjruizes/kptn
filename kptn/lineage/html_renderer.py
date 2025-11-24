@@ -8,7 +8,7 @@ def render_lineage_html(
     tables: Sequence[dict[str, object]],
     lineage: Sequence[dict[str, object]],
     *,
-    title: str = "kptn Column Lineage",
+    title: str = "SQL Column Lineage",
 ) -> str:
     """Render a standalone HTML page visualising column lineage."""
 
@@ -146,7 +146,6 @@ def render_lineage_html(
   </style>
 </head>
 <body>
-  <h1>{title}</h1>
   <div class="legend">
     <div class="legend-item">
       <span class="legend-swatch direct"></span>Direct dependency

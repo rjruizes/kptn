@@ -109,20 +109,44 @@ class BackendClient implements vscode.Disposable {
 		throw new Error('Lineage server is not available');
 	}
 
-	async getTablePreview(configUri: vscode.Uri, table?: string, sql?: string): Promise<{ columns?: string[]; row?: unknown[]; message?: string; resolvedTable?: string; sql?: string }> {
+	async getTablePreview(
+		configUri: vscode.Uri,
+		table?: string,
+		sql?: string,
+		requestedLimit?: number,
+		requestedColumns?: string[],
+	): Promise<{ columns?: string[]; row?: unknown[]; rows?: unknown[][]; limit?: number; message?: string; resolvedTable?: string; sql?: string }> {
 		const result = await this.sendRequest('getTablePreview', {
 			configPath: configUri.fsPath,
 			table,
 			sql,
+			limit: requestedLimit,
+			columns: requestedColumns,
 		});
 
-		const payload = result as { columns?: unknown; row?: unknown; message?: unknown; resolvedTable?: unknown; sql?: unknown };
+		const payload = result as { columns?: unknown; row?: unknown; rows?: unknown; limit?: unknown; message?: unknown; resolvedTable?: unknown; sql?: unknown };
 		const columns = Array.isArray(payload?.columns) ? payload.columns.map((entry) => String(entry)) : undefined;
 		const row = Array.isArray(payload?.row) ? payload.row : undefined;
+		const rows = Array.isArray(payload?.rows) ? (payload.rows as unknown[][]) : undefined;
+		const limit = typeof payload?.limit === 'number' ? payload.limit : undefined;
 		const message = typeof payload?.message === 'string' ? payload.message : undefined;
 		const resolvedTable = typeof payload?.resolvedTable === 'string' ? payload.resolvedTable : undefined;
 		const normalizedSql = typeof payload?.sql === 'string' ? payload.sql : undefined;
-		return { columns, row, message, resolvedTable, sql: normalizedSql };
+		const previewLimit = typeof payload?.limit === 'number' ? payload.limit : requestedLimit ?? limit;
+		return { columns, row, rows, limit: previewLimit, message, resolvedTable, sql: normalizedSql };
+	}
+
+	async getTableColumns(configUri: vscode.Uri, table: string): Promise<{ columns?: string[]; message?: string; resolvedTable?: string }> {
+		const result = await this.sendRequest('getTableColumns', {
+			configPath: configUri.fsPath,
+			table,
+		});
+
+		const payload = result as { columns?: unknown; message?: unknown; resolvedTable?: unknown };
+		const columns = Array.isArray(payload?.columns) ? payload.columns.map((entry) => String(entry)) : undefined;
+		const message = typeof payload?.message === 'string' ? payload.message : undefined;
+		const resolvedTable = typeof payload?.resolvedTable === 'string' ? payload.resolvedTable : undefined;
+		return { columns, message, resolvedTable };
 	}
 
 	private async ensureStarted(): Promise<void> {
@@ -642,8 +666,34 @@ class LineagePanel implements vscode.Disposable {
 				}
 
 			if (event.type === 'tableMeta' && typeof event.table === 'string') {
-				const sql = typeof event.sql === 'string' ? event.sql : undefined;
-				await this.handleTablePreview(event.table, sql);
+                const sql = typeof event.sql === 'string' ? event.sql : undefined;
+                const limit = typeof event.limit === 'number' ? event.limit : undefined;
+                const droppedColumns = Array.isArray(event.droppedColumns) ? event.droppedColumns : undefined;
+                const columnMessage = typeof event.columnMessage === 'string' ? event.columnMessage : undefined;
+                const columns = Array.isArray(event.columns) ? event.columns.map((entry: unknown) => String(entry)) : undefined;
+                await this.handleTablePreview(event.table, sql, limit, droppedColumns, columnMessage, columns);
+                return;
+            }
+
+			if (event.type === 'tableColumns' && typeof event.table === 'string') {
+				try {
+					const metadata = await this.backend.getTableColumns(this.configUri, event.table);
+					await this.panel.webview.postMessage({
+						type: 'tableColumns',
+						table: event.table,
+						columns: metadata.columns,
+						message: metadata.message,
+						resolvedTable: metadata.resolvedTable,
+					});
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					await this.panel.webview.postMessage({
+						type: 'tableColumns',
+						table: event.table,
+						message,
+						columns: [],
+					});
+				}
 				return;
 			}
 
@@ -725,28 +775,36 @@ class LineagePanel implements vscode.Disposable {
 		this.panel.webview.html = html;
 	}
 
-	private async handleTablePreview(tableName: string, sql?: string): Promise<void> {
-		try {
-		const preview = await this.backend.getTablePreview(this.configUri, tableName, sql);
-		await this.panel.webview.postMessage({
-			type: 'tablePreview',
-			table: tableName,
-			columns: preview.columns,
-			row: preview.row,
-			message: preview.message,
-			resolvedTable: preview.resolvedTable,
-			sql: preview.sql,
-		});
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		vscode.window.showErrorMessage(`Unable to load table details: ${message}`);
-		await this.panel.webview.postMessage({
-				type: 'tablePreview',
-				table: tableName,
-				message,
-			});
-		}
-	}
+    private async handleTablePreview(tableName: string, sql?: string, limit?: number, droppedColumns?: string[], columnMessage?: string, columns?: string[]): Promise<void> {
+        try {
+            const preview = await this.backend.getTablePreview(this.configUri, tableName, sql, limit, columns);
+            await this.panel.webview.postMessage({
+                type: 'tablePreview',
+                table: tableName,
+                columns: preview.columns,
+                row: preview.row,
+				rows: preview.rows,
+				limit: preview.limit ?? limit,
+                message: preview.message,
+                resolvedTable: preview.resolvedTable,
+                sql: preview.sql,
+                droppedColumns,
+                columnMessage,
+                requestedColumns: columns,
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Unable to load table details: ${message}`);
+            await this.panel.webview.postMessage({
+                type: 'tablePreview',
+                table: tableName,
+                message,
+                droppedColumns,
+                columnMessage,
+                requestedColumns: columns,
+            });
+        }
+    }
 
 	private getAlternateViewColumn(): vscode.ViewColumn | undefined {
 		const current = this.panel.viewColumn;

@@ -37,6 +37,9 @@
             align-items: center;
             gap: 8px;
         }
+        .kptn-omnibar-right {
+            margin-left: auto;
+        }
         .kptn-preview-all {
             border: 1px solid rgba(226,232,240,0.1);
             background: rgba(255,255,255,0.06);
@@ -69,6 +72,21 @@
             background: rgba(255,255,255,0.1);
             border-color: rgba(226,232,240,0.2);
             color: #38bdf8;
+        }
+        .kptn-dismiss {
+            border: 1px solid rgba(226,232,240,0.05);
+            background: rgba(255,255,255,0.02);
+            color: #94a3b8;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+        .kptn-dismiss:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(226,232,240,0.1);
+            color: #e2e8f0;
         }
         .kptn-global-filter {
             display: none;
@@ -233,6 +251,11 @@
             <div id="kptn-global-filter-container" class="kptn-global-filter">
                 <input id="kptn-global-filter" type="text" value="WHERE " spellcheck="false" placeholder="WHERE column = value" />
             </div>
+            <div class="kptn-omnibar-actions kptn-omnibar-right">
+                <button id="kptn-dismiss-warnings" class="kptn-dismiss" type="button" title="Clear column warnings">
+                    Dismiss warnings
+                </button>
+            </div>
         </div>
         {{ lineage_html | safe }}
     </div>
@@ -252,6 +275,8 @@
             const DEFAULT_LIMIT = 5;
             const MAX_LIMIT = 200;
             const previewState = new Map(); // tableName -> {limit, expanded}
+            const columnCache = new Map(); // normalizedTable -> {columns, message}
+            const columnRequests = new Map(); // normalizedTable -> Promise
 
             function normalize(name) {
                 return (name || '').trim().replace(/^[^:]*:\/\//, '').split('.').slice(-1)[0]?.toLowerCase() || '';
@@ -288,6 +313,49 @@
                 const key = normalize(tableName);
                 const existing = getPreviewState(tableName);
                 previewState.set(key, { ...existing, ...updates });
+            }
+            function requestColumnsFromExtension(tableName) {
+                const key = normalize(tableName);
+                if (columnRequests.has(key)) {
+                    return columnRequests.get(key);
+                }
+                const promise = new Promise((resolve) => {
+                    let settled = false;
+                    const timeout = setTimeout(() => {
+                        if (!settled) {
+                            settled = true;
+                            resolve({ columns: [], message: null, resolvedTable: null });
+                        }
+                    }, 3000);
+
+                    function handleMessage(event) {
+                        const payload = event.data;
+                        if (!payload || payload.type !== 'tableColumns') return;
+                        if ((payload.table || '').toLowerCase() !== tableName.toLowerCase()) return;
+                        settled = true;
+                        clearTimeout(timeout);
+                        window.removeEventListener('message', handleMessage);
+                        const columns = Array.isArray(payload.columns) ? payload.columns.filter(Boolean) : [];
+                        const message = typeof payload.message === 'string' ? payload.message : null;
+                        resolve({ columns, message, resolvedTable: payload.resolvedTable || null });
+                    }
+                    window.addEventListener('message', handleMessage);
+                    vscode.postMessage({ type: 'tableColumns', table: tableName, configPath });
+                });
+                columnRequests.set(key, promise);
+                return promise;
+            }
+            function clearWarnings() {
+                document.querySelectorAll('.kptn-column-note').forEach((el) => {
+                    if (el instanceof HTMLElement) {
+                        el.remove();
+                    }
+                });
+                document.querySelectorAll('.kptn-preview .preview-status').forEach((el) => {
+                    if (el instanceof HTMLElement) {
+                        el.remove();
+                    }
+                });
             }
             function buildPreviewSql(name, filterClause, columns, limit) {
                 const columnList = Array.isArray(columns) && columns.length
@@ -343,6 +411,37 @@
                     return new RegExp(`\\b${safe.toLowerCase()}\\b`).test(normalized);
                 });
             }
+            async function fetchTableColumns(tableName) {
+                const key = normalize(tableName);
+                if (columnCache.has(key)) {
+                    return columnCache.get(key);
+                }
+                const fallback = { columns: [], message: null, resolvedTable: null };
+                if (vscode) {
+                    const result = await requestColumnsFromExtension(tableName);
+                    columnCache.set(key, result);
+                    return result;
+                }
+                try {
+                    const response = await fetch(`${baseUrl || ''}/table-columns?configPath=${encodeURIComponent(configPath)}&table=${encodeURIComponent(tableName)}`);
+                    const payload = await response.json();
+                    const columns = Array.isArray(payload?.columns) ? payload.columns.filter(Boolean) : [];
+                    const message = typeof payload?.message === 'string' ? payload.message : null;
+                    const result = { columns, message, resolvedTable: payload?.resolvedTable || null };
+                    columnCache.set(key, result);
+                    return result;
+                } catch (error) {
+                    const result = { ...fallback, message: (error && error.message) || 'Unable to fetch column metadata' };
+                    columnCache.set(key, result);
+                    return result;
+                }
+            }
+            function filterAvailableColumns(requested, available) {
+                const availableSet = new Set((available || []).map((col) => String(col).toLowerCase()));
+                const valid = (requested || []).filter((col) => availableSet.has(String(col).toLowerCase()));
+                const missing = (requested || []).filter((col) => !availableSet.has(String(col).toLowerCase()));
+                return { valid, missing };
+            }
             function resolveFilter(tableColumns, localInput, localContainer) {
                 const localClauses = parseClauses(localInput?.value || '');
                 const localEnabled = localContainer?.classList.contains('is-visible') && localClauses.length > 0;
@@ -393,6 +492,11 @@
                     previewSlot.innerHTML = '';
                 }
 
+                const droppedColumns = Array.isArray(payload?.droppedColumns)
+                    ? payload.droppedColumns.filter(Boolean)
+                    : [];
+                const columnMessage = typeof payload?.columnMessage === 'string' ? payload.columnMessage : '';
+
                 let controls = tableEl.querySelector('.kptn-preview-controls');
                 if (!(controls instanceof HTMLElement) && previewSlot) {
                     controls = document.createElement('div');
@@ -432,6 +536,16 @@
 
                 if (controls) {
                     controls.innerHTML = '';
+                    const noteText = droppedColumns.length
+                        ? `Skipped missing columns: ${droppedColumns.join(', ')}`
+                        : columnMessage || '';
+                    if (noteText) {
+                        const note = document.createElement('span');
+                        note.className = 'preview-status kptn-column-note';
+                        note.style.color = 'rgb(145, 97, 34)';
+                        note.textContent = noteText;
+                        controls.appendChild(note);
+                    }
                     if (rows.length > 1) {
                         const viewMoreLink = document.createElement('a');
                         viewMoreLink.className = 'kptn-view-more';
@@ -461,7 +575,7 @@
                             const columnList = getTableColumns(tableEl);
                             const filterClause = resolveFilter(columnList, null, null);
                             const sqlValue = buildPreviewSql(tableName, filterClause, columnList, next);
-                            loadTablePreviewWithSql(tableName, tableMap[normalize(tableName)] || null, sqlValue, next);
+                            loadTablePreviewWithSql(tableName, tableMap[normalize(tableName)] || null, sqlValue, next, filterClause);
                         }
                     });
                     limitWrapper.appendChild(limitLabel);
@@ -491,28 +605,62 @@
             async function loadTablePreview(name, path) {
                 await loadTablePreviewWithSql(name, path, null);
             }
-            async function loadTablePreviewWithSql(name, path, sqlOverride, limitOverride) {
+            async function loadTablePreviewWithSql(name, path, sqlOverride, limitOverride, filterOverride) {
                 const tableEl = findTableElement(name);
                 const previewSlot = ensurePreviewSlot(tableEl);
-                const columnList = getTableColumns(tableEl);
+                const requestedColumns = getTableColumns(tableEl);
                 const state = getPreviewState(name);
                 const limit = Math.max(1, Math.min(limitOverride || state.limit || DEFAULT_LIMIT, MAX_LIMIT));
                 setPreviewState(name, { limit });
-                const filterClause = resolveFilter(columnList, null, null);
-                const sql = typeof sqlOverride === 'string' && sqlOverride.trim()
+
+                let columnsForQuery = requestedColumns;
+                let droppedColumns = [];
+                let columnMessage = '';
+
+                const metadata = await fetchTableColumns(name);
+                const availableColumns = Array.isArray(metadata?.columns) ? metadata.columns.filter(Boolean) : [];
+                columnMessage = typeof metadata?.message === 'string' ? metadata.message : '';
+
+                if (availableColumns.length) {
+                    const { valid, missing } = filterAvailableColumns(requestedColumns, availableColumns);
+                    columnsForQuery = valid.length ? valid : availableColumns;
+                    droppedColumns = missing;
+                } else {
+                    columnsForQuery = requestedColumns;
+                }
+
+                const filterClause = typeof filterOverride === 'string'
+                    ? filterOverride
+                    : resolveFilter(columnsForQuery, null, null);
+                const hasOverride = typeof sqlOverride === 'string' && sqlOverride.trim();
+                const sql = hasOverride && !droppedColumns.length
                     ? sqlOverride
-                    : buildPreviewSql(name, filterClause, columnList, limit);
+                    : buildPreviewSql(name, filterClause, columnsForQuery, limit);
+
                 if (vscode) {
-                    vscode.postMessage({ type: 'tableMeta', table: name, path: path || null, sql, limit });
+                    vscode.postMessage({
+                        type: 'tableMeta',
+                        table: name,
+                        path: path || null,
+                        sql,
+                        limit,
+                        droppedColumns,
+                        columns: requestedColumns,
+                        columnMessage,
+                    });
                     return;
                 }
                 try {
                     const response = await fetch(`${baseUrl || ''}/table-preview-query`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ configPath, table: name, sql, limit }),
+                        body: JSON.stringify({ configPath, table: name, sql, limit, columns: requestedColumns }),
                     });
                     const payload = await response.json();
+                    payload.droppedColumns = droppedColumns;
+                    if (columnMessage) {
+                        payload.columnMessage = columnMessage;
+                    }
                     renderPreview(name, payload);
                 } catch (error) {
                     console.error('Unable to fetch table preview', error);
@@ -561,7 +709,7 @@
                         const state = getPreviewState(name);
                         const filterClause = resolveFilter(columnList, sqlInput, sqlContainer);
                         const sqlValue = buildPreviewSql(name, filterClause, columnList, state.limit);
-                        loadTablePreviewWithSql(name, path || null, sqlValue, state.limit);
+                        loadTablePreviewWithSql(name, path || null, sqlValue, state.limit, filterClause);
                     };
 
                     if (!hasOpen) {
@@ -697,10 +845,22 @@
                 });
                 filterBtn.dataset.kptnBound = '1';
             }
+            function wireDismissWarnings() {
+                const dismissBtn = document.getElementById('kptn-dismiss-warnings');
+                if (!(dismissBtn instanceof HTMLButtonElement) || dismissBtn.dataset.kptnBound === '1') {
+                    return;
+                }
+                dismissBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    clearWarnings();
+                });
+                dismissBtn.dataset.kptnBound = '1';
+            }
 
             ensureButtons();
             wirePreviewAll();
             wireGlobalFilter();
+            wireDismissWarnings();
 
             if (vscode) {
                 window.addEventListener('message', (event) => {

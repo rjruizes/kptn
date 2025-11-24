@@ -17,6 +17,7 @@ except (
 
 from kptn_server.service import (
     generate_lineage_html,
+    get_duckdb_table_columns,
     get_duckdb_preview,
     render_index_page,
     render_lineage_page,
@@ -36,6 +37,7 @@ class TablePreviewQuery(BaseModel):
     sql: str
     table: Optional[str] = None
     limit: Optional[int] = None
+    columns: Optional[list[str]] = None
 
 
 @app.get("/healthz")
@@ -108,8 +110,22 @@ def table_preview_fragment(configPath: str, table: str) -> HTMLResponse:  # noqa
 def table_preview_query(body: TablePreviewQuery) -> dict[str, object]:
     try:
         return get_duckdb_preview(
-            Path(body.configPath), body.table, sql=body.sql, limit=body.limit or 50
+            Path(body.configPath),
+            body.table,
+            sql=body.sql,
+            limit=body.limit or 50,
+            requested_columns=body.columns,
         )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/table-columns")
+def table_columns(configPath: str, table: str) -> dict[str, object]:  # noqa: N802 - query param name is user-facing
+    try:
+        return get_duckdb_table_columns(Path(configPath), table)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

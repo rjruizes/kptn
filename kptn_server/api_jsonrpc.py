@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from kptn_server.service import (
+    get_duckdb_table_columns,
     get_duckdb_preview,
     render_lineage_page,
     render_table_preview_fragment,
@@ -81,7 +82,9 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
         table_name = params.get("table") or params.get("tableName")
         sql = params.get("sql")
         limit = params.get("limit")
+        columns = params.get("columns")
         limit_value = limit if isinstance(limit, int) else 50
+        requested_columns = columns if isinstance(columns, list) else None
         if not isinstance(config_path, str) or (
             not isinstance(table_name, str) and not isinstance(sql, str)
         ):
@@ -93,6 +96,7 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
                 table_name if isinstance(table_name, str) else None,
                 sql=sql if isinstance(sql, str) else None,
                 limit=limit_value,
+                requested_columns=requested_columns,
             )
         except Exception as exc:  # noqa: BLE001 - expose original message for debugging
             return build_response(
@@ -100,6 +104,22 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             )
 
         return build_response(request_id, result=preview)
+
+    if method == "getTableColumns":
+        params = request.get("params") or {}
+        config_path = params.get("configPath")
+        table_name = params.get("table") or params.get("tableName")
+        if not isinstance(config_path, str) or not isinstance(table_name, str):
+            return build_response(request_id, error="Missing configPath or table")
+
+        try:
+            metadata = get_duckdb_table_columns(Path(config_path), table_name)
+        except Exception as exc:  # noqa: BLE001
+            return build_response(
+                request_id, error=f"Failed to load columns: {exc}"
+            )
+
+        return build_response(request_id, result=metadata)
 
     if method == "getLineageServer":
         if LINEAGE_PORT is None:
