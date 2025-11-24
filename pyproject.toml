@@ -1,6 +1,6 @@
 [project]
 name = "kptn"
-version = "0.1.4"
+version = "0.1.5"
 description = "Meta tool for managing and deploying data pipelines."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,9 +36,9 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["kptn", "kptn_server"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"kptn_server/templates" = "kptn_server/templates"
-"kptn_server/static" = "kptn_server/static"
+# [tool.hatch.build.targets.wheel.force-include]
+# "kptn_server/templates" = "kptn_server/templates"
+# "kptn_server/static" = "kptn_server/static"
 
 [dependency-groups]
 dev = [
