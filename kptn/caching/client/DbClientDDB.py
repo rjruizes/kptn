@@ -3,6 +3,7 @@ import boto3
 import os
 import json
 import datetime
+from collections.abc import Sized
 from typing import Any, Dict, List
 from kptn.caching.client.DbClientBase import DbClientBase
 from kptn.caching.client.dynamodb import (
@@ -213,7 +214,7 @@ class DbClientDDB(DbClientBase):
         timestamp = datetime.datetime.now().isoformat()
         if subset_mode and result:
             update = {"UpdatedAt": timestamp}
-            if result:
+            if isinstance(result, Sized):
                 update["subset_count"] = len(result)
             update_task(
                 self.client,
@@ -228,8 +229,10 @@ class DbClientDDB(DbClientBase):
             return
 
         update = {"end_time": timestamp, "UpdatedAt": timestamp}
-        if result:
+        if isinstance(result, Sized):
             update["taskdata_count"] = len(result)
+        elif result is not None:
+            update["taskdata_count"] = 1
         if outputs_version:
             update["outputs_version"] = outputs_version
         if result_hash:

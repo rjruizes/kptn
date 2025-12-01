@@ -336,3 +336,4 @@ shared-local-instance.db
 **/.terraform/*
 **/.terraform
 *.whl
+example/step_example/infra/lambda_decider

@@ -16,6 +16,9 @@ locals {
   docker_context_sha1 = sha1(join("", [
     for file in local.docker_context_watch_files : "${file}:${filesha1("${var.docker_build_context}/${file}")}"
   ]))
+
+  kptn_wheels = sort(fileset(var.docker_build_context, "kptn-*.whl"))
+  kptn_wheel_effective = length(local.kptn_wheels) > 0 ? local.kptn_wheels[length(local.kptn_wheels) - 1] : ""
 }
 
 # Build Docker image and push to ECR
@@ -28,11 +31,21 @@ resource "docker_image" "kptn" {
     context    = var.docker_build_context
     dockerfile = var.docker_build_dockerfile
     platform   = var.docker_build_platform
+    build_args = {
+      KPTN_WHEEL = local.kptn_wheel_effective
+    }
   }
 
   # Trigger rebuild when relevant build context files change
   triggers = {
     context_sha1 = local.docker_context_sha1
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.kptn_wheel_effective != ""
+      error_message = "No kptn wheel found in docker_build_context (expected kptn-*.whl). Run build-docker.sh first."
+    }
   }
 }
 

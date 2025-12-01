@@ -11,6 +11,8 @@ graphs:
       b: a
       c:
       d: [b, c]
+      list_items:
+      process_item: list_items
   basic2:
     tasks:
       a:
@@ -25,3 +27,12 @@ tasks:
     file: src/c.py
   d:
     file: src/d.py
+
+  list_items:
+    file: src/list_items.py
+    cache_result: true
+    iterable_item: item
+
+  process_item:
+    file: src/process_item.py
+    map_over: item

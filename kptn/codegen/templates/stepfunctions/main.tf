@@ -156,11 +156,12 @@ resource "aws_iam_role_policy" "step_function" {
         Action = [
           "events:PutTargets",
           "events:PutRule",
-          "events:DescribeRule"
+          "events:DescribeRule",
+          "events:PutPermission",
+          "events:PutEvents",
+          "events:TagResource"
         ]
-        Resource = [
-          "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule"
-        ]
+        Resource = "*"
       },
       {
         Effect = "Allow"

@@ -10,7 +10,9 @@
         "Payload": {
           "state.$": "$",
           "task_name": "a",
-          "execution_mode": "ecs"
+          "execution_mode": "ecs",
+          "TASKS_CONFIG_PATH": "kptn.yaml",
+          "PIPELINE_NAME": "basic2"
         }
       },
       "ResultSelector": {
@@ -115,7 +117,9 @@
         "Payload": {
           "state.$": "$",
           "task_name": "b",
-          "execution_mode": "ecs"
+          "execution_mode": "ecs",
+          "TASKS_CONFIG_PATH": "kptn.yaml",
+          "PIPELINE_NAME": "basic2"
         }
       },
       "ResultSelector": {

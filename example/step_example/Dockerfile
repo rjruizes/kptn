@@ -12,11 +12,13 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies
 RUN touch README.md
 RUN uv sync --frozen --no-dev
-# Copy kptn package from parent directory
-COPY kptn-0.1.0-py3-none-any.whl /app/
+# Copy kptn wheel from build context (provided by build script)
+ARG KPTN_WHEEL
+COPY ${KPTN_WHEEL} /app/
 
 # Update pyproject.toml to reference local kptn
-RUN uv add /app/kptn-0.1.0-py3-none-any.whl
+RUN test -n "${KPTN_WHEEL}" || (echo "KPTN_WHEEL build arg not set" && exit 1) \
+    && uv add "/app/${KPTN_WHEEL}"
 # Copy source files
 COPY src/ ./src/
 

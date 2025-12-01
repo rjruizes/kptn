@@ -16,6 +16,7 @@ from kptn.util.logger import get_logger
 from kptn.util.pipeline_config import PipelineConfig
 from kptn.util.hash import hash_obj
 import functools
+import os
 import time
 from typing import List, Dict, Any
 
@@ -211,6 +212,14 @@ def run_task_vanilla(
     """Runs a pipeline task using vanilla Python (no Prefect, sequential execution)"""
     tscache = TaskStateCache(pipeline_config)
     task_obj = tscache.get_task(task_name)
+    is_batch_array_worker = os.getenv("AWS_BATCH_JOB_ARRAY_INDEX") is not None
+
+    # When running inside an AWS Batch array job, execute only the targeted subtask
+    if is_batch_array_worker and tscache.is_mapped_task(task_name):
+        tscache.logger.info(f"Detected AWS batch array worker; running subtask for {task_name}")
+        from kptn.caching.batch import run_batch_array_subtask
+        run_batch_array_subtask(pipeline_config, task_name)
+        return
     
     # Keep the cache if subset mode or the task is an incomplete mapped task
     if pipeline_config.SUBSET_MODE:

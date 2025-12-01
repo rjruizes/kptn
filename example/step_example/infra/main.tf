@@ -39,6 +39,13 @@ data "aws_partition" "current" {}
 
 data "aws_caller_identity" "current" {}
 
+module "lambda_decider" {
+  source = "./lambda_decider"
+  pipeline_name  = var.pipeline_name
+  dynamodb_table_arn = aws_dynamodb_table.kptn.arn
+  dynamodb_table_name = aws_dynamodb_table.kptn.name
+}
+
 locals {
   pipeline_name = var.pipeline_name
 
@@ -50,6 +57,7 @@ locals {
         ecs_cluster_arn             = local.ecs_cluster_arn_effective
         ecs_task_definition_arn     = local.ecs_task_definition_arn_effective
         ecs_task_execution_role_arn = local.ecs_task_execution_role_arn_effective
+        decider_lambda_arn          = module.lambda_decider.lambda_function_arn
         subnet_ids                  = jsonencode(local.subnet_ids_effective)
         security_group_ids          = jsonencode(local.security_group_ids_effective)
         assign_public_ip            = var.assign_public_ip ? "ENABLED" : "DISABLED"
@@ -153,13 +161,21 @@ resource "aws_iam_role_policy" "step_function" {
       {
         Effect = "Allow"
         Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = module.lambda_decider.lambda_function_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "events:PutTargets",
           "events:PutRule",
-          "events:DescribeRule"
+          "events:DescribeRule",
+          "events:PutPermission",
+          "events:PutEvents",
+          "events:TagResource"
         ]
-        Resource = [
-          "arn:${data.aws_partition.current.partition}:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:rule/StepFunctionsGetEventsForECSTaskRule"
-        ]
+        Resource = ["*"]
       },
       {
         Effect = "Allow"

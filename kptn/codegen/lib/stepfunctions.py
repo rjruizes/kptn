@@ -373,6 +373,8 @@ def build_state_machine_definition(
             parallel_state: dict[str, Any] = {
                 "Type": "Parallel",
                 "Branches": parallel_branches,
+                # Keep the overall state as an object by nesting the parallel output.
+                "ResultPath": f"$.Lane{lane_index}Parallel",
             }
             if next_stage_start:
                 parallel_state["Next"] = next_stage_start

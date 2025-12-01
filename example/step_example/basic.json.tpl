@@ -1,8 +1,8 @@
 {
   "Comment": "kptn generated state machine for basic",
-  "StartAt": "ParallelRoot",
+  "StartAt": "Lane0Parallel",
   "States": {
-    "ParallelRoot": {
+    "Lane0Parallel": {
       "Type": "Parallel",
       "Branches": [
         {
@@ -16,7 +16,9 @@
                 "Payload": {
                   "state.$": "$",
                   "task_name": "a",
-                  "execution_mode": "ecs"
+                  "execution_mode": "ecs",
+                  "TASKS_CONFIG_PATH": "kptn.yaml",
+                  "PIPELINE_NAME": "basic"
                 }
               },
               "ResultSelector": {
@@ -57,7 +59,7 @@
             },
             "a_Skip": {
               "Type": "Pass",
-              "Next": "b_Decide"
+              "End": true
             },
             "a_RunEcs": {
               "Type": "Task",
@@ -111,8 +113,244 @@
                 ]
               },
               "ResultPath": null,
-              "Next": "b_Decide"
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "c_Decide",
+          "States": {
+            "c_Decide": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${decider_lambda_arn}",
+                "Payload": {
+                  "state.$": "$",
+                  "task_name": "c",
+                  "execution_mode": "ecs",
+                  "TASKS_CONFIG_PATH": "kptn.yaml",
+                  "PIPELINE_NAME": "basic"
+                }
+              },
+              "ResultSelector": {
+                "Payload.$": "$.Payload"
+              },
+              "ResultPath": "$.last_decision",
+              "OutputPath": "$",
+              "Next": "c_Choice"
             },
+            "c_Choice": {
+              "Type": "Choice",
+              "Default": "c_Skip",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.last_decision.Payload.should_run",
+                      "BooleanEquals": true
+                    },
+                    {
+                      "Or": [
+                        {
+                          "Variable": "$.last_decision.Payload.execution_mode",
+                          "StringEquals": "ecs"
+                        },
+                        {
+                          "Not": {
+                            "Variable": "$.last_decision.Payload.execution_mode",
+                            "IsPresent": true
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "Next": "c_RunEcs"
+                }
+              ]
+            },
+            "c_Skip": {
+              "Type": "Pass",
+              "End": true
+            },
+            "c_RunEcs": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "Cluster": "${ecs_cluster_arn}",
+                "TaskDefinition": "${ecs_task_definition_arn}",
+                "LaunchType": "${launch_type}",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "AssignPublicIp": "${assign_public_ip}",
+                    "Subnets": ${subnet_ids},
+                    "SecurityGroups": ${security_group_ids}
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "${container_name}",
+                      "Environment": [
+                        {
+                          "Name": "KAPTEN_PIPELINE",
+                          "Value": "basic"
+                        },
+                        {
+                          "Name": "KAPTEN_TASK",
+                          "Value": "c"
+                        },
+                        {
+                          "Name": "DYNAMODB_TABLE_NAME",
+                          "Value": "${dynamodb_table_name}"
+                        },
+                        {
+                          "Name": "KAPTEN_DECISION_REASON",
+                          "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "EnableExecuteCommand": true,
+                "Tags": [
+                  {
+                    "Key": "KaptenPipeline",
+                    "Value": "basic"
+                  },
+                  {
+                    "Key": "KaptenTask",
+                    "Value": "c"
+                  }
+                ]
+              },
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "list_items_Decide",
+          "States": {
+            "list_items_Decide": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${decider_lambda_arn}",
+                "Payload": {
+                  "state.$": "$",
+                  "task_name": "list_items",
+                  "execution_mode": "ecs",
+                  "TASKS_CONFIG_PATH": "kptn.yaml",
+                  "PIPELINE_NAME": "basic"
+                }
+              },
+              "ResultSelector": {
+                "Payload.$": "$.Payload"
+              },
+              "ResultPath": "$.last_decision",
+              "OutputPath": "$",
+              "Next": "list_items_Choice"
+            },
+            "list_items_Choice": {
+              "Type": "Choice",
+              "Default": "list_items_Skip",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.last_decision.Payload.should_run",
+                      "BooleanEquals": true
+                    },
+                    {
+                      "Or": [
+                        {
+                          "Variable": "$.last_decision.Payload.execution_mode",
+                          "StringEquals": "ecs"
+                        },
+                        {
+                          "Not": {
+                            "Variable": "$.last_decision.Payload.execution_mode",
+                            "IsPresent": true
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "Next": "list_items_RunEcs"
+                }
+              ]
+            },
+            "list_items_Skip": {
+              "Type": "Pass",
+              "End": true
+            },
+            "list_items_RunEcs": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "Cluster": "${ecs_cluster_arn}",
+                "TaskDefinition": "${ecs_task_definition_arn}",
+                "LaunchType": "${launch_type}",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "AssignPublicIp": "${assign_public_ip}",
+                    "Subnets": ${subnet_ids},
+                    "SecurityGroups": ${security_group_ids}
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "${container_name}",
+                      "Environment": [
+                        {
+                          "Name": "KAPTEN_PIPELINE",
+                          "Value": "basic"
+                        },
+                        {
+                          "Name": "KAPTEN_TASK",
+                          "Value": "list_items"
+                        },
+                        {
+                          "Name": "DYNAMODB_TABLE_NAME",
+                          "Value": "${dynamodb_table_name}"
+                        },
+                        {
+                          "Name": "KAPTEN_DECISION_REASON",
+                          "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "EnableExecuteCommand": true,
+                "Tags": [
+                  {
+                    "Key": "KaptenPipeline",
+                    "Value": "basic"
+                  },
+                  {
+                    "Key": "KaptenTask",
+                    "Value": "list_items"
+                  }
+                ]
+              },
+              "ResultPath": null,
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.Lane2Parallel",
+      "Next": "Lane1Parallel"
+    },
+    "Lane1Parallel": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "b_Decide",
+          "States": {
             "b_Decide": {
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke",
@@ -121,7 +359,9 @@
                 "Payload": {
                   "state.$": "$",
                   "task_name": "b",
-                  "execution_mode": "ecs"
+                  "execution_mode": "ecs",
+                  "TASKS_CONFIG_PATH": "kptn.yaml",
+                  "PIPELINE_NAME": "basic"
                 }
               },
               "ResultSelector": {
@@ -221,17 +461,19 @@
           }
         },
         {
-          "StartAt": "c_Decide",
+          "StartAt": "process_item_Decide",
           "States": {
-            "c_Decide": {
+            "process_item_Decide": {
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke",
               "Parameters": {
                 "FunctionName": "${decider_lambda_arn}",
                 "Payload": {
                   "state.$": "$",
-                  "task_name": "c",
-                  "execution_mode": "ecs"
+                  "task_name": "process_item",
+                  "execution_mode": "batch_array",
+                  "TASKS_CONFIG_PATH": "kptn.yaml",
+                  "PIPELINE_NAME": "basic"
                 }
               },
               "ResultSelector": {
@@ -239,11 +481,11 @@
               },
               "ResultPath": "$.last_decision",
               "OutputPath": "$",
-              "Next": "c_Choice"
+              "Next": "process_item_Choice"
             },
-            "c_Choice": {
+            "process_item_Choice": {
               "Type": "Choice",
-              "Default": "c_Skip",
+              "Default": "process_item_Skip",
               "Choices": [
                 {
                   "And": [
@@ -252,78 +494,60 @@
                       "BooleanEquals": true
                     },
                     {
-                      "Or": [
-                        {
-                          "Variable": "$.last_decision.Payload.execution_mode",
-                          "StringEquals": "ecs"
-                        },
-                        {
-                          "Not": {
-                            "Variable": "$.last_decision.Payload.execution_mode",
-                            "IsPresent": true
-                          }
-                        }
-                      ]
+                      "Variable": "$.last_decision.Payload.execution_mode",
+                      "StringEquals": "batch_array"
+                    },
+                    {
+                      "Variable": "$.last_decision.Payload.array_size",
+                      "NumericGreaterThan": 0
                     }
                   ],
-                  "Next": "c_RunEcs"
+                  "Next": "process_item_RunBatch"
                 }
               ]
             },
-            "c_Skip": {
+            "process_item_Skip": {
               "Type": "Pass",
               "End": true
             },
-            "c_RunEcs": {
+            "process_item_RunBatch": {
               "Type": "Task",
-              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "Cluster": "${ecs_cluster_arn}",
-                "TaskDefinition": "${ecs_task_definition_arn}",
-                "LaunchType": "${launch_type}",
-                "NetworkConfiguration": {
-                  "AwsvpcConfiguration": {
-                    "AssignPublicIp": "${assign_public_ip}",
-                    "Subnets": ${subnet_ids},
-                    "SecurityGroups": ${security_group_ids}
-                  }
+                "JobName.$": "States.Format('basic-process_item-{}', $$.Execution.Name)",
+                "JobQueue": "${batch_job_queue_arn}",
+                "JobDefinition": "${batch_job_definition_arn}",
+                "ArrayProperties": {
+                  "Size.$": "$.last_decision.Payload.array_size"
                 },
-                "Overrides": {
-                  "ContainerOverrides": [
+                "ContainerOverrides": {
+                  "Environment": [
                     {
-                      "Name": "${container_name}",
-                      "Environment": [
-                        {
-                          "Name": "KAPTEN_PIPELINE",
-                          "Value": "basic"
-                        },
-                        {
-                          "Name": "KAPTEN_TASK",
-                          "Value": "c"
-                        },
-                        {
-                          "Name": "DYNAMODB_TABLE_NAME",
-                          "Value": "${dynamodb_table_name}"
-                        },
-                        {
-                          "Name": "KAPTEN_DECISION_REASON",
-                          "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"
-                        }
-                      ]
+                      "Name": "KAPTEN_PIPELINE",
+                      "Value": "basic"
+                    },
+                    {
+                      "Name": "KAPTEN_TASK",
+                      "Value": "process_item"
+                    },
+                    {
+                      "Name": "DYNAMODB_TABLE_NAME",
+                      "Value": "${dynamodb_table_name}"
+                    },
+                    {
+                      "Name": "ARRAY_SIZE",
+                      "Value.$": "States.Format('{}', $.last_decision.Payload.array_size)"
+                    },
+                    {
+                      "Name": "KAPTEN_DECISION_REASON",
+                      "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"
                     }
                   ]
                 },
-                "EnableExecuteCommand": true,
-                "Tags": [
-                  {
-                    "Key": "KaptenPipeline",
-                    "Value": "basic"
-                  },
-                  {
-                    "Key": "KaptenTask",
-                    "Value": "c"
-                  }
-                ]
+                "Tags": {
+                  "KaptenPipeline": "basic",
+                  "KaptenTask": "process_item"
+                }
               },
               "ResultPath": null,
               "End": true
@@ -331,6 +555,7 @@
           }
         }
       ],
+      "ResultPath": "$.Lane2Parallel",
       "Next": "d_Decide"
     },
     "d_Decide": {
@@ -341,7 +566,9 @@
         "Payload": {
           "state.$": "$",
           "task_name": "d",
-          "execution_mode": "ecs"
+          "execution_mode": "ecs",
+          "TASKS_CONFIG_PATH": "kptn.yaml",
+          "PIPELINE_NAME": "basic"
         }
       },
       "ResultSelector": {
