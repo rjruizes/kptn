@@ -16,6 +16,7 @@ from kptn.cli.run_aws import (
     parse_tasks_arg,
     resolve_stack_parameter_name,
     _load_task_compute,
+    task_execution_mode,
     run_ecs_task,
     run_local,
     start_state_machine_execution,
@@ -579,9 +580,14 @@ def run(
 
     if len(task_list) == 1:
         single_task = task_list[0]
-        resource_requirements = compute_resource_requirements(_load_task_compute(single_task))
+        compute_cfg = _load_task_compute(single_task)
+        resource_requirements = compute_resource_requirements(compute_cfg)
+        execution_mode = task_execution_mode(single_task)
+        requires_batch = execution_mode in {"batch_array", "batch"}
+        batch_available = bool(stack_info.get("batch_job_queue_arn") and stack_info.get("batch_job_definition_arn"))
+        ecs_available = bool(stack_info.get("cluster_arn") and stack_info.get("task_definition_arn"))
 
-        if stack_info.get("batch_job_queue_arn") and stack_info.get("batch_job_definition_arn"):
+        def _submit_batch_job() -> bool:
             try:
                 response = submit_batch_job(
                     session=session,
@@ -591,13 +597,14 @@ def run(
                     resource_requirements=resource_requirements,
                 )
                 typer.echo(f"Submitted Batch job {response.get('jobName')} ({response.get('jobId')})")
-                return
+                return True
             except StackInfoError as exc:
                 typer.echo(f"Batch submission skipped: {exc}", err=True)
             except Exception as exc:  # pragma: no cover - boto3 runtime failures
                 typer.echo(f"Failed to submit Batch job: {exc}", err=True)
+            return False
 
-        if stack_info.get("cluster_arn") and stack_info.get("task_definition_arn"):
+        def _start_ecs_task() -> bool:
             try:
                 response = run_ecs_task(
                     session=session,
@@ -605,6 +612,7 @@ def run(
                     pipeline=pipeline,
                     task=single_task,
                     config=direct_run_config,
+                    compute=compute_cfg,
                 )
                 tasks_started = [task.get("taskArn") for task in response.get("tasks", []) if task.get("taskArn")]
                 if tasks_started:
@@ -614,11 +622,35 @@ def run(
                 failures = response.get("failures")
                 if failures:
                     typer.echo(f"ECS run returned failures: {failures}", err=True)
-                return
+                return True
             except StackInfoError as exc:
                 typer.echo(f"ECS run skipped: {exc}", err=True)
             except Exception as exc:  # pragma: no cover - boto3 runtime failures
                 typer.echo(f"Failed to start ECS task: {exc}", err=True)
+            return False
+
+        if requires_batch:
+            if not batch_available:
+                typer.echo(
+                    "Task requires AWS Batch, but Batch stack metadata is missing.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            if _submit_batch_job():
+                return
+            typer.echo("Batch submission failed for required Batch task.", err=True)
+            raise typer.Exit(1)
+
+        ecs_attempted = False
+        if ecs_available:
+            ecs_attempted = True
+            if _start_ecs_task():
+                return
+
+        if (not requires_batch) and (not ecs_attempted) and batch_available:
+            typer.echo("ECS metadata not found; falling back to Batch submission.", err=True)
+            if _submit_batch_job():
+                return
 
     state_machine_arn = choose_state_machine_arn(
         stack_info,

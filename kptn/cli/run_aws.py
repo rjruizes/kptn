@@ -118,6 +118,40 @@ def _load_task_compute(task_name: str) -> Mapping[str, Any] | None:
     return None
 
 
+def task_execution_mode(task_name: str) -> str | None:
+    """
+    Return the preferred execution mode for a task using the same defaults as the
+    Step Functions generator.
+
+    Defaults to ECS when execution metadata is present but unspecified, and
+    returns None if task configuration cannot be read.
+    """
+    try:
+        kap_conf = read_config()
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+    tasks = kap_conf.get("tasks")
+    if not isinstance(tasks, Mapping):
+        return None
+    task_spec = tasks.get(task_name)
+    if not isinstance(task_spec, Mapping):
+        return None
+
+    execution_cfg = task_spec.get("execution")
+    if isinstance(execution_cfg, Mapping):
+        mode = execution_cfg.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            return mode.strip()
+
+    if task_spec.get("map_over"):
+        return "batch_array"
+
+    return "ecs"
+
+
 def start_state_machine_execution(
     *,
     session: Any,
@@ -155,6 +189,7 @@ def run_ecs_task(
     pipeline: str,
     task: str,
     config: DirectRunConfig,
+    compute: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     cluster_arn = stack_info.get("cluster_arn")
     task_definition_arn = stack_info.get("task_definition_arn")
@@ -183,14 +218,36 @@ def run_ecs_task(
     if stack_info.get("dynamodb_table_name"):
         env_overrides.append({"name": "DYNAMODB_TABLE_NAME", "value": stack_info["dynamodb_table_name"]})
 
+    def _coerce_int(value: Any) -> int | None:
+        try:
+            return int(str(value).strip())
+        except Exception:
+            return None
+
+    overrides: dict[str, Any] = {}
+
+    if isinstance(compute, Mapping):
+        cpu = _coerce_int(compute.get("cpu"))
+        memory = _coerce_int(compute.get("memory"))
+        if cpu is not None:
+            overrides["cpu"] = str(cpu)
+        if memory is not None:
+            overrides["memory"] = str(memory)
+
     container_overrides = []
     if container_name:
-        container_overrides.append(
-            {
-                "name": container_name,
-                "environment": env_overrides,
-            }
-        )
+        container_override: dict[str, Any] = {
+            "name": container_name,
+            "environment": env_overrides,
+        }
+        if isinstance(compute, Mapping):
+            cpu = _coerce_int(compute.get("cpu"))
+            memory = _coerce_int(compute.get("memory"))
+            if cpu is not None:
+                container_override["cpu"] = cpu
+            if memory is not None:
+                container_override["memory"] = memory
+        container_overrides.append(container_override)
 
     ecs = session.client("ecs")
     response = ecs.run_task(
@@ -199,7 +256,9 @@ def run_ecs_task(
         count=1,
         launchType=launch_type,
         networkConfiguration=network_config if subnets or security_groups else {},
-        overrides={"containerOverrides": container_overrides} if container_overrides else {},
+        overrides={**overrides, **({"containerOverrides": container_overrides} if container_overrides else {})}
+        if overrides or container_overrides
+        else {},
         enableExecuteCommand=True,
     )
     return response
