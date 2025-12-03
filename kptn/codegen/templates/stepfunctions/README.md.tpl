@@ -15,6 +15,7 @@ and ECS.
 - `task_execution_role.tf` optionally creates an ECS task execution role when `create_task_execution_role` is true.
 - `docker_image.tf` optionally builds and pushes Docker images to ECR when `build_and_push_image` is true. See `DOCKER_BUILD.md` for details.
 - `batch.tf` optionally provisions AWS Batch resources when `create_batch_resources` is true.
+- `stack_info.tf` writes stack metadata (DynamoDB, ECS, Step Functions, Batch) to SSM at `/kptn/stack/{pipeline_name}/info` by default for programmatic discovery.
 - `locals.tf` centralizes computed references reused across the stack.
 - `variables.tf` defines configuration inputs used by the Terraform stack.
 - `outputs.tf` surfaces useful identifiers after `terraform apply` runs.

@@ -41,6 +41,8 @@ def test_parallel_branches_are_grouped_with_decider_and_trailing_tasks():
     payload_params = branch_states["A_Decide"]["Parameters"]["Payload"]
     assert payload_params["state.$"] == "$"
     assert payload_params["task_name"] == "A"
+    assert payload_params["task_list.$"] == "$.tasks"
+    assert payload_params["ignore_cache.$"] == "$.force"
     assert payload_params["execution_mode"] == "ecs"
     assert payload_params["TASKS_CONFIG_PATH"] == "kptn.yaml"
     assert payload_params["PIPELINE_NAME"] == "example"

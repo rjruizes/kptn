@@ -40,6 +40,7 @@ def test_scaffold_creates_expected_files(tmp_path: Path) -> None:
     assert (output_dir / "ecr.tf").exists()
     assert (output_dir / "task_execution_role.tf").exists()
     assert (output_dir / "locals.tf").exists()
+    assert (output_dir / "stack_info.tf").exists()
     assert (output_dir / "variables.tf").exists()
     assert (output_dir / "outputs.tf").exists()
     assert (output_dir / "README.md").exists()

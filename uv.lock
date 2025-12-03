@@ -828,7 +828,7 @@ requires-dist = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "requests" },
-    { name = "sqlglot", specifier = ">=28.0.0" },
+    { name = "sqlglot", specifier = ">=26.3.8" },
     { name = "typer", specifier = ">=0.12.5" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.35.0" },
     { name = "watchfiles", marker = "extra == 'web'" },

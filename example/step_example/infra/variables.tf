@@ -9,11 +9,52 @@ variable "pipeline_name" {
   description = "kptn pipeline name used as prefix for all resources"
 }
 
+variable "stack_info_ssm_parameter_name" {
+  type        = string
+  description = "SSM parameter name that stores kptn stack metadata such as ARNs for ECS, Step Functions, and Batch"
+  default     = null
+}
+
 variable "state_machines" {
   type = map(object({
     definition_file = string
   }))
   description = "Map of state machine configurations where key is the graph name and value contains the definition file path"
+  default     = {
+
+  basic = {
+    definition_file = "../basic.json.tpl"
+  }
+
+  basic2 = {
+    definition_file = "../basic2.json.tpl"
+  }
+
+}
+}
+
+variable "create_decider_lambda" {
+  type        = bool
+  description = "Set to true to provision the kptn decider Lambda function"
+  default     = true
+}
+
+variable "decider_lambda_arn" {
+  type        = string
+  description = "Existing decider Lambda function ARN to reuse when not creating one"
+  default     = null
+}
+
+variable "decider_lambda_timeout" {
+  type        = number
+  description = "Timeout, in seconds, for the kptn decider Lambda"
+  default     = 30
+}
+
+variable "decider_lambda_memory_size" {
+  type        = number
+  description = "Memory size, in MB, for the kptn decider Lambda"
+  default     = 512
 }
 
 variable "create_networking" {
@@ -259,7 +300,7 @@ variable "task_execution_role_name_prefix" {
 variable "task_execution_role_managed_policies" {
   type        = list(string)
   description = "Managed policy ARNs attached to a generated task execution role"
-  default = [
+  default     = [
     "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
   ]
 }
@@ -303,6 +344,16 @@ variable "tags" {
 variable "dynamodb_table_name" {
   type        = string
   description = "Name for the DynamoDB table used by kptn tasks"
+}
+
+variable "artifact_store" {
+  type        = string
+  description = "Artifact storage identifier exposed to runtime environments"
+}
+
+variable "external_store" {
+  type        = string
+  description = "External inputs storage identifier exposed to runtime environments"
 }
 
 variable "create_efs" {

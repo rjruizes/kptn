@@ -1,6 +1,6 @@
 # Docker Image Building with Terraform
 
-This infrastructure now supports building and pushing Docker images to ECR directly through Terraform using the `kreuzwerker/docker` provider.
+This infrastructure supports building and pushing Docker images to ECR directly through Terraform using the `kreuzwerker/docker` provider.
 
 ## How It Works
 
@@ -127,18 +127,9 @@ docker ps
 
 ### ECR Authentication Errors
 
-**Error**: `unable to retrieve ecr authorization token`
+**Error**: `no basic auth credentials`
 
-**Solution**: Ensure your AWS credentials are configured:
-```bash
-aws ecr get-login-password --region us-east-1
-```
-
-### Build Context Issues
-
-**Error**: `unable to prepare context: unable to evaluate symlinks`
-
-**Solution**: Check that `docker_build_context` points to a valid directory containing your Dockerfile.
+**Solution**: Ensure your AWS credentials are available to Terraform (via environment variables, AWS profile, or IAM role) so the provider can authenticate with ECR.
 
 ### Platform Mismatches
 

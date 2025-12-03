@@ -9,6 +9,12 @@ variable "pipeline_name" {
   description = "kptn pipeline name used as prefix for all resources"
 }
 
+variable "stack_info_ssm_parameter_name" {
+  type        = string
+  description = "SSM parameter name that stores kptn stack metadata such as ARNs for ECS, Step Functions, and Batch"
+  default     = null
+}
+
 variable "state_machines" {
   type = map(object({
     definition_file = string

@@ -11,7 +11,7 @@ dependencies = [
     "requests",
     "pydantic",
     "jsonschema==4.20.0",
-    "sqlglot>=28.0.0",
+    "sqlglot>=26.3.8",
 ]
 
 [project.optional-dependencies]
@@ -47,4 +47,4 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "example/step_example/tests"]

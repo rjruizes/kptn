@@ -7,6 +7,19 @@ import yaml
 from kptn.caching.TaskStateDbClient import TaskStateDbClient
 from kptn.cli.decider_bundle import BundleDeciderError, bundle_decider_lambda
 from kptn.cli.infra_commands import register_infra_commands
+from kptn.cli.run_aws import (
+    DirectRunConfig,
+    StackInfoError,
+    choose_state_machine_arn,
+    create_boto_session,
+    fetch_stack_info,
+    parse_tasks_arg,
+    resolve_stack_parameter_name,
+    run_ecs_task,
+    run_local,
+    start_state_machine_execution,
+    submit_batch_job,
+)
 from kptn.cli.config_validation import (
     SchemaValidationError,
     validate_kptn_config,
@@ -479,6 +492,146 @@ def validate(
         raise typer.Exit(1)
 
     typer.echo("kptn.yaml conforms to kptn-schema.json.")
+
+
+@app.command()
+def run(
+    pipeline: str = typer.Argument(..., help="Pipeline (graph) name associated with the run"),
+    tasks: str = typer.Argument(..., help="Comma-separated task names to execute"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force run even if another execution is active"),
+    local: bool = typer.Option(False, "--local", help="Run locally instead of using AWS Step Functions"),
+    stack_param_name: Optional[str] = typer.Option(
+        None,
+        "--stack-param-name",
+        help="Override the SSM parameter name holding stack metadata",
+    ),
+    state_machine: Optional[str] = typer.Option(
+        None,
+        "--state-machine",
+        "-s",
+        help="State machine key or ARN to invoke when multiple are available",
+    ),
+    profile: Optional[str] = typer.Option(
+        None,
+        "--profile",
+        help="AWS profile to use for cloud runs",
+    ),
+    region: Optional[str] = typer.Option(
+        None,
+        "--region",
+        help="AWS region override for cloud runs",
+    ),
+    launch_type: Optional[str] = typer.Option(
+        None,
+        "--launch-type",
+        help="Launch type override for direct ECS runs (e.g., FARGATE or EC2)",
+    ),
+    subnet_id: list[str] = typer.Option(
+        [],
+        "--subnet-id",
+        help="Subnet ID for direct ECS runs (repeatable)",
+    ),
+    security_group_id: list[str] = typer.Option(
+        [],
+        "--security-group-id",
+        help="Security group ID for direct ECS runs (repeatable)",
+    ),
+):
+    """
+    Run tasks for a pipeline via Step Functions (default) or directly via ECS/Batch when a single task is provided.
+    """
+    try:
+        task_list = parse_tasks_arg(tasks)
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+
+    if local:
+        try:
+            run_local(pipeline, task_list, force)
+        except StackInfoError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1) from exc
+        return
+
+    try:
+        session = create_boto_session(profile, region)
+    except StackInfoError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+
+    parameter_name = resolve_stack_parameter_name(pipeline, stack_param_name)
+    try:
+        stack_info = fetch_stack_info(session=session, parameter_name=parameter_name)
+    except StackInfoError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+
+    direct_run_config = DirectRunConfig(
+        launch_type=launch_type,
+        subnet_ids=subnet_id,
+        security_group_ids=security_group_id,
+    )
+
+    if len(task_list) == 1:
+        single_task = task_list[0]
+
+        if stack_info.get("batch_job_queue_arn") and stack_info.get("batch_job_definition_arn"):
+            try:
+                response = submit_batch_job(
+                    session=session,
+                    stack_info=stack_info,
+                    pipeline=pipeline,
+                    task=single_task,
+                )
+                typer.echo(f"Submitted Batch job {response.get('jobName')} ({response.get('jobId')})")
+                return
+            except StackInfoError as exc:
+                typer.echo(f"Batch submission skipped: {exc}", err=True)
+            except Exception as exc:  # pragma: no cover - boto3 runtime failures
+                typer.echo(f"Failed to submit Batch job: {exc}", err=True)
+
+        if stack_info.get("cluster_arn") and stack_info.get("task_definition_arn"):
+            try:
+                response = run_ecs_task(
+                    session=session,
+                    stack_info=stack_info,
+                    pipeline=pipeline,
+                    task=single_task,
+                    config=direct_run_config,
+                )
+                tasks_started = [task.get("taskArn") for task in response.get("tasks", []) if task.get("taskArn")]
+                if tasks_started:
+                    typer.echo(f"Started ECS task: {tasks_started[0]}")
+                else:
+                    typer.echo("Started ECS task")
+                failures = response.get("failures")
+                if failures:
+                    typer.echo(f"ECS run returned failures: {failures}", err=True)
+                return
+            except StackInfoError as exc:
+                typer.echo(f"ECS run skipped: {exc}", err=True)
+            except Exception as exc:  # pragma: no cover - boto3 runtime failures
+                typer.echo(f"Failed to start ECS task: {exc}", err=True)
+
+    state_machine_arn = choose_state_machine_arn(stack_info, preferred_key=state_machine)
+    if not state_machine_arn:
+        typer.echo("No state machine ARN found in stack metadata; specify --state-machine or fix the stack info.")
+        raise typer.Exit(1)
+
+    try:
+        execution_arn = start_state_machine_execution(
+            session=session,
+            state_machine_arn=state_machine_arn,
+            pipeline=pipeline,
+            tasks=task_list,
+            force=force,
+        )
+    except Exception as exc:  # pragma: no cover - boto3 runtime failures
+        typer.echo(f"Failed to start Step Functions execution: {exc}")
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Started state machine execution: {execution_arn}")
 
 
 @app.command(name="bundle-decider")

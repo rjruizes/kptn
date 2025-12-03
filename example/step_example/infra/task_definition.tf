@@ -24,7 +24,7 @@ resource "aws_ecs_task_definition" "kptn" {
         image       = local.container_image_effective
         essential   = true
         command     = var.task_definition_container_command
-        environment = [for k, v in var.task_definition_container_environment : { name = k, value = v }]
+        environment = [for k, v in local.task_definition_container_environment_effective : { name = k, value = v }]
         mountPoints = var.enable_efs ? [
           {
             sourceVolume  = "efs"

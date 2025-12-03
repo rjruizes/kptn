@@ -10,6 +10,8 @@
         "Payload": {
           "state.$": "$",
           "task_name": "a",
+          "task_list.$": "$.tasks",
+          "ignore_cache.$": "$.force",
           "execution_mode": "ecs",
           "TASKS_CONFIG_PATH": "kptn.yaml",
           "PIPELINE_NAME": "basic2"
@@ -117,6 +119,8 @@
         "Payload": {
           "state.$": "$",
           "task_name": "b",
+          "task_list.$": "$.tasks",
+          "ignore_cache.$": "$.force",
           "execution_mode": "ecs",
           "TASKS_CONFIG_PATH": "kptn.yaml",
           "PIPELINE_NAME": "basic2"

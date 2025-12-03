@@ -209,6 +209,8 @@ def _build_task_state_chain(
             "Payload": {
                 "state.$": "$",
                 "task_name": task_name,
+                "task_list.$": "$.tasks",
+                "ignore_cache.$": "$.force",
                 "execution_mode": execution_mode_default,
                 "TASKS_CONFIG_PATH": tasks_config_path,
                 "PIPELINE_NAME": pipeline_name,

@@ -167,6 +167,7 @@ def scaffold_stepfunctions_infra(
         "efs.tf": _load_template("efs.tf"),
         "batch.tf": _load_template("batch.tf"),
         "locals.tf": _load_template("locals.tf"),
+        "stack_info.tf": _load_template("stack_info.tf"),
         "variables.tf": _load_template("variables.tf.tpl").replace(
             "STATE_MACHINES_PLACEHOLDER",
             _format_state_machines_default(state_machines_map),

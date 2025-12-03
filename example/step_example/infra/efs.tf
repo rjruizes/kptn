@@ -60,7 +60,7 @@ resource "aws_efs_access_point" "kptn" {
 }
 
 locals {
-  efs_file_system_id_effective     = var.create_efs ? aws_efs_file_system.kptn["main"].id : var.efs_file_system_id
-  efs_access_point_id_effective    = var.create_efs ? aws_efs_access_point.kptn["main"].id : var.efs_access_point_id
+  efs_file_system_id_effective = var.create_efs ? aws_efs_file_system.kptn["main"].id : var.efs_file_system_id
+  efs_access_point_id_effective = var.create_efs ? aws_efs_access_point.kptn["main"].id : var.efs_access_point_id
   efs_security_group_ids_effective = var.create_efs && var.create_efs_security_group ? [aws_security_group.kptn_efs["main"].id] : var.efs_security_group_ids
 }

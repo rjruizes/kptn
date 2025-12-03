@@ -10,11 +10,16 @@ and ECS.
 - `networking.tf` optionally creates a VPC, subnets, and security group when `create_networking` is true.
 - `ecs.tf` optionally creates an ECS cluster when `create_ecs_cluster` is true.
 - `task_definition.tf` optionally creates an ECS task definition when `create_task_definition` is true.
+- `lambda.tf` provisions the kptn decider Lambda (or wires an existing one when provided).
 - `ecr.tf` optionally creates an ECR repository when `create_ecr_repository` is true.
 - `task_execution_role.tf` optionally creates an ECS task execution role when `create_task_execution_role` is true.
+- `docker_image.tf` optionally builds and pushes Docker images to ECR when `build_and_push_image` is true. See `DOCKER_BUILD.md` for details.
+- `batch.tf` optionally provisions AWS Batch resources when `create_batch_resources` is true.
+- `stack_info.tf` writes stack metadata (DynamoDB, ECS, Step Functions, Batch) to SSM at `/kptn/stack/basic/info` by default for programmatic discovery.
 - `locals.tf` centralizes computed references reused across the stack.
 - `variables.tf` defines configuration inputs used by the Terraform stack.
 - `outputs.tf` surfaces useful identifiers after `terraform apply` runs.
+- `DOCKER_BUILD.md` documents the Docker build toggle and configuration flags.
 
 ## Workflow
 
@@ -26,9 +31,10 @@ and ECS.
    - Leave them `false` and populate `vpc_id`, `subnet_ids`, `security_group_ids`,
      `ecr_repository_url`, `ecs_task_definition_arn`, `ecs_task_execution_role_arn`,
      and `ecs_cluster_arn` to reuse existing resources.
-3. Update `terraform.tfvars` (generated via the interactive CLI, if used) with environment-specific values
+3. Run `kptn bundle-decider --output-dir infra/lambda_decider` whenever kptn or project code changes. The command installs your local kptn checkout by default; use `--no-prefer-local-kptn` to pull from PyPI and `--install-project` to add your project package. The scaffolding command runs it once automatically.
+4. Update `terraform.tfvars` (generated via the interactive CLI, if used) with environment-specific values
    such as subnet IDs, security groups, ECS ARNs, task definitions, and networking CIDRs.
-4. Initialize and apply the Terraform configuration:
+5. Initialize and apply the Terraform configuration:
 
    ```bash
    terraform init
