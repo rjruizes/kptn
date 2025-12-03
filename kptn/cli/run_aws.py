@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import typer
 
@@ -14,6 +14,8 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - boto3 is optional until this command is used
     boto3 = None
     ClientError = NoCredentialsError = NoRegionError = BotoCoreError = None  # type: ignore[misc,assignment]
+
+from kptn.read_config import read_config
 
 
 class StackInfoError(Exception):
@@ -95,6 +97,24 @@ def choose_state_machine_arn(
     if isinstance(arns, dict) and arns:
         return arns.get(sorted(arns)[0])
 
+    return None
+
+
+def _load_task_compute(task_name: str) -> Mapping[str, Any] | None:
+    """Return the compute block for a task from kptn.yaml, if available."""
+    try:
+        kap_conf = read_config()
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+    tasks = kap_conf.get("tasks") or {}
+    task_spec = tasks.get(task_name)
+    if isinstance(task_spec, Mapping):
+        compute_cfg = task_spec.get("compute")
+        if isinstance(compute_cfg, Mapping):
+            return compute_cfg
     return None
 
 
@@ -191,6 +211,7 @@ def submit_batch_job(
     stack_info: dict[str, Any],
     pipeline: str,
     task: str,
+    resource_requirements: Sequence[Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     queue_arn = stack_info.get("batch_job_queue_arn")
     job_definition_arn = stack_info.get("batch_job_definition_arn")
@@ -205,12 +226,18 @@ def submit_batch_job(
     if stack_info.get("dynamodb_table_name"):
         environment.append({"name": "DYNAMODB_TABLE_NAME", "value": stack_info["dynamodb_table_name"]})
 
+    container_overrides: dict[str, Any] = {"environment": environment}
+    if resource_requirements:
+        container_overrides["resourceRequirements"] = [
+            {"type": requirement["type"], "value": requirement["value"]} for requirement in resource_requirements
+        ]
+
     batch = session.client("batch")
     response = batch.submit_job(
         jobName=job_name,
         jobQueue=queue_arn,
         jobDefinition=job_definition_arn,
-        containerOverrides={"environment": environment},
+        containerOverrides=container_overrides,
         propagateTags=True,
     )
     return response

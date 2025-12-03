@@ -98,7 +98,7 @@ def test_mapped_task_uses_batch_branch():
     deps_lookup = {"List": None, "Process": "List"}
     tasks = {
         "List": {"cache_result": True},
-        "Process": {"map_over": "item"},
+        "Process": {"map_over": "item", "compute": {"cpu": 512, "memory": 2048}},
     }
 
     state_machine = _build_state_machine(deps_lookup, tasks, ["List", "Process"])
@@ -120,6 +120,10 @@ def test_mapped_task_uses_batch_branch():
     assert params["JobQueue"] == "${batch_job_queue_arn}"
     assert params["JobDefinition"] == "${batch_job_definition_arn}"
     assert params["ArrayProperties"]["Size.$"] == "$.last_decision.Payload.array_size"
+    assert params["ContainerOverrides"]["ResourceRequirements"] == [
+        {"Type": "VCPU", "Value": "0.5"},
+        {"Type": "MEMORY", "Value": "2048"},
+    ]
 
 
 def test_cycle_detection_raises_value_error():

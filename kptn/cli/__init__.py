@@ -15,6 +15,7 @@ from kptn.cli.run_aws import (
     fetch_stack_info,
     parse_tasks_arg,
     resolve_stack_parameter_name,
+    _load_task_compute,
     run_ecs_task,
     run_local,
     start_state_machine_execution,
@@ -25,6 +26,7 @@ from kptn.cli.config_validation import (
     validate_kptn_config,
 )
 from kptn.codegen.codegen import generate_files
+from kptn.util.compute import compute_resource_requirements
 from kptn.read_config import read_config
 from kptn.cli.task_validation import (
     _build_pipeline_config,
@@ -577,6 +579,7 @@ def run(
 
     if len(task_list) == 1:
         single_task = task_list[0]
+        resource_requirements = compute_resource_requirements(_load_task_compute(single_task))
 
         if stack_info.get("batch_job_queue_arn") and stack_info.get("batch_job_definition_arn"):
             try:
@@ -585,6 +588,7 @@ def run(
                     stack_info=stack_info,
                     pipeline=pipeline,
                     task=single_task,
+                    resource_requirements=resource_requirements,
                 )
                 typer.echo(f"Submitted Batch job {response.get('jobName')} ({response.get('jobId')})")
                 return

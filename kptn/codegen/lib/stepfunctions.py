@@ -4,6 +4,8 @@ import json
 from collections import defaultdict, deque
 from typing import Any, Iterable, Mapping
 
+from kptn.util.compute import compute_resource_requirements
+
 DEFAULT_STEP_FUNCTION_RESOURCE_ARN = "arn:aws:states:::ecs:runTask.sync"
 DEFAULT_BATCH_RESOURCE_ARN = "arn:aws:states:::batch:submitJob.sync"
 
@@ -147,7 +149,7 @@ def _build_ecs_parameters(pipeline_name: str, task_name: str) -> dict[str, Any]:
     }
 
 
-def _build_batch_parameters(pipeline_name: str, task_name: str) -> dict[str, Any]:
+def _build_batch_parameters(pipeline_name: str, task_name: str, task_config: Mapping[str, Any]) -> dict[str, Any]:
     """Construct AWS Batch task parameters for mapped tasks."""
     environment = [
         {"Name": "KAPTEN_PIPELINE", "Value": pipeline_name},
@@ -157,6 +159,15 @@ def _build_batch_parameters(pipeline_name: str, task_name: str) -> dict[str, Any
         {"Name": "KAPTEN_DECISION_REASON", "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"},
     ]
 
+    resource_requirements = compute_resource_requirements(
+        task_config.get("compute") if isinstance(task_config, Mapping) else None
+    )
+    container_overrides: dict[str, Any] = {"Environment": environment}
+    if resource_requirements:
+        container_overrides["ResourceRequirements"] = [
+            {"Type": requirement["type"], "Value": requirement["value"]} for requirement in resource_requirements
+        ]
+
     return {
         "JobName.$": f"States.Format('{pipeline_name}-{task_name}-{{}}', $$.Execution.Name)",
         "JobQueue": "${batch_job_queue_arn}",
@@ -164,9 +175,7 @@ def _build_batch_parameters(pipeline_name: str, task_name: str) -> dict[str, Any
         "ArrayProperties": {
             "Size.$": "$.last_decision.Payload.array_size",
         },
-        "ContainerOverrides": {
-            "Environment": environment,
-        },
+        "ContainerOverrides": container_overrides,
         "Tags": {
             "KaptenPipeline": pipeline_name,
             "KaptenTask": task_name,
@@ -273,7 +282,7 @@ def _build_task_state_chain(
         batch_state: dict[str, Any] = {
             "Type": "Task",
             "Resource": DEFAULT_BATCH_RESOURCE_ARN,
-            "Parameters": _build_batch_parameters(pipeline_name, task_name),
+            "Parameters": _build_batch_parameters(pipeline_name, task_name, task_config),
             "ResultPath": None,
         }
         if next_state:
