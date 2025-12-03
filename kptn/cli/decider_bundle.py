@@ -208,7 +208,14 @@ def _run_uv_install(*, installer_args: Sequence[str], runner: callable | None, c
 
 def _resolve_local_kptn_root() -> Path | None:
     candidate = Path(__file__).resolve().parents[2]
-    if (candidate / "kptn" / "aws" / "decider.py").exists():
+    if not (candidate / "kptn" / "aws" / "decider.py").exists():
+        return None
+
+    # Ignore site-packages installs; only treat a real checkout as "local".
+    if "site-packages" in candidate.parts:
+        return None
+
+    if (candidate / "pyproject.toml").exists():
         return candidate
     return None
 

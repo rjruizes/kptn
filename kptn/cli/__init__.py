@@ -497,7 +497,9 @@ def validate(
 @app.command()
 def run(
     pipeline: str = typer.Argument(..., help="Pipeline (graph) name associated with the run"),
-    tasks: str = typer.Argument(..., help="Comma-separated task names to execute"),
+    tasks: str | None = typer.Argument(
+        None, help="Comma-separated task names to execute (omit to run all eligible tasks)"
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Force run even if another execution is active"),
     local: bool = typer.Option(False, "--local", help="Run locally instead of using AWS Step Functions"),
     stack_param_name: Optional[str] = typer.Option(
@@ -614,7 +616,11 @@ def run(
             except Exception as exc:  # pragma: no cover - boto3 runtime failures
                 typer.echo(f"Failed to start ECS task: {exc}", err=True)
 
-    state_machine_arn = choose_state_machine_arn(stack_info, preferred_key=state_machine)
+    state_machine_arn = choose_state_machine_arn(
+        stack_info,
+        preferred_key=state_machine,
+        pipeline=pipeline,
+    )
     if not state_machine_arn:
         typer.echo("No state machine ARN found in stack metadata; specify --state-machine or fix the stack info.")
         raise typer.Exit(1)

@@ -20,7 +20,9 @@ class StackInfoError(Exception):
     """Raised when stack metadata cannot be retrieved or parsed."""
 
 
-def parse_tasks_arg(tasks_arg: str) -> list[str]:
+def parse_tasks_arg(tasks_arg: str | None) -> list[str]:
+    if tasks_arg is None or tasks_arg.strip() == "":
+        return []
     tasks = [task.strip() for task in tasks_arg.split(",") if task.strip()]
     if not tasks:
         raise ValueError("At least one task name is required (comma-separated when multiple).")
@@ -72,6 +74,7 @@ def fetch_stack_info(
 def choose_state_machine_arn(
     stack_info: dict[str, Any],
     preferred_key: Optional[str] = None,
+    pipeline: Optional[str] = None,
 ) -> Optional[str]:
     arns = stack_info.get("state_machine_arns") or {}
     preferred_arn = stack_info.get("state_machine_arn")
@@ -82,6 +85,9 @@ def choose_state_machine_arn(
         if preferred_key in arns:
             return arns[preferred_key]
         typer.echo(f"State machine '{preferred_key}' not found in stack metadata; falling back.", err=True)
+
+    if pipeline and pipeline in arns:
+        return arns[pipeline]
 
     if preferred_arn:
         return preferred_arn
