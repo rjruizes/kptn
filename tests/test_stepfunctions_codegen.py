@@ -25,6 +25,7 @@ def test_parallel_branches_are_grouped_with_decider_and_trailing_tasks():
         "D": ["B", "C"],
     }
     tasks = {name: {} for name in deps_lookup}
+    tasks["D"]["compute"] = {"cpu": 512, "memory": 1024}
 
     state_machine = _build_state_machine(deps_lookup, tasks, ["A", "B", "C", "D"])
 
@@ -68,8 +69,13 @@ def test_parallel_branches_are_grouped_with_decider_and_trailing_tasks():
     network_conf = params["NetworkConfiguration"]["AwsvpcConfiguration"]
     assert network_conf["Subnets"] == "${subnet_ids}"
     assert network_conf["SecurityGroups"] == "${security_group_ids}"
+    overrides = params["Overrides"]
+    assert overrides["Cpu"] == "512"
+    assert overrides["Memory"] == "1024"
     container_override = params["Overrides"]["ContainerOverrides"][0]
     assert container_override["Name"] == "${container_name}"
+    assert container_override["Cpu"] == 512
+    assert container_override["Memory"] == 1024
     env_vars = {env["Name"]: env.get("Value") or env.get("Value.$") for env in container_override["Environment"]}
     assert env_vars["KAPTEN_TASK"] == "D"
     assert env_vars["KAPTEN_PIPELINE"] == "example"

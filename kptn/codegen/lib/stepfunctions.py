@@ -113,7 +113,14 @@ def _task_execution_mode(task_config: Mapping[str, Any]) -> str:
     return "ecs"
 
 
-def _build_ecs_parameters(pipeline_name: str, task_name: str) -> dict[str, Any]:
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def _build_ecs_parameters(pipeline_name: str, task_name: str, task_config: Mapping[str, Any]) -> dict[str, Any]:
     """Construct the ECS task parameters shared across generated states."""
     environment = [
         {"Name": "KAPTEN_PIPELINE", "Value": pipeline_name},
@@ -121,6 +128,26 @@ def _build_ecs_parameters(pipeline_name: str, task_name: str) -> dict[str, Any]:
         {"Name": "DYNAMODB_TABLE_NAME", "Value": "${dynamodb_table_name}"},
         {"Name": "KAPTEN_DECISION_REASON", "Value.$": "States.Format('{}', $.last_decision.Payload.reason)"},
     ]
+
+    overrides: dict[str, Any] = {
+        "ContainerOverrides": [
+            {
+                "Name": "${container_name}",
+                "Environment": environment,
+            }
+        ]
+    }
+
+    compute_cfg = task_config.get("compute") if isinstance(task_config, Mapping) else None
+    if isinstance(compute_cfg, Mapping):
+        cpu = _coerce_int(compute_cfg.get("cpu"))
+        memory = _coerce_int(compute_cfg.get("memory"))
+        if cpu is not None:
+            overrides["Cpu"] = str(cpu)
+            overrides["ContainerOverrides"][0]["Cpu"] = cpu
+        if memory is not None:
+            overrides["Memory"] = str(memory)
+            overrides["ContainerOverrides"][0]["Memory"] = memory
 
     return {
         "Cluster": "${ecs_cluster_arn}",
@@ -133,14 +160,7 @@ def _build_ecs_parameters(pipeline_name: str, task_name: str) -> dict[str, Any]:
                 "SecurityGroups": "${security_group_ids}",
             }
         },
-        "Overrides": {
-            "ContainerOverrides": [
-                {
-                    "Name": "${container_name}",
-                    "Environment": environment,
-                }
-            ]
-        },
+        "Overrides": overrides,
         "EnableExecuteCommand": True,
         "Tags": [
             {"Key": "KaptenPipeline", "Value": pipeline_name},
@@ -296,7 +316,7 @@ def _build_task_state_chain(
         ecs_state: dict[str, Any] = {
             "Type": "Task",
             "Resource": resource_arn,
-            "Parameters": _build_ecs_parameters(pipeline_name, task_name),
+            "Parameters": _build_ecs_parameters(pipeline_name, task_name, task_config),
             "ResultPath": None,
         }
         if next_state:
