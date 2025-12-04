@@ -57,12 +57,18 @@ def r_script_log_path(task_name, pipeline_config: PipelineConfig, key=None, cust
 
 def r_script(task_name, key, pipeline_config: PipelineConfig, script: str, task_env={}, prefix_args_str=None, cli_args=None, custom_log_path=None):
     """Run Rscript"""
+    data_year = (
+        task_env.get("DATA_YEAR")
+        or task_env.get("data_year")
+        or task_env.get("year")
+        or pipeline_config.DATA_YEAR
+    )
     default_env = {
         "PATH": os.getenv("PATH", ""),
         "OUTPUT_PIPELINE_DIR": pipeline_config.scratch_dir,
         "INPUT_PIPELINE_DIR": pipeline_config.scratch_dir,
         "EXTERNAL_FILE_PATH": os.path.join(pipeline_config.scratch_dir, "externals"),
-        "DATA_YEAR": pipeline_config.DATA_YEAR,
+        "DATA_YEAR": data_year,
         "PGHOST": os.getenv("PGHOST", ""),
         "PGPORT": os.getenv("PGPORT", ""),
         "PGUSER": os.getenv("PGUSER", ""),
