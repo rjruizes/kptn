@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from pathlib import Path
+from typing import Any, Iterable, Mapping, get_args, get_origin
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,18 @@ def build_task_argument_plan(
 _MISSING = object()
 
 
+def _annotation_includes_path(annotation: Any) -> bool:
+    """Check if a type annotation expects a pathlib.Path (optionally wrapped in typing helpers)."""
+    if annotation is inspect._empty:
+        return False
+    if annotation is Path:
+        return True
+    origin = get_origin(annotation)
+    if origin is None:
+        return False
+    return any(_annotation_includes_path(arg) for arg in get_args(annotation))
+
+
 def _runtime_lookup(runtime_config: Any | None, name: str) -> Any:
     if runtime_config is None:
         return _MISSING
@@ -145,27 +158,39 @@ def plan_python_call(
         if param.kind == inspect.Parameter.VAR_KEYWORD:
             continue
 
+        expects_path = _annotation_includes_path(param.annotation)
+
+        def _convert(value: Any) -> Any:
+            if expects_path and isinstance(value, str):
+                return Path(value)
+            return value
+
         if param.kind == inspect.Parameter.KEYWORD_ONLY:
-            if param.name in kwargs or param.default is not inspect._empty:
+            if param.name in kwargs:
+                kwargs[param.name] = _convert(kwargs[param.name])
+                continue
+            if param.default is not inspect._empty:
                 continue
             missing.append(param.name)
             continue
 
-            if param.kind == inspect.Parameter.POSITIONAL_ONLY:
-                if param.name in kwargs:
-                    call_args.append(kwargs.pop(param.name))
-                    continue
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+            if param.name in kwargs:
+                call_args.append(_convert(kwargs.pop(param.name)))
+                continue
 
             value = _runtime_lookup(runtime_config, param.name)
             if value is _MISSING:
                 if param.default is inspect._empty:
                     missing.append(param.name)
                 continue
-            call_args.append(value)
+
+            call_args.append(_convert(value))
             continue
 
         if param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
             if param.name in kwargs:
+                kwargs[param.name] = _convert(kwargs[param.name])
                 continue
 
             value = _runtime_lookup(runtime_config, param.name)
@@ -174,6 +199,6 @@ def plan_python_call(
                     missing.append(param.name)
                 continue
 
-            kwargs[param.name] = value
+            kwargs[param.name] = _convert(value)
 
     return call_args, kwargs, missing
