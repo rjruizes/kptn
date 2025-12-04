@@ -271,6 +271,8 @@ def submit_batch_job(
     pipeline: str,
     task: str,
     resource_requirements: Sequence[Mapping[str, str]] | None = None,
+    array_size: int | None = None,
+    decision_reason: str | None = None,
 ) -> dict[str, Any]:
     queue_arn = stack_info.get("batch_job_queue_arn")
     job_definition_arn = stack_info.get("batch_job_definition_arn")
@@ -284,6 +286,16 @@ def submit_batch_job(
     ]
     if stack_info.get("dynamodb_table_name"):
         environment.append({"name": "DYNAMODB_TABLE_NAME", "value": stack_info["dynamodb_table_name"]})
+    if array_size:
+        try:
+            coerced = int(array_size)
+            if coerced > 0:
+                environment.append({"name": "ARRAY_SIZE", "value": str(coerced)})
+                array_size = coerced
+        except Exception:
+            pass
+    if decision_reason:
+        environment.append({"name": "KAPTEN_DECISION_REASON", "value": decision_reason})
 
     container_overrides: dict[str, Any] = {"environment": environment}
     if resource_requirements:
@@ -292,13 +304,17 @@ def submit_batch_job(
         ]
 
     batch = session.client("batch")
-    response = batch.submit_job(
-        jobName=job_name,
-        jobQueue=queue_arn,
-        jobDefinition=job_definition_arn,
-        containerOverrides=container_overrides,
-        propagateTags=True,
-    )
+    params: dict[str, Any] = {
+        "jobName": job_name,
+        "jobQueue": queue_arn,
+        "jobDefinition": job_definition_arn,
+        "containerOverrides": container_overrides,
+        "propagateTags": True,
+    }
+    if array_size:
+        params["arrayProperties"] = {"size": array_size}
+
+    response = batch.submit_job(**params)
     return response
 
 

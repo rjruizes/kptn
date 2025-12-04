@@ -5,6 +5,7 @@ from typing import Any, Optional
 import json
 import yaml
 from kptn.caching.TaskStateDbClient import TaskStateDbClient
+from kptn.aws.decider import decide_task_execution
 from kptn.cli.decider_bundle import BundleDeciderError, bundle_decider_lambda
 from kptn.cli.infra_commands import register_infra_commands
 from kptn.cli.run_aws import (
@@ -503,6 +504,9 @@ def run(
     tasks: str | None = typer.Argument(
         None, help="Comma-separated task names to execute (omit to run all eligible tasks)"
     ),
+    project_dir: Optional[Path] = typer.Option(
+        None, "--project-dir", "-p", help="Project directory containing kptn configuration"
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Force run even if another execution is active"),
     local: bool = typer.Option(False, "--local", help="Run locally instead of using AWS Step Functions"),
     stack_param_name: Optional[str] = typer.Option(
@@ -545,135 +549,195 @@ def run(
     """
     Run tasks for a pipeline via Step Functions (default) or directly via ECS/Batch when a single task is provided.
     """
-    try:
-        task_list = parse_tasks_arg(tasks)
-    except ValueError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(1) from exc
-
-    if local:
+    def _run_pipeline() -> None:
         try:
-            run_local(pipeline, task_list, force)
+            task_list = parse_tasks_arg(tasks)
+        except ValueError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1) from exc
+
+        if local:
+            try:
+                run_local(pipeline, task_list, force)
+            except StackInfoError as exc:
+                typer.echo(str(exc))
+                raise typer.Exit(1) from exc
+            return
+
+        try:
+            session = create_boto_session(profile, region)
         except StackInfoError as exc:
             typer.echo(str(exc))
             raise typer.Exit(1) from exc
-        return
 
-    try:
-        session = create_boto_session(profile, region)
-    except StackInfoError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(1) from exc
+        parameter_name = resolve_stack_parameter_name(pipeline, stack_param_name)
+        try:
+            stack_info = fetch_stack_info(session=session, parameter_name=parameter_name)
+        except StackInfoError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1) from exc
 
-    parameter_name = resolve_stack_parameter_name(pipeline, stack_param_name)
-    try:
-        stack_info = fetch_stack_info(session=session, parameter_name=parameter_name)
-    except StackInfoError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(1) from exc
+        direct_run_config = DirectRunConfig(
+            launch_type=launch_type,
+            subnet_ids=subnet_id,
+            security_group_ids=security_group_id,
+        )
 
-    direct_run_config = DirectRunConfig(
-        launch_type=launch_type,
-        subnet_ids=subnet_id,
-        security_group_ids=security_group_id,
-    )
+        if len(task_list) == 1:
+            single_task = task_list[0]
+            compute_cfg = _load_task_compute(single_task)
+            resource_requirements = compute_resource_requirements(compute_cfg)
+            execution_mode = task_execution_mode(single_task)
+            requires_batch = execution_mode in {"batch_array", "batch"}
+            batch_available = bool(stack_info.get("batch_job_queue_arn") and stack_info.get("batch_job_definition_arn"))
+            ecs_available = bool(stack_info.get("cluster_arn") and stack_info.get("task_definition_arn"))
+            array_size: int | None = None
+            decision_reason: str | None = None
 
-    if len(task_list) == 1:
-        single_task = task_list[0]
-        compute_cfg = _load_task_compute(single_task)
-        resource_requirements = compute_resource_requirements(compute_cfg)
-        execution_mode = task_execution_mode(single_task)
-        requires_batch = execution_mode in {"batch_array", "batch"}
-        batch_available = bool(stack_info.get("batch_job_queue_arn") and stack_info.get("batch_job_definition_arn"))
-        ecs_available = bool(stack_info.get("cluster_arn") and stack_info.get("task_definition_arn"))
+            if execution_mode == "batch_array":
+                tasks_config_path = Path("kptn.yaml")
+                if not tasks_config_path.exists():
+                    typer.echo(
+                        "Task is configured for Batch array execution, but kptn.yaml was not found in the current directory.",
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+                dynamodb_table = stack_info.get("dynamodb_table_name")
+                if dynamodb_table and not os.getenv("DYNAMODB_TABLE_NAME"):
+                    os.environ["DYNAMODB_TABLE_NAME"] = str(dynamodb_table)
+                try:
+                    decision = decide_task_execution(
+                        event={
+                            "task_name": single_task,
+                            "task_list": task_list,
+                            "ignore_cache": force,
+                            "execution_mode": execution_mode,
+                            "TASKS_CONFIG_PATH": str(tasks_config_path.resolve()),
+                            "PIPELINE_NAME": pipeline,
+                        }
+                    )
+                except Exception as exc:
+                    typer.echo(f"Failed to evaluate task decision for Batch array submission: {exc}", err=True)
+                    raise typer.Exit(1) from exc
 
-        def _submit_batch_job() -> bool:
-            try:
-                response = submit_batch_job(
-                    session=session,
-                    stack_info=stack_info,
-                    pipeline=pipeline,
-                    task=single_task,
-                    resource_requirements=resource_requirements,
-                )
-                typer.echo(f"Submitted Batch job {response.get('jobName')} ({response.get('jobId')})")
-                return True
-            except StackInfoError as exc:
-                typer.echo(f"Batch submission skipped: {exc}", err=True)
-            except Exception as exc:  # pragma: no cover - boto3 runtime failures
-                typer.echo(f"Failed to submit Batch job: {exc}", err=True)
-            return False
+                decision_reason = decision.get("reason")
+                if decision.get("should_run") is False:
+                    typer.echo(f"Skipping {single_task}: {decision_reason or 'Decider indicated task should not run'}")
+                    return
 
-        def _start_ecs_task() -> bool:
-            try:
-                response = run_ecs_task(
-                    session=session,
-                    stack_info=stack_info,
-                    pipeline=pipeline,
-                    task=single_task,
-                    config=direct_run_config,
-                    compute=compute_cfg,
-                )
-                tasks_started = [task.get("taskArn") for task in response.get("tasks", []) if task.get("taskArn")]
-                if tasks_started:
-                    typer.echo(f"Started ECS task: {tasks_started[0]}")
-                else:
-                    typer.echo("Started ECS task")
-                failures = response.get("failures")
-                if failures:
-                    typer.echo(f"ECS run returned failures: {failures}", err=True)
-                return True
-            except StackInfoError as exc:
-                typer.echo(f"ECS run skipped: {exc}", err=True)
-            except Exception as exc:  # pragma: no cover - boto3 runtime failures
-                typer.echo(f"Failed to start ECS task: {exc}", err=True)
-            return False
+                raw_array_size = decision.get("array_size")
+                try:
+                    array_size = int(raw_array_size) if raw_array_size is not None else None
+                except Exception:
+                    array_size = None
 
-        if requires_batch:
-            if not batch_available:
-                typer.echo(
-                    "Task requires AWS Batch, but Batch stack metadata is missing.",
-                    err=True,
-                )
+                if not array_size or array_size <= 0:
+                    typer.echo(
+                        f"Task {single_task} requires batch array execution but no array size was determined.",
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+
+            def _submit_batch_job() -> bool:
+                try:
+                    response = submit_batch_job(
+                        session=session,
+                        stack_info=stack_info,
+                        pipeline=pipeline,
+                        task=single_task,
+                        resource_requirements=resource_requirements,
+                        array_size=array_size,
+                        decision_reason=decision_reason,
+                    )
+                    detail = f" as array (size {array_size})" if array_size else ""
+                    typer.echo(f"Submitted Batch job{detail} {response.get('jobName')} ({response.get('jobId')})")
+                    return True
+                except StackInfoError as exc:
+                    typer.echo(f"Batch submission skipped: {exc}", err=True)
+                except Exception as exc:  # pragma: no cover - boto3 runtime failures
+                    typer.echo(f"Failed to submit Batch job: {exc}", err=True)
+                return False
+
+            def _start_ecs_task() -> bool:
+                try:
+                    response = run_ecs_task(
+                        session=session,
+                        stack_info=stack_info,
+                        pipeline=pipeline,
+                        task=single_task,
+                        config=direct_run_config,
+                        compute=compute_cfg,
+                    )
+                    tasks_started = [task.get("taskArn") for task in response.get("tasks", []) if task.get("taskArn")]
+                    if tasks_started:
+                        typer.echo(f"Started ECS task: {tasks_started[0]}")
+                    else:
+                        typer.echo("Started ECS task")
+                    failures = response.get("failures")
+                    if failures:
+                        typer.echo(f"ECS run returned failures: {failures}", err=True)
+                    return True
+                except StackInfoError as exc:
+                    typer.echo(f"ECS run skipped: {exc}", err=True)
+                except Exception as exc:  # pragma: no cover - boto3 runtime failures
+                    typer.echo(f"Failed to start ECS task: {exc}", err=True)
+                return False
+
+            if requires_batch:
+                if not batch_available:
+                    typer.echo(
+                        "Task requires AWS Batch, but Batch stack metadata is missing.",
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+                if _submit_batch_job():
+                    return
+                typer.echo("Batch submission failed for required Batch task.", err=True)
                 raise typer.Exit(1)
-            if _submit_batch_job():
-                return
-            typer.echo("Batch submission failed for required Batch task.", err=True)
+
+            ecs_attempted = False
+            if ecs_available:
+                ecs_attempted = True
+                if _start_ecs_task():
+                    return
+
+            if (not requires_batch) and (not ecs_attempted) and batch_available:
+                typer.echo("ECS metadata not found; falling back to Batch submission.", err=True)
+                if _submit_batch_job():
+                    return
+
+        state_machine_arn = choose_state_machine_arn(
+            stack_info,
+            preferred_key=state_machine,
+            pipeline=pipeline,
+        )
+        if not state_machine_arn:
+            typer.echo("No state machine ARN found in stack metadata; specify --state-machine or fix the stack info.")
             raise typer.Exit(1)
 
-        ecs_attempted = False
-        if ecs_available:
-            ecs_attempted = True
-            if _start_ecs_task():
-                return
+        try:
+            execution_arn = start_state_machine_execution(
+                session=session,
+                state_machine_arn=state_machine_arn,
+                pipeline=pipeline,
+                tasks=task_list,
+                force=force,
+            )
+        except Exception as exc:  # pragma: no cover - boto3 runtime failures
+            typer.echo(f"Failed to start Step Functions execution: {exc}")
+            raise typer.Exit(1) from exc
 
-        if (not requires_batch) and (not ecs_attempted) and batch_available:
-            typer.echo("ECS metadata not found; falling back to Batch submission.", err=True)
-            if _submit_batch_job():
-                return
+        typer.echo(f"Started state machine execution: {execution_arn}")
 
-    state_machine_arn = choose_state_machine_arn(
-        stack_info,
-        preferred_key=state_machine,
-        pipeline=pipeline,
-    )
-    if not state_machine_arn:
-        typer.echo("No state machine ARN found in stack metadata; specify --state-machine or fix the stack info.")
-        raise typer.Exit(1)
-
-    try:
-        execution_arn = start_state_machine_execution(
-            session=session,
-            state_machine_arn=state_machine_arn,
-            pipeline=pipeline,
-            tasks=task_list,
-            force=force,
-        )
-    except Exception as exc:  # pragma: no cover - boto3 runtime failures
-        typer.echo(f"Failed to start Step Functions execution: {exc}")
-        raise typer.Exit(1) from exc
-
-    typer.echo(f"Started state machine execution: {execution_arn}")
+    if project_dir:
+        original_dir = os.getcwd()
+        os.chdir(project_dir)
+        try:
+            _run_pipeline()
+        finally:
+            os.chdir(original_dir)
+    else:
+        _run_pipeline()
 
 
 @app.command(name="bundle-decider")

@@ -95,7 +95,7 @@ def run_batch_array_subtask(
             task_kwargs[key] = value
     task_kwargs["idx"] = array_index
 
-    tscache.logger.info(f"Running batch array subtask {array_index} of {task_size} for {task_name}")
+    tscache.logger.info(f"Running batch array subtask {array_index} of {task_size} for {task_name}; kwargs: {task_kwargs}")
 
     func = get_task_partial(tscache, pipeline_config, task_name)
     try:
