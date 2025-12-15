@@ -132,7 +132,13 @@ class RuntimeConfig:
         task_info: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         base_path = Path(base_dir) if base_dir else Path.cwd()
-        resolved_entry = cls._resolve_entry(dict(config_block), base_path, task_info)
+        resolved_context: dict[str, Any] = {}
+        resolved_entry = cls._resolve_entry(
+            dict(config_block),
+            base_path,
+            task_info,
+            resolved_context,
+        )
         resolved_value = resolved_entry.value
         if not isinstance(resolved_value, Mapping):
             raise RuntimeConfigError("Config block must decode to a mapping")
@@ -182,8 +188,9 @@ class RuntimeConfig:
         value: Any,
         base_path: Path,
         task_info: Mapping[str, Any] | None,
+        resolved_config: Mapping[str, Any] | None,
     ) -> Any:
-        return cls._resolve_entry(value, base_path, task_info).value
+        return cls._resolve_entry(value, base_path, task_info, resolved_config).value
 
     @classmethod
     def _resolve_entry(
@@ -191,13 +198,24 @@ class RuntimeConfig:
         value: Any,
         base_path: Path,
         task_info: Mapping[str, Any] | None,
+        resolved_config: Mapping[str, Any] | None,
     ) -> "_ResolvedEntry":
         if isinstance(value, Mapping):
-            return cls._resolve_mapping_entry(dict(value), base_path, task_info)
+            return cls._resolve_mapping_entry(
+                dict(value),
+                base_path,
+                task_info,
+                resolved_config,
+            )
         if isinstance(value, list):
             resolved_items: list[Any] = []
             for item in value:
-                item_entry = cls._resolve_entry(item, base_path, task_info)
+                item_entry = cls._resolve_entry(
+                    item,
+                    base_path,
+                    task_info,
+                    resolved_config,
+                )
                 if item_entry.aliases:
                     raise RuntimeConfigError(
                         "Alias definitions are not supported inside lists"
@@ -205,7 +223,11 @@ class RuntimeConfig:
                 resolved_items.append(item_entry.value)
             return _ResolvedEntry(resolved_items, [])
         if isinstance(value, str):
-            callable_result = cls._maybe_call_callable(value.strip(), task_info)
+            callable_result = cls._maybe_call_callable(
+                value.strip(),
+                task_info,
+                resolved_config,
+            )
             if callable_result is not _Sentinel.NO_RESULT:
                 return _ResolvedEntry(callable_result, [])
             return _ResolvedEntry(value, [])
@@ -217,9 +239,15 @@ class RuntimeConfig:
         mapping: dict[str, Any],
         base_path: Path,
         task_info: Mapping[str, Any] | None,
+        resolved_config: Mapping[str, Any] | None,
     ) -> "_ResolvedEntry":
         if cls._is_config_entry_mapping(mapping):
-            return cls._resolve_config_entry_mapping(mapping, base_path, task_info)
+            return cls._resolve_config_entry_mapping(
+                mapping,
+                base_path,
+                task_info,
+                resolved_config,
+            )
 
         include_value = mapping.pop("include", None)
 
@@ -227,7 +255,12 @@ class RuntimeConfig:
         if include_value is not None:
             for include_path in cls._normalise_includes(include_value):
                 include_data_raw = cls._load_include(base_path, include_path)
-                include_entry = cls._resolve_entry(include_data_raw, base_path, task_info)
+                include_entry = cls._resolve_entry(
+                    include_data_raw,
+                    base_path,
+                    task_info,
+                    resolved_config,
+                )
                 include_value_resolved = include_entry.value
                 if not isinstance(include_value_resolved, Mapping):
                     raise RuntimeConfigError(
@@ -238,18 +271,33 @@ class RuntimeConfig:
                     cls._apply_aliases(merged, include_entry.aliases)
 
         current: dict[str, Any] = {}
+        if isinstance(resolved_config, dict):
+            resolved_config.update(merged)
         alias_entries: list[tuple[str, Any]] = []
         for key, raw_value in mapping.items():
             if key == "include":
                 continue
-            resolved_entry = cls._resolve_entry(raw_value, base_path, task_info)
+            resolved_entry = cls._resolve_entry(
+                raw_value,
+                base_path,
+                task_info,
+                resolved_config,
+            )
             current[key] = resolved_entry.value
+            if isinstance(resolved_config, dict):
+                resolved_config[key] = resolved_entry.value
             if resolved_entry.aliases:
                 alias_entries.extend(resolved_entry.aliases)
+                if isinstance(resolved_config, dict):
+                    for alias_name, alias_value in resolved_entry.aliases:
+                        resolved_config[alias_name] = alias_value
 
         resolved = cls._deep_merge(merged, current)
         if alias_entries:
             cls._apply_aliases(resolved, alias_entries)
+            if isinstance(resolved_config, dict):
+                for alias_name, alias_value in alias_entries:
+                    resolved_config[alias_name] = alias_value
 
         return _ResolvedEntry(resolved, [])
 
@@ -259,6 +307,7 @@ class RuntimeConfig:
         mapping: dict[str, Any],
         base_path: Path,
         task_info: Mapping[str, Any] | None,
+        resolved_config: Mapping[str, Any] | None,
     ) -> "_ResolvedEntry":
         include_value = mapping.pop("include", None)
         if include_value is not None:
@@ -285,7 +334,12 @@ class RuntimeConfig:
                 raise RuntimeConfigError(
                     "Config entry 'function' must be provided as a string"
                 )
-            resolved_function = cls._resolve_entry(function_spec, base_path, task_info)
+            resolved_function = cls._resolve_entry(
+                function_spec,
+                base_path,
+                task_info,
+                resolved_config,
+            )
             if resolved_function.aliases:
                 raise RuntimeConfigError(
                     "Function specifications cannot define alias entries"
@@ -293,7 +347,12 @@ class RuntimeConfig:
             resolved_value = resolved_function.value
         else:
             value_spec = mapping.pop("value")
-            resolved_value_entry = cls._resolve_entry(value_spec, base_path, task_info)
+            resolved_value_entry = cls._resolve_entry(
+                value_spec,
+                base_path,
+                task_info,
+                resolved_config,
+            )
             if resolved_value_entry.aliases:
                 raise RuntimeConfigError(
                     "Alias definitions are not supported within config 'value' fields"
@@ -361,6 +420,7 @@ class RuntimeConfig:
         cls,
         candidate: str,
         task_info: Mapping[str, Any] | None,
+        resolved_config: Mapping[str, Any] | None,
     ) -> Any:
         match = cls._CALLABLE_PATTERN.match(candidate)
         if not match:
@@ -382,12 +442,44 @@ class RuntimeConfig:
                 f"Resolved attribute '{attr_path}' from module '{module.__name__}' is not callable"
             )
 
+        lookup: Mapping[str, Any] = resolved_config or {}
         signature = inspect.signature(attr)
+        call_args: list[Any] = []
+        call_kwargs: dict[str, Any] = {}
+        missing_params: list[str] = []
         if "task_info" in signature.parameters:
             payload = cls._prepare_task_info(task_info)
-            return attr(task_info=payload)
+            call_kwargs["task_info"] = payload
 
-        return attr()
+        for param in signature.parameters.values():
+            if param.name == "task_info":
+                continue
+            if param.kind in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            ):
+                continue
+
+            if param.name in lookup:
+                value = lookup[param.name]
+            elif param.default is not inspect._empty:
+                continue
+            else:
+                missing_params.append(param.name)
+                continue
+
+            if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+                call_args.append(value)
+            else:
+                call_kwargs[param.name] = value
+
+        if missing_params:
+            missing_list = ", ".join(missing_params)
+            raise RuntimeConfigError(
+                f"Callable '{candidate}' requires parameters missing from runtime config: {missing_list}"
+            )
+
+        return attr(*call_args, **call_kwargs)
 
     @staticmethod
     def _prepare_task_info(task_info: Mapping[str, Any] | None) -> dict[str, Any]:
