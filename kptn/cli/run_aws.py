@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
+import time
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import typer
@@ -180,6 +181,187 @@ def _effective_launch_type(stack_info: dict[str, Any], override: Optional[str]) 
     if isinstance(launch_type, str) and launch_type:
         return launch_type
     return None
+
+
+def ecs_task_console_url(task_arn: str, cluster_arn: str | None = None) -> str | None:
+    """Render an AWS console URL for a given ECS task ARN."""
+    try:
+        arn_parts = task_arn.split(":")
+        if len(arn_parts) < 6:
+            return None
+
+        region = arn_parts[3]
+        resource = arn_parts[5]
+        resource_parts = resource.split("/")
+        task_id = resource_parts[-1] if resource_parts else ""
+
+        cluster_name = None
+        if len(resource_parts) >= 3:
+            cluster_name = resource_parts[-2]
+        elif cluster_arn:
+            cluster_name = cluster_arn.split("/")[-1]
+
+        if not (region and cluster_name and task_id):
+            return None
+
+        return (
+            f"https://{region}.console.aws.amazon.com/ecs/v2/clusters/"
+            f"{cluster_name}/tasks/{task_id}/configuration"
+        )
+    except Exception:
+        return None
+
+
+def _extract_task_id(task_arn: str) -> str | None:
+    try:
+        return task_arn.split("/")[-1]
+    except Exception:
+        return None
+
+
+def _ecs_log_configuration(
+    session: Any,
+    stack_info: Mapping[str, Any],
+    container_name: str | None = None,
+) -> tuple[str, str, str] | None:
+    task_definition_arn = stack_info.get("task_definition_arn")
+    if not task_definition_arn:
+        return None
+
+    ecs = session.client("ecs")
+    response = ecs.describe_task_definition(taskDefinition=task_definition_arn)
+    task_def = response.get("taskDefinition") or {}
+    containers = task_def.get("containerDefinitions") or []
+    candidate_container = container_name or stack_info.get("task_definition_container_name")
+
+    for container in containers:
+        if candidate_container and container.get("name") != candidate_container:
+            continue
+        log_config = container.get("logConfiguration") or {}
+        if log_config.get("logDriver") != "awslogs":
+            continue
+        options = log_config.get("options") or {}
+        log_group = options.get("awslogs-group")
+        stream_prefix = options.get("awslogs-stream-prefix")
+        if log_group and stream_prefix:
+            return log_group, stream_prefix, container.get("name") or candidate_container or ""
+
+    # Fallback: pick first awslogs-enabled container if a name match was not found
+    for container in containers:
+        log_config = container.get("logConfiguration") or {}
+        if log_config.get("logDriver") != "awslogs":
+            continue
+        options = log_config.get("options") or {}
+        log_group = options.get("awslogs-group")
+        stream_prefix = options.get("awslogs-stream-prefix")
+        if log_group and stream_prefix:
+            return log_group, stream_prefix, container.get("name") or candidate_container or ""
+
+    return None
+
+
+def follow_ecs_task_logs(
+    *,
+    session: Any,
+    task_arn: str,
+    stack_info: Mapping[str, Any],
+    poll_interval: float = 2.0,
+    max_polls: int | None = None,
+) -> None:
+    task_id = _extract_task_id(task_arn)
+    try:
+        log_config = _ecs_log_configuration(session, stack_info)
+    except Exception as exc:  # pragma: no cover - boto failures exercised at runtime
+        typer.echo(f"Log streaming not available: {exc}", err=True)
+        return
+    if not task_id or not log_config:
+        typer.echo("Log streaming not available: ECS task lacks awslogs configuration.", err=True)
+        return
+
+    log_group, stream_prefix, container_name = log_config
+    log_stream_name = "/".join([stream_prefix, container_name, task_id])
+    logs_client = session.client("logs")
+    ecs_client = session.client("ecs")
+
+    cluster_arn = stack_info.get("cluster_arn")
+    cluster_identifier = cluster_arn if isinstance(cluster_arn, str) else None
+
+    next_token: str | None = None
+    stopped = False
+    seen_events = False
+    polls = 0
+
+    def _is_resource_not_found(exc: Exception) -> bool:
+        code = None
+        try:
+            code = exc.response.get("Error", {}).get("Code")
+        except Exception:
+            pass
+        if not code:
+            try:
+                code = exc.args[0].get("Error", {}).get("Code")  # type: ignore[index]
+            except Exception:
+                pass
+        return code == "ResourceNotFoundException"
+
+    def _task_stopped() -> bool:
+        if not cluster_identifier:
+            return False
+        try:
+            resp = ecs_client.describe_tasks(cluster=cluster_identifier, tasks=[task_arn])
+            tasks = resp.get("tasks") or []
+            if tasks:
+                status = tasks[0].get("lastStatus")
+                return status == "STOPPED"
+        except Exception:
+            return False
+        return False
+
+    while True:
+        polls += 1
+        params: dict[str, Any] = {
+            "logGroupName": log_group,
+            "logStreamName": log_stream_name,
+            "startFromHead": True,
+        }
+        if next_token:
+            params["nextToken"] = next_token
+
+        try:
+            response = logs_client.get_log_events(**params)
+        except Exception as exc:
+            if _is_resource_not_found(exc):
+                if not stopped:
+                    stopped = _task_stopped()
+                if stopped:
+                    typer.echo("Log stream not found for task; task may have stopped before producing logs.", err=True)
+                    break
+                time.sleep(poll_interval)
+                continue
+            typer.echo(f"Failed to fetch log events: {exc}", err=True)
+            return
+
+        events = response.get("events") or []
+        for event in events:
+            message = event.get("message")
+            if message is not None:
+                typer.echo(message)
+                seen_events = True
+
+        new_token = response.get("nextForwardToken")
+        token_stable = new_token == next_token
+        next_token = new_token or next_token
+
+        if not stopped:
+            stopped = _task_stopped()
+
+        if (stopped and token_stable) or (max_polls is not None and polls >= max_polls):
+            break
+
+        time.sleep(poll_interval)
+
+    if not seen_events:
+        typer.echo("No log events were available for this task.", err=True)
 
 
 def run_ecs_task(

@@ -19,6 +19,8 @@ from kptn.cli.run_aws import (
     _load_task_compute,
     task_execution_mode,
     run_ecs_task,
+    ecs_task_console_url,
+    follow_ecs_task_logs,
     run_local,
     start_state_machine_execution,
     submit_batch_job,
@@ -507,7 +509,8 @@ def run(
     project_dir: Optional[Path] = typer.Option(
         None, "--project-dir", "-p", help="Project directory containing kptn configuration"
     ),
-    force: bool = typer.Option(False, "--force", "-f", help="Force run even if another execution is active"),
+    force: bool = typer.Option(False, "--force", help="Force run even if another execution is active"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow ECS task logs for direct runs"),
     local: bool = typer.Option(False, "--local", help="Run locally instead of using AWS Step Functions"),
     stack_param_name: Optional[str] = typer.Option(
         None,
@@ -555,6 +558,11 @@ def run(
         except ValueError as exc:
             typer.echo(str(exc))
             raise typer.Exit(1) from exc
+
+        follow_logs = follow
+        if follow_logs and len(task_list) != 1:
+            typer.echo("--follow is only supported for a single direct ECS task; ignoring.")
+            follow_logs = False
 
         if local:
             try:
@@ -671,6 +679,15 @@ def run(
                     tasks_started = [task.get("taskArn") for task in response.get("tasks", []) if task.get("taskArn")]
                     if tasks_started:
                         typer.echo(f"Started ECS task: {tasks_started[0]}")
+                        console_url = ecs_task_console_url(tasks_started[0], stack_info.get("cluster_arn"))
+                        if console_url:
+                            typer.echo(f"Task link: {console_url}")
+                        if follow_logs:
+                            follow_ecs_task_logs(
+                                session=session,
+                                task_arn=tasks_started[0],
+                                stack_info=stack_info,
+                            )
                     else:
                         typer.echo("Started ECS task")
                     failures = response.get("failures")
@@ -684,6 +701,9 @@ def run(
                 return False
 
             if requires_batch:
+                if follow_logs:
+                    typer.echo("--follow is only available for direct ECS runs; ignoring.")
+                    follow_logs = False
                 if not batch_available:
                     typer.echo(
                         "Task requires AWS Batch, but Batch stack metadata is missing.",
@@ -711,6 +731,8 @@ def run(
             preferred_key=state_machine,
             pipeline=pipeline,
         )
+        if follow_logs:
+            typer.echo("--follow requires a direct ECS run; starting Step Functions instead.")
         if not state_machine_arn:
             typer.echo("No state machine ARN found in stack metadata; specify --state-machine or fix the stack info.")
             raise typer.Exit(1)
