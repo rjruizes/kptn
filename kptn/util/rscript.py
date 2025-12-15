@@ -57,7 +57,7 @@ def r_script_log_path(task_name, pipeline_config: PipelineConfig, key=None, cust
 
 def r_script(task_name, key, pipeline_config: PipelineConfig, script: str, task_env={}, prefix_args_str=None, cli_args=None, custom_log_path=None):
     """Run Rscript"""
-    data_year = (
+    data_year = str(
         task_env.get("DATA_YEAR")
         or task_env.get("data_year")
         or task_env.get("year")
