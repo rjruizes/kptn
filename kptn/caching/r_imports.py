@@ -11,6 +11,52 @@ def read_r_file(file_path):
         return file.read()
 
 
+def strip_r_comments(content: str) -> str:
+    """
+    Remove R-style comments (# ...) while preserving hashes inside strings.
+    """
+    result = []
+    in_string = False
+    string_delim = None
+    escaped = False
+    skipping_line = False
+
+    for ch in content:
+        if skipping_line:
+            if ch == "\n":
+                result.append(ch)
+                skipping_line = False
+            continue
+
+        if escaped:
+            result.append(ch)
+            escaped = False
+            continue
+
+        if in_string:
+            result.append(ch)
+            if ch == "\\":
+                escaped = True
+            elif ch == string_delim:
+                in_string = False
+                string_delim = None
+            continue
+
+        if ch in ("'", '"'):
+            result.append(ch)
+            in_string = True
+            string_delim = ch
+            continue
+
+        if ch == "#":
+            skipping_line = True
+            continue
+
+        result.append(ch)
+
+    return "".join(result)
+
+
 def find_here_root(start_path: str) -> str:
     """
     Find the root directory by looking for a .here file in parent directories.
@@ -38,7 +84,7 @@ def get_import_list(file_path: str) -> list[str]:
     Search for all import statements in an R script file and return them as a list of file paths.
     """
     base_dir = path.dirname(file_path)
-    file_content = read_r_file(file_path)
+    file_content = strip_r_comments(read_r_file(file_path))
     source_literal_imports = re.findall(r'source\("(.*?)"\)', file_content)
     source_here_imports = re.findall(r'source\(.*here\("(.*?)"\)\)', file_content)
     rscript_calls = re.findall(r'r_script\("(.*?)"\)', file_content)
