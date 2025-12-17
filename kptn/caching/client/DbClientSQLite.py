@@ -80,11 +80,9 @@ class DbClientSQLite(DbClientBase):
         default_dir = self._resolve_default_dir()
         default_dir.mkdir(parents=True, exist_ok=True)
 
-        identifier_parts = [part for part in (self.storage_key, self.pipeline) if part]
-        if identifier_parts:
-            filename = "_".join(identifier_parts) + ".db"
-        else:
-            filename = "cache.db"
+        # Use the storage key to group runs across pipelines; fall back to pipeline if no storage key
+        identifier = self.storage_key or self.pipeline
+        filename = f"{identifier}.db" if identifier else "cache.db"
 
         return str(default_dir / filename)
 

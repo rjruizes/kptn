@@ -64,6 +64,7 @@ Your project is expected to use a pyproject.toml and contain a `tool.kptn` secti
   <tr><td>py_tasks_dir</td><td>The directory (or list of directories) where Python task code exists</td><td>Yes</td></tr>
   <tr><td>tasks_conf_path</td><td>The filepath to the kptn.yaml file defining your pipeline</td><td>Yes</td></tr>
   <tr><td>docker_image</td><td>The name of the Docker image to build and push to Prefect</td><td>Yes</td></tr>
+  <tr><td>cache_namespace</td><td>Optional cache namespace shared across graphs/pipelines; defaults to the graph name</td><td>No</td></tr>
   </tbody>
 </table>
 
@@ -88,6 +89,7 @@ Create a file, `kptn.yaml` that contains definitions of the graphs of tasks and 
   <tbody>
   <tr><td>graphs</td><td>A dictionary of graph IDs and graph objects</td><td>Yes</td></tr>
   <tr><td>graphs.[id]</td><td>A dictionary representing a graph (nodes and edges)</td><td>Yes</td></tr>
+  <tr><td>graphs.[id].extends</td><td>Optional string or list of graph IDs to inherit tasks from; the earliest occurrence of a task name wins (parents first, then child). If provided, `tasks` can be omitted to reuse a parent graph as-is.</td><td>No</td></tr>
   <tr><td>graphs.[id].tasks</td><td>An ordered dictionary of task IDs (nodes) and their dependencies (edges)</td><td>Yes</td></tr>
   <tr><td>graphs.[id].tasks.[task_id]</td><td>A list of dependency task IDs. If no dependencies, leave blank or use an empty list `[]`.</td><td>Yes</td></tr>
   <tr><td>tasks</td><td>A dictionary of task names and task objects</td><td>Yes</td></tr>

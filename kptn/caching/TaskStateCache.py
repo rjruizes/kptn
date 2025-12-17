@@ -8,7 +8,7 @@ import logging
 import os
 import json
 import sys
-from typing import Callable, Optional, Union, Mapping, Iterable
+from typing import Callable, Optional, Union, Mapping, Iterable, Any
 from types import ModuleType
 import requests
 import time
@@ -27,6 +27,107 @@ from kptn.util.read_tasks_config import read_tasks_config
 from kptn.util.hash import hash_file, hash_obj
 from kptn.util.task_args import plan_python_call
 from kptn.util.task_dirs import resolve_python_task_dirs
+
+
+def _normalize_dependencies(dependencies: Any) -> list[str]:
+    """Normalize task dependency declarations into a list of task names."""
+    if dependencies is None:
+        return []
+    if isinstance(dependencies, str):
+        value = dependencies.strip()
+        return [value] if value else []
+    return [dep for dep in dependencies if dep]
+
+
+def _normalize_extends(value: Any, *, graph_name: str) -> list[str]:
+    """Coerce the extends field into a list of graph names."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            raise ValueError(f"Graph '{graph_name}' has an empty extends entry")
+        return [value]
+    if isinstance(value, list):
+        names: list[str] = []
+        for entry in value:
+            if not isinstance(entry, str):
+                raise TypeError(
+                    f"Graph '{graph_name}' has a non-string entry in extends: {entry!r}"
+                )
+            cleaned = entry.strip()
+            if not cleaned:
+                raise ValueError(
+                    f"Graph '{graph_name}' has an empty graph name in extends"
+                )
+            names.append(cleaned)
+        return names
+    raise TypeError(
+        f"Graph '{graph_name}' has invalid extends declaration; expected a string or list of strings"
+    )
+
+
+def _flatten_graph(
+    graph_name: str,
+    graphs_block: Mapping[str, Any],
+    *,
+    memo: dict[str, dict[str, Any]],
+    stack: list[str],
+) -> dict[str, Any]:
+    """Resolve a graph's tasks, expanding any inherited graphs defined via 'extends'."""
+    if graph_name in memo:
+        return memo[graph_name]
+    if graph_name in stack:
+        cycle = " -> ".join([*stack, graph_name])
+        raise ValueError(f"Cycle detected in graph inheritance: {cycle}")
+
+    graph_def = graphs_block.get(graph_name)
+    if graph_def is None:
+        raise ValueError(f"Graph '{graph_name}' is not defined but is referenced in extends")
+    if not isinstance(graph_def, Mapping):
+        raise ValueError(f"Graph '{graph_name}' must be a mapping")
+
+    extends = _normalize_extends(graph_def.get("extends"), graph_name=graph_name)
+    tasks_block = graph_def.get("tasks")
+    if tasks_block is None:
+        if not extends:
+            raise ValueError(
+                f"Graph '{graph_name}' must define a mapping of tasks or extend another graph"
+            )
+        tasks_block = {}
+    if not isinstance(tasks_block, Mapping):
+        raise ValueError(f"Graph '{graph_name}' must define a mapping of tasks")
+
+    stack.append(graph_name)
+    merged_tasks: dict[str, Any] = {}
+    for parent in extends:
+        parent_tasks = _flatten_graph(parent, graphs_block, memo=memo, stack=stack)
+        for task_name, deps in parent_tasks.items():
+            if task_name not in merged_tasks:
+                merged_tasks[task_name] = deps
+
+    for task_name, deps in tasks_block.items():
+        if task_name not in merged_tasks:
+            merged_tasks[task_name] = deps
+    stack.pop()
+
+    for task, deps in merged_tasks.items():
+        for dep in _normalize_dependencies(deps):
+            if dep not in merged_tasks:
+                raise ValueError(
+                    f"Graph '{graph_name}' task '{task}' depends on unknown task '{dep}'"
+                )
+
+    memo[graph_name] = merged_tasks
+    return merged_tasks
+
+
+def _flatten_graphs(graphs_block: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Flatten all graphs, resolving inheritance for each."""
+    memo: dict[str, dict[str, Any]] = {}
+    for graph_name in graphs_block:
+        _flatten_graph(graph_name, graphs_block, memo=memo, stack=[])
+    return memo
 
 
 @dataclass
@@ -80,10 +181,17 @@ class TaskStateCache():
                 raise ValueError("TaskStateCache requires at least one tasks_config_path")
             self.tasks_config_paths = [str(path) for path in (config_paths or [primary_config_path])]
             self.tasks_config = tasks_config or read_tasks_config(primary_config_path)
+            settings_block = self.tasks_config.get("settings", {}) if isinstance(self.tasks_config, Mapping) else {}
+            cache_namespace = settings_block.get("cache_namespace") if isinstance(settings_block, Mapping) else None
+            if not isinstance(cache_namespace, str) or not cache_namespace.strip():
+                cache_namespace = self.pipeline_name
+            self.cache_namespace = cache_namespace
+            graphs_block = self.tasks_config.get("graphs") if isinstance(self.tasks_config, Mapping) else None
+            self._resolved_graphs = _flatten_graphs(graphs_block or {})
             self.db_client = db_client or init_db_client(
                 table_name=os.getenv("DYNAMODB_TABLE_NAME", "tasks"),
                 storage_key=storage_key,
-                pipeline=pipeline_config.PIPELINE_NAME,
+                pipeline=self.cache_namespace,
                 tasks_config=self.tasks_config,
                 tasks_config_path=primary_config_path,
             )
@@ -159,12 +267,28 @@ class TaskStateCache():
         """Check if the workflow type uses Step Functions artifacts."""
         return self._effective_flow_type() == "stepfunctions"
 
+    def _graph_tasks(self, pipeline_name: str) -> Mapping[str, Any]:
+        """Return the resolved task mapping for a pipeline, flattening inheritance if needed."""
+        if hasattr(self, "_resolved_graphs"):
+            resolved = self._resolved_graphs
+        else:
+            graphs_block = self.tasks_config.get("graphs") if isinstance(self.tasks_config, Mapping) else None
+            resolved = _flatten_graphs(graphs_block or {})
+            self._resolved_graphs = resolved
+        if pipeline_name not in resolved:
+            available = ", ".join(sorted(resolved)) or "<none>"
+            raise KeyError(
+                f"Pipeline '{pipeline_name}' not found in graphs; available: {available}"
+            )
+        return resolved[pipeline_name]
+
     def get_dep_list(self, task_name: str) -> list[str]:
         """Return the names of the dependencies of a task."""
-        if task_name not in self.tasks_config["graphs"][self.pipeline_name]["tasks"]:
-            pipeline_keys_str = json.dumps(list(self.tasks_config["graphs"][self.pipeline_name]["tasks"].keys()))
+        graph_tasks = self._graph_tasks(self.pipeline_name)
+        if task_name not in graph_tasks:
+            pipeline_keys_str = json.dumps(list(graph_tasks.keys()))
             raise KeyError(f"Task ({task_name}) not found in list of tasks; pipeline: {self.pipeline_name}; pipeline_keys: {pipeline_keys_str}")
-        deps = self.tasks_config["graphs"][self.pipeline_name]["tasks"][task_name]
+        deps = graph_tasks[task_name]
         if type(deps) == list:
             return deps
         elif type(deps) == str:

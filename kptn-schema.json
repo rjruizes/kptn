@@ -53,6 +53,10 @@
           "enum": ["vanilla", "prefect", "stepfunctions"],
           "description": "Workflow framework type: vanilla (plain Python), prefect, or stepfunctions (AWS Step Functions)"
         },
+        "cache_namespace": {
+          "type": "string",
+          "description": "Optional cache namespace shared across graphs/pipelines; defaults to pipeline name"
+        },
         "imports_slot": {
           "type": "string",
           "description": "Raw snippet inserted near the top of generated flows for custom imports or setup commands"
@@ -75,8 +79,22 @@
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
-        "required": ["tasks"],
         "properties": {
+          "extends": {
+            "description": "Optional graph inheritance. String or list of graph IDs to merge in order; earlier occurrences win on name collisions.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            ]
+          },
           "tasks": {
             "type": "object",
             "description": "Task dependency graph where keys are task names and values define dependencies",
@@ -101,6 +119,14 @@
             }
           }
         },
+        "anyOf": [
+          {
+            "required": ["tasks"]
+          },
+          {
+            "required": ["extends"]
+          }
+        ],
         "additionalProperties": false
       }
     },
