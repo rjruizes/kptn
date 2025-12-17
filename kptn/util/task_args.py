@@ -94,9 +94,27 @@ def build_task_argument_plan(
             )
 
     map_over_value = task_spec.get("map_over")
+    dependency_iterables: dict[str, str] = {}
+    for dep_name in dependency_names:
+        dep_spec = tasks_def.get(dep_name)
+        if not isinstance(dep_spec, Mapping):
+            continue
+        iterable_item = dep_spec.get("iterable_item")
+        if isinstance(iterable_item, str):
+            for part in iterable_item.split(","):
+                part = part.strip()
+                if part:
+                    dependency_iterables[part] = dep_name
+
     if isinstance(map_over_value, str):
         parts = [part.strip() for part in map_over_value.split(",") if part.strip()]
         expected.update(parts)
+        for part in parts:
+            if part not in dependency_iterables:
+                errors.append(
+                    f"map_over '{part}' is not produced by any dependency with iterable_item; "
+                    f"add iterable_item to a dependency or adjust map_over"
+                )
 
     for dep_name in dependency_names:
         dep_spec = tasks_def.get(dep_name)
