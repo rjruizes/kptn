@@ -85,37 +85,56 @@ def _normalize_dependencies(dependencies: Any) -> list[str]:
     return [dep for dep in dependencies if dep]
 
 
-def _normalize_extends(value: Any, *, graph_name: str) -> list[str]:
-    """Coerce the extends field into a list of graph names."""
+def _normalize_extends(value: Any, *, graph_name: str) -> list[dict[str, Any]]:
+    """Coerce the extends field into a list of graph entries with optional arg overrides."""
     if value is None:
         return []
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            raise ValueError(f"Graph '{graph_name}' has an empty extends entry")
-        return [value]
-    if isinstance(value, list):
-        names: list[str] = []
-        for entry in value:
-            if not isinstance(entry, str):
-                raise TypeError(
-                    f"Graph '{graph_name}' has a non-string entry in extends: {entry!r}"
-                )
-            cleaned = entry.strip()
+
+    def _normalise_entry(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, str):
+            cleaned = raw.strip()
             if not cleaned:
-                raise ValueError(
-                    f"Graph '{graph_name}' has an empty graph name in extends"
+                raise ValueError(f"Graph '{graph_name}' has an empty extends entry")
+            return {"graph": cleaned, "args": None}
+        if isinstance(raw, Mapping):
+            target = raw.get("graph")
+            if not isinstance(target, str) or not target.strip():
+                raise TypeError(
+                    f"Graph '{graph_name}' extends entry must include non-empty 'graph'"
                 )
-            names.append(cleaned)
-        return names
-    raise TypeError(
-        f"Graph '{graph_name}' has invalid extends declaration; expected a string or list of strings"
-    )
+            args = raw.get("args")
+            if args is not None and not isinstance(args, Mapping):
+                raise TypeError(
+                    f"Graph '{graph_name}' extends entry args must be a mapping if provided"
+                )
+            if isinstance(args, Mapping):
+                for task_name, task_args in args.items():
+                    if not isinstance(task_name, str) or not task_name.strip():
+                        raise TypeError(
+                            f"Graph '{graph_name}' extends args keys must be non-empty strings"
+                        )
+                    if task_args is not None and not isinstance(task_args, Mapping):
+                        raise TypeError(
+                            f"Graph '{graph_name}' extends args for task '{task_name}' must be a mapping"
+                        )
+            return {"graph": target.strip(), "args": args}
+        raise TypeError(
+            f"Graph '{graph_name}' has invalid extends entry; expected a string or object with 'graph'"
+        )
+
+    if isinstance(value, list):
+        entries: list[dict[str, Any]] = []
+        for entry in value:
+            entries.append(_normalise_entry(entry))
+        return entries
+
+    return [_normalise_entry(value)]
 
 
 def _validate_graph_dependencies(graph_name: str, tasks_lookup: Mapping[str, Any]) -> None:
     """Ensure that all declared dependencies exist within the flattened graph."""
-    for task, deps in tasks_lookup.items():
+    for task, entry in tasks_lookup.items():
+        deps = entry.get("deps") if isinstance(entry, Mapping) else entry
         for dep in _normalize_dependencies(deps):
             if dep not in tasks_lookup:
                 raise ValueError(
@@ -161,11 +180,25 @@ def _flatten_graph(
 
     stack.append(graph_name)
     merged_tasks: dict[str, Any] = {}
-    for parent in extends:
-        parent_tasks = _flatten_graph(parent, graphs_block, memo=memo, stack=stack)
-        for task_name, deps in parent_tasks.items():
-            if task_name not in merged_tasks:
-                merged_tasks[task_name] = deps
+    for parent_spec in extends:
+        parent_name = parent_spec.get("graph")
+        parent_tasks = _flatten_graph(parent_name, graphs_block, memo=memo, stack=stack)
+        overrides = parent_spec.get("args") if isinstance(parent_spec, Mapping) else None
+        overrides = overrides or {}
+        for task_name, entry in parent_tasks.items():
+            if task_name in merged_tasks:
+                continue
+            merged_entry = entry if isinstance(entry, Mapping) else {"deps": entry}
+            override_args = overrides.get(task_name)
+            if override_args:
+                base_args = merged_entry.get("args") if isinstance(merged_entry, Mapping) else None
+                combined_args = {}
+                if isinstance(base_args, Mapping):
+                    combined_args.update(base_args)
+                combined_args.update(override_args)
+                merged_entry = dict(merged_entry)
+                merged_entry["args"] = combined_args
+            merged_tasks[task_name] = merged_entry
 
     for task_name, deps in tasks_block.items():
         if task_name not in merged_tasks:

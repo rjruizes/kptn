@@ -1,6 +1,6 @@
 [project]
 name = "kptn"
-version = "0.1.9"
+version = "0.1.10"
 description = "Meta tool for managing and deploying data pipelines."
 readme = "README.md"
 requires-python = ">=3.11"

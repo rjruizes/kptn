@@ -42,3 +42,55 @@ def test_dep_list_allows_extends_only_graph():
 
     assert cache.get_dep_list("a") == []
     assert cache.get_dep_list("b") == ["a"]
+
+
+def test_graph_task_object_with_args():
+    cache = object.__new__(TaskStateCache)
+    cache.pipeline_name = "pipe"
+    cache.pipeline_config = SimpleNamespace(PIPELINE_NAME="pipe")
+    cache.tasks_config = {
+        "graphs": {
+            "pipe": {
+                "tasks": {
+                    "a": {"deps": [], "args": {"x": 1}},
+                    "b": "a",
+                }
+            }
+        },
+        "tasks": {},
+    }
+
+    tasks = cache._graph_tasks("pipe")
+    assert tasks["a"]["args"] == {"x": 1}
+    assert cache.get_dep_list("a") == []
+    assert cache.get_dep_list("b") == ["a"]
+
+
+def test_extends_args_override():
+    cache = object.__new__(TaskStateCache)
+    cache.pipeline_name = "child"
+    cache.pipeline_config = SimpleNamespace(PIPELINE_NAME="child")
+    cache.tasks_config = {
+        "graphs": {
+            "base": {"tasks": {"a": None}},
+            "child": {
+                "extends": [
+                    {
+                        "graph": "base",
+                        "args": {
+                            "a": {"foo": "override"},
+                        },
+                    }
+                ]
+            },
+        },
+        "tasks": {
+            "a": {
+                "file": "a.py",
+                "args": {"foo": "base", "bar": 1},
+            }
+        },
+    }
+
+    args = cache.get_py_func_args("a")
+    assert args == {"foo": "override", "bar": 1}

@@ -81,7 +81,7 @@
         "type": "object",
         "properties": {
           "extends": {
-            "description": "Optional graph inheritance. String or list of graph IDs to merge in order; earlier occurrences win on name collisions.",
+            "description": "Optional graph inheritance. String or list of graph IDs or graph objects to merge in order; earlier occurrences win on name collisions.",
             "oneOf": [
               {
                 "type": "string"
@@ -89,11 +89,41 @@
               {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "required": ["graph"],
+                      "properties": {
+                        "graph": {
+                          "type": "string",
+                          "description": "Graph ID to extend"
+                        },
+                        "args": {
+                          "type": "object",
+                          "description": "Per-task static arg overrides for tasks in the extended graph",
+                          "additionalProperties": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": ["string", "number", "boolean", "array", "object", "null"]
+                            }
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "minItems": 1
               }
             ]
+          },
+          "config": {
+            "type": "object",
+            "description": "Graph-level config overrides merged on top of root config when running this graph",
+            "additionalProperties": true
           },
           "tasks": {
             "type": "object",
@@ -114,6 +144,29 @@
                     "type": "string"
                   },
                   "description": "Multiple task dependencies"
+                },
+                {
+                  "type": "object",
+                  "description": "Task entry with explicit deps and optional static args for this graph",
+                  "properties": {
+                    "deps": {
+                      "oneOf": [
+                        { "type": "string" },
+                        {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      ]
+                    },
+                    "args": {
+                      "type": "object",
+                      "description": "Static keyword arguments injected when this task runs in this graph",
+                      "additionalProperties": {
+                        "type": ["string", "number", "boolean", "array", "object", "null"]
+                      }
+                    }
+                  },
+                  "additionalProperties": false
                 }
               ]
             }
@@ -152,6 +205,13 @@
           "cache_result": {
             "type": "boolean",
             "description": "Whether to cache the result of this task"
+          },
+          "args": {
+            "type": "object",
+            "description": "Static keyword arguments injected into the Python task. Values are passed as-is.",
+            "additionalProperties": {
+              "type": ["string", "number", "boolean", "array", "object", "null"]
+            }
           },
           "iterable_item": {
             "type": "string",

@@ -1,11 +1,18 @@
-import pytest
 import os
+
 import boto3
-import os
+import pytest
 from kptn.caching.client.DbClientDDB import DbClientDDB
 from tests.base_db_client_test import BaseDbClientTest
 
 TABLE = "tasks"
+
+# Skip by default to avoid hanging when local DynamoDB isn't running.
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("RUN_DDB_TESTS"),
+    reason="requires local DynamoDB at http://localhost:8000; set RUN_DDB_TESTS=1 to run",
+)
+
 
 def cleanup():
     # Reset local dynamodb table
@@ -26,4 +33,3 @@ class TestDynamoDbClient(BaseDbClientTest):
         db = DbClientDDB(table_name=TABLE, storage_key="mybranch", pipeline="mygraph", aws_auth={ "endpoint_url": "http://localhost:8000" })
         yield db
         cleanup()
-

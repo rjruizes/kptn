@@ -89,12 +89,15 @@ Create a file, `kptn.yaml` that contains definitions of the graphs of tasks and 
   <tbody>
   <tr><td>graphs</td><td>A dictionary of graph IDs and graph objects</td><td>Yes</td></tr>
   <tr><td>graphs.[id]</td><td>A dictionary representing a graph (nodes and edges)</td><td>Yes</td></tr>
-  <tr><td>graphs.[id].extends</td><td>Optional string or list of graph IDs to inherit tasks from; the earliest occurrence of a task name wins (parents first, then child). If provided, `tasks` can be omitted to reuse a parent graph as-is.</td><td>No</td></tr>
+  <tr><td>graphs.[id].extends</td><td>Optional string or list of graph IDs (or objects with <code>graph</code> and optional per-task <code>args</code>) to inherit tasks from; the earliest occurrence of a task name wins (parents first, then child). If provided, `tasks` can be omitted to reuse a parent graph as-is.</td><td>No</td></tr>
+  <tr><td>graphs.[id].config</td><td>Graph-level config overrides merged on top of the root <code>config</code> when running this graph</td><td>No</td></tr>
   <tr><td>graphs.[id].tasks</td><td>An ordered dictionary of task IDs (nodes) and their dependencies (edges)</td><td>Yes</td></tr>
   <tr><td>graphs.[id].tasks.[task_id]</td><td>A list of dependency task IDs. If no dependencies, leave blank or use an empty list `[]`.</td><td>Yes</td></tr>
+  <tr><td>graphs.[id].tasks.[task_id].args</td><td>Static keyword args to supply to that task when run via this graph (overrides or supplements `tasks.[task_id].args`)</td><td>No</td></tr>
   <tr><td>tasks</td><td>A dictionary of task names and task objects</td><td>Yes</td></tr>
   <tr><td>tasks.[task_id]</td><td>A dictionary representing a task</td><td>Yes</td></tr>
   <tr><td>tasks.[task_id].file</td><td>A string with the filepath to the Python or R script</td><td>Yes</td></tr>
+  <tr><td>tasks.[task_id].args</td><td>Static keyword args for Python tasks; values are passed as-is</td><td>No</td></tr>
   <tr><td>tasks.[task_id].prefix_args</td><td>A string that will be inserted before the `Rscript` command-line call</td><td>No</td></tr>
   <tr><td>tasks.[task_id].cli_args</td><td>A string that will be inserted at the end of the `Rscript` command-line call</td><td>No</td></tr>
   <tr><td>tasks.[task_id].cache_result</td><td>A boolean, if `true`, the Python script return value will be saved in the cache database, DynamoDB. If this value is a large list (e.g. 50k items), it will be sharded across DynamoDB items for scalability.</td><td>No</td></tr>
