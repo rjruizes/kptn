@@ -550,8 +550,23 @@ class RuntimeConfig:
         if item in self._data:
             return self._data[item]
         fallback = object.__getattribute__(self, "_fallback")
-        if fallback is not None and hasattr(fallback, item):
-            return getattr(fallback, item)
+        if fallback is not None:
+            # Only expose real config-like attributes from the fallback object.
+            # Avoid returning callables (e.g., BaseModel.schema) that would
+            # incorrectly override task defaults.
+            if hasattr(fallback, "model_fields"):
+                model_fields = getattr(fallback, "model_fields", {}) or {}
+                computed_fields = getattr(fallback, "model_computed_fields", {}) or {}
+                if item in model_fields or item in computed_fields:
+                    value = getattr(fallback, item)
+                    if callable(value):
+                        raise AttributeError(item)
+                    return value
+            elif hasattr(fallback, item):
+                value = getattr(fallback, item)
+                if callable(value):
+                    raise AttributeError(item)
+                return value
         raise AttributeError(item)
 
     def __repr__(self) -> str:
