@@ -64,6 +64,17 @@
         "db": {
           "type": "string",
           "description": "Database type for caching (e.g., sqlite, dynamodb)"
+        },
+        "logging": {
+          "type": "object",
+          "description": "Configuration for kptn runtime logging",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Path to the file for kptn runtime logs. Relative paths are resolved from the directory containing kptn.yaml."
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

@@ -295,7 +295,7 @@ class TaskStateCache():
                 runtime_config=self.runtime_config,
                 pipeline_config=pipeline_config,
             )
-            self.logger = get_logger()
+            self.logger = get_logger(pipeline_config)
             self._duckdb_sql_functions: dict[str, Callable[..., object]] = {}
             self._python_module_cache: dict[str, ModuleType] = {}
             self._task_has_prior_runs: dict[str, bool] = {}

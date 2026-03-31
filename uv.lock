@@ -756,7 +756,7 @@ wheels = [
 
 [[package]]
 name = "jsonschema"
-version = "4.20.0"
+version = "4.21.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -764,9 +764,9 @@ dependencies = [
     { name = "referencing" },
     { name = "rpds-py" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/74/77bf12d3dd32b764692a71d4200f03429c41eee2e8a9225d344d91c03aff/jsonschema-4.20.0.tar.gz", hash = "sha256:4f614fd46d8d61258610998997743ec5492a648b33cf478c1ddc23ed4598a5fa", size = 320243, upload-time = "2023-11-16T17:08:05.705Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4d/c5/3f6165d3df419ea7b0990b3abed4ff348946a826caf0e7c990b65ff7b9be/jsonschema-4.21.1.tar.gz", hash = "sha256:85727c00279f5fa6bedbe6238d2aa6403bedd8b4864ab11207d07df3cc1b2ee5", size = 321491, upload-time = "2024-01-19T21:11:13.923Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/ed/0058234d8dd2b1fc6beeea8eab945191a05e9d391a63202f49fe23327586/jsonschema-4.20.0-py3-none-any.whl", hash = "sha256:ed6231f0429ecf966f5bc8dfef245998220549cbbcf140f913b7464c52c3b6b3", size = 84663, upload-time = "2023-11-16T17:08:03.186Z" },
+    { url = "https://files.pythonhosted.org/packages/39/9d/b035d024c62c85f2e2d4806a59ca7b8520307f34e0932fbc8cc75fe7b2d9/jsonschema-4.21.1-py3-none-any.whl", hash = "sha256:7996507afae316306f9e2290407761157c6f78002dcf7419acb99822143d1c6f", size = 85527, upload-time = "2024-01-19T21:11:12.105Z" },
 ]
 
 [[package]]
@@ -783,7 +783,7 @@ wheels = [
 
 [[package]]
 name = "kptn"
-version = "0.1.9"
+version = "0.1.13"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
@@ -823,7 +823,7 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'duckdb'" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.116.2" },
     { name = "jinja2" },
-    { name = "jsonschema", specifier = "==4.20.0" },
+    { name = "jsonschema", specifier = "==4.21.1" },
     { name = "prefect", marker = "extra == 'prefect'" },
     { name = "pydantic" },
     { name = "pyyaml" },

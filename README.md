@@ -94,6 +94,7 @@ Create a file, `kptn.yaml` that contains definitions of the graphs of tasks and 
   <tr><td>graphs.[id].tasks</td><td>An ordered dictionary of task IDs (nodes) and their dependencies (edges)</td><td>Yes</td></tr>
   <tr><td>graphs.[id].tasks.[task_id]</td><td>A list of dependency task IDs. If no dependencies, leave blank or use an empty list `[]`.</td><td>Yes</td></tr>
   <tr><td>graphs.[id].tasks.[task_id].args</td><td>Static keyword args to supply to that task when run via this graph (overrides or supplements `tasks.[task_id].args`)</td><td>No</td></tr>
+  <tr><td>settings.logging.file</td><td>File path for kptn runtime logs. Relative paths are resolved from the directory containing <code>kptn.yaml</code>. This applies to kptn's own Python/runtime logs only, not task stdout/stderr.</td><td>No</td></tr>
   <tr><td>tasks</td><td>A dictionary of task names and task objects</td><td>Yes</td></tr>
   <tr><td>tasks.[task_id]</td><td>A dictionary representing a task</td><td>Yes</td></tr>
   <tr><td>tasks.[task_id].file</td><td>A string with the filepath to the Python or R script</td><td>Yes</td></tr>
@@ -142,6 +143,16 @@ Task `A` will call the `A()` function in `A.py` and store the result in the cach
 Task `B` will map over the result list, setting `US_STATE=${US_STATE}` as an environment variable for every call of the R script `B/run.R`
 
 For example, if `A` returned the list `['NC', 'SC']`, `B/run.R` would be called 2 times, once with `US_STATE=NC` and once with `US_STATE=SC`
+
+To write kptn runtime logs to a file, configure:
+
+```yaml
+settings:
+  flows_dir: "."
+  flow_type: vanilla
+  logging:
+    file: log/kptn.log
+```
 
 ## Local runners for Step Functions projects
 

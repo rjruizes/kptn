@@ -1,7 +1,7 @@
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from pydantic import BaseModel, computed_field, model_validator
 
@@ -68,16 +68,30 @@ def normalise_dir_setting(
 def _read_py_tasks_dir_from_config(tasks_config_path: str) -> list[str]:
     """Read the py_tasks_dir setting from the kptn.yaml config file"""
     try:
-        config_path = Path(tasks_config_path)
-        if not config_path.exists():
-            return []
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        settings_section = config.get('settings', {})
+        settings_section = _read_settings_from_config(tasks_config_path)
         setting = settings_section.get('py_tasks_dir')
         return normalise_dir_setting(setting, setting_name='py_tasks_dir')
     except Exception:
         return []
+
+
+def _read_yaml_config(tasks_config_path: str) -> dict[str, Any]:
+    config_path = Path(tasks_config_path)
+    if not config_path.exists():
+        return {}
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f) or {}
+    if isinstance(config, Mapping):
+        return dict(config)
+    return {}
+
+
+def _read_settings_from_config(tasks_config_path: str) -> dict[str, Any]:
+    config = _read_yaml_config(tasks_config_path)
+    settings = config.get('settings', {})
+    if isinstance(settings, Mapping):
+        return dict(settings)
+    return {}
 
 
 def get_scratch_dir(pipeline_config) -> Path:
@@ -127,11 +141,7 @@ class PipelineConfig(BaseModel):
         """Auto-derive PIPELINE_NAME from kptn.yaml if not explicitly set"""
         if not self.PIPELINE_NAME and self.TASKS_CONFIG_PATH:
             try:
-                config_path = Path(self.TASKS_CONFIG_PATH)
-                if not config_path.exists():
-                    return self
-                with open(config_path, 'r') as f:
-                    config = yaml.safe_load(f)
+                config = _read_yaml_config(self.TASKS_CONFIG_PATH)
                 graphs = config.get('graphs', {})
                 if len(graphs) == 1:
                     self.PIPELINE_NAME = next(iter(graphs))
@@ -181,6 +191,26 @@ class PipelineConfig(BaseModel):
     def externals_dir(self) -> str:
         """External files directory: where external files are retrieved to"""
         return os.path.join(self.scratch_dir, "externals")
+
+    @computed_field
+    def runtime_log_file(self) -> str | None:
+        """Resolved path for kptn runtime logs configured in kptn.yaml."""
+        if not self.TASKS_CONFIG_PATH:
+            return None
+        try:
+            settings = _read_settings_from_config(self.TASKS_CONFIG_PATH)
+            logging_config = settings.get("logging")
+            if not isinstance(logging_config, Mapping):
+                return None
+            log_file = logging_config.get("file")
+            if not isinstance(log_file, str) or not log_file.strip():
+                return None
+            config_dir = Path(self.TASKS_CONFIG_PATH).resolve().parent
+            log_path = Path(log_file.strip())
+            resolved = (config_dir / log_path).resolve() if not log_path.is_absolute() else log_path.resolve()
+            return str(resolved)
+        except Exception:
+            return None
 
 
 def generateConfig(pipeline_name: str, r_tasks_dir_path: str, py_module_path: str, tasks_config_path: str = "", authproxy_endpoint=None, storage_key="") -> PipelineConfig:
