@@ -272,6 +272,10 @@
           "duckdb_checkpoint": {
             "type": "boolean",
             "description": "Optional file-backed DuckDB checkpoint behavior for this task. If enabled, the task saves a task-specific checkpoint after success. At process startup, kptn restores the checkpoint from the task furthest along in the pipeline that has an existing checkpoint file."
+          },
+          "wrapper": {
+            "type": "boolean",
+            "description": "When true, marks this task as a wrapper that orchestrates lower-level tasks. kptn will AST-scan the wrapper function to discover which known tasks it calls, cache each subtask independently, and support partial re-runs on failure or code changes."
           }
         },
         "additionalProperties": false

@@ -434,6 +434,115 @@ class TaskStateCache():
         task = self.get_task(task_name)
         return task.get("cache_result") == True
 
+    def is_wrapper_task(self, task_name: str, task: dict | None = None) -> bool:
+        """Check if the task is a wrapper task."""
+        if task is None:
+            task = self.get_task(task_name)
+        return bool(task.get("wrapper"))
+
+    # ------------------------------------------------------------------
+    # Wrapper subtask discovery & cache key helpers
+    # ------------------------------------------------------------------
+
+    _wrapper_subtasks_cache: dict[str, list[str]] = {}
+
+    def get_wrapper_subtasks(self, task_name: str) -> list[str]:
+        """Return the ordered list of subtask names for a wrapper task.
+
+        Results are cached for the lifetime of this singleton instance.
+        """
+        if task_name in self._wrapper_subtasks_cache:
+            return self._wrapper_subtasks_cache[task_name]
+        from kptn.caching.wrapper import discover_wrapper_subtasks
+        py_dirs = [str(p) for p in self.py_task_dirs] if self.py_task_dirs else []
+        # Include the project root so the analyzer can resolve cross-package imports.
+        if hasattr(self, "tasks_root_dir") and self.tasks_root_dir:
+            root_str = str(self.tasks_root_dir.resolve())
+            if root_str not in py_dirs:
+                py_dirs.append(root_str)
+        subtasks = discover_wrapper_subtasks(
+            task_name,
+            self.tasks_config.get("tasks", {}),
+            py_dirs=py_dirs or None,
+        )
+        self._wrapper_subtasks_cache[task_name] = subtasks
+        return subtasks
+
+    @staticmethod
+    def wrapper_subtask_cache_key(wrapper_name: str, subtask_name: str) -> str:
+        """Return the cache DB key for a subtask within a wrapper."""
+        return f"{wrapper_name}.{subtask_name}"
+
+    # ------------------------------------------------------------------
+    # Wrapper-aware cache evaluation
+    # ------------------------------------------------------------------
+
+    def evaluate_wrapper_submission(
+        self,
+        task_name: str,
+        ignore_cache: bool = False,
+    ) -> tuple[bool, str | None, list[tuple[str, bool]]]:
+        """Evaluate which subtasks of a wrapper need to run.
+
+        Returns
+        -------
+        (should_run, reason, subtask_decisions)
+            *should_run*: True if at least one subtask needs execution.
+            *reason*: Human-readable reason for the first required re-run.
+            *subtask_decisions*: List of ``(subtask_name, should_run)`` tuples.
+        """
+        subtasks = self.get_wrapper_subtasks(task_name)
+        if not subtasks:
+            return True, "No subtasks discovered", []
+
+        task = self.get_task(task_name)
+
+        # 1. Check wrapper's own glue code hash (non-subtask lines).
+        wrapper_cache_key = self.wrapper_subtask_cache_key(task_name, "__wrapper__")
+        wrapper_cached = self.fetch_state(wrapper_cache_key)
+        wrapper_code_hashes, _ = self.build_task_code_hashes(task_name, task)
+        wrapper_glue_changed = self.code_changed(wrapper_code_hashes, wrapper_cached)
+
+        # 2. Walk subtasks in order; cascade once we find the first that needs to run.
+        cascade = wrapper_glue_changed or ignore_cache
+        first_reason: str | None = None
+        if wrapper_glue_changed:
+            first_reason = "Wrapper glue code changed"
+        if ignore_cache and not first_reason:
+            first_reason = "ignore_cache is set"
+
+        decisions: list[tuple[str, bool]] = []
+        for st_name in subtasks:
+            if cascade:
+                decisions.append((st_name, True))
+                continue
+            st_cache_key = self.wrapper_subtask_cache_key(task_name, st_name)
+            st_cached = self.fetch_state(st_cache_key)
+            st_task = self.get_task(st_name)
+            st_code_hashes, st_kind = self.build_task_code_hashes(st_name, st_task)
+
+            reason = None
+            if not st_cached:
+                reason = f"No cached state for subtask '{st_name}'"
+            elif st_cached.status == "FAILURE":
+                reason = f"Subtask '{st_name}' previously failed"
+            elif self.code_changed(st_code_hashes, st_cached, code_kind=st_kind):
+                descriptor = f"{st_kind} code" if st_kind else "Code"
+                reason = f"{descriptor} changed in subtask '{st_name}'"
+            elif not st_cached.end_time:
+                reason = f"Subtask '{st_name}' not finished"
+
+            if reason:
+                cascade = True
+                if not first_reason:
+                    first_reason = reason
+                decisions.append((st_name, True))
+            else:
+                decisions.append((st_name, False))
+
+        should_run = any(run for _, run in decisions)
+        return should_run, first_reason, decisions
+
     def should_call_on_main_flow(self, task_name: str) -> bool:
         """Check if the task should be called on the main flow."""
         task = self.get_task(task_name)
@@ -1403,6 +1512,20 @@ class TaskStateCache():
     def submit(self, task_name: str, parameters, ignore_cache: bool):
         """Submit Prefect task if task state is out-of-date (code or inputs changed)."""
         self.logger.debug(f"tscache.submit({task_name}, {parameters}, ignore_cache={ignore_cache}) called")
+
+        # Wrapper tasks use subtask-level caching
+        if self.is_wrapper_task(task_name):
+            should_run, reason, subtask_decisions = self.evaluate_wrapper_submission(
+                task_name, ignore_cache
+            )
+            if not should_run:
+                self.logger.info(f"Skipping wrapper task {task_name} (all subtasks cached)")
+                return None
+            self.logger.info(f"Submitting wrapper task {task_name} because {reason}")
+            # Vanilla-only for now; Prefect support deferred.
+            from kptn.caching.vanilla import run_wrapper_task
+            return run_wrapper_task(self.pipeline_config, task_name, subtask_decisions, reason)
+
         decision = self.evaluate_submission(task_name, parameters, ignore_cache)
         if not decision.should_run:
             self.logger.info(f"Skipping task {task_name}")

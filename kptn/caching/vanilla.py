@@ -249,3 +249,153 @@ def run_task_vanilla(
         run_single_task(pipeline_config, task_name, **kwargs)
 
     tscache.set_final_state(task_name, status="SUCCESS")
+
+
+def run_wrapper_task(
+    pipeline_config: PipelineConfig,
+    task_name: str,
+    subtask_decisions: list[tuple[str, bool]],
+    reason: str = "",
+):
+    """Execute a wrapper task with per-subtask caching.
+
+    Subtask functions are temporarily replaced in the wrapper's module
+    namespace with caching proxies.  Subtasks marked as *skip* become
+    no-ops; subtasks marked as *run* execute normally and have their
+    cache state updated on success.
+    """
+    from datetime import datetime
+    from kptn.caching.models import TaskState
+
+    tscache = TaskStateCache(pipeline_config)
+    logger = tscache.logger
+
+    subtask_should_run = {name: should_run for name, should_run in subtask_decisions}
+
+    # Load the wrapper's module and callable
+    task_obj = tscache.get_task(task_name)
+    wrapper_module = tscache._load_python_module_for_task(task_name, task_obj)
+    wrapper_callable = tscache.get_python_callable(task_name)
+
+    # Build a map of subtask_name → (module, original_function)
+    # so we can monkey-patch and restore.
+    originals: dict[str, tuple[object, str, object]] = {}
+
+    for st_name, should_run in subtask_decisions:
+        st_task = tscache.get_task(st_name)
+        st_func_name = tscache.get_py_func_name(st_name)
+        st_module = tscache._load_python_module_for_task(st_name, st_task)
+        original_fn = getattr(st_module, st_func_name, None)
+        if original_fn is None:
+            logger.warning(
+                "Subtask '%s' function '%s' not found in module; skipping patch",
+                st_name, st_func_name,
+            )
+            continue
+        originals[st_name] = (st_module, st_func_name, original_fn)
+
+    def _make_proxy(st_name: str, original_fn, should_run: bool):
+        """Create a caching proxy for a subtask function."""
+        cache_key = tscache.wrapper_subtask_cache_key(task_name, st_name)
+
+        def proxy(*args, **kwargs):
+            if not should_run:
+                logger.info(
+                    "Wrapper '%s' subtask '%s': skipping (cached)",
+                    task_name, st_name,
+                )
+                return None
+            logger.info(
+                "Wrapper '%s' subtask '%s': executing",
+                task_name, st_name,
+            )
+            # Record start
+            initial_state = TaskState(start_time=datetime.now().isoformat())
+            tscache.db_client.create_task(cache_key, initial_state)
+            try:
+                result = original_fn(*args, **kwargs)
+            except Exception:
+                # Record failure
+                fail_state = TaskState(
+                    status="FAILURE",
+                    updated_at=datetime.now().isoformat(),
+                )
+                tscache.db_client.update_task(cache_key, fail_state)
+                raise
+            # Record success with code hashes
+            st_task = tscache.get_task(st_name)
+            code_hashes, _ = tscache.build_task_code_hashes(st_name, st_task)
+            final_state = TaskState(
+                code_hashes=code_hashes if code_hashes else None,
+                status="SUCCESS",
+                end_time=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+            )
+            tscache.db_client.update_task(cache_key, final_state)
+            logger.info(
+                "Wrapper '%s' subtask '%s': completed successfully",
+                task_name, st_name,
+            )
+            return result
+
+        proxy.__name__ = original_fn.__name__
+        proxy.__qualname__ = getattr(original_fn, "__qualname__", original_fn.__name__)
+        proxy.__doc__ = getattr(original_fn, "__doc__", None)
+        return proxy
+
+    # Apply monkey patches
+    patched_modules: list[tuple[object, str, object]] = []
+    for st_name, (st_module, st_func_name, original_fn) in originals.items():
+        should_run = subtask_should_run.get(st_name, True)
+        proxy = _make_proxy(st_name, original_fn, should_run)
+        setattr(st_module, st_func_name, proxy)
+        patched_modules.append((st_module, st_func_name, original_fn))
+
+        # Also patch in the wrapper's own module if it imported the function
+        if hasattr(wrapper_module, st_func_name) and wrapper_module is not st_module:
+            wrapper_original = getattr(wrapper_module, st_func_name)
+            setattr(wrapper_module, st_func_name, proxy)
+            patched_modules.append((wrapper_module, st_func_name, wrapper_original))
+
+    try:
+        # Build runtime config and call the wrapper function
+        runtime_config = tscache.build_runtime_config(task_name=task_name)
+        func_args = tscache.get_py_func_args(task_name) or {}
+
+        import inspect
+        from kptn.util.task_args import plan_python_call
+
+        signature = inspect.signature(wrapper_callable)
+        call_args, call_kwargs, missing = plan_python_call(
+            signature, func_args, runtime_config,
+        )
+        if missing:
+            missing_list = ", ".join(sorted(missing))
+            raise TypeError(
+                f"Wrapper task '{task_name}' callable is missing required arguments: {missing_list}"
+            )
+
+        logger.info("Executing wrapper task '%s' (%s)", task_name, reason)
+        wrapper_callable(*call_args, **call_kwargs)
+
+        # Record wrapper glue code hash
+        wrapper_cache_key = tscache.wrapper_subtask_cache_key(task_name, "__wrapper__")
+        wrapper_code_hashes, _ = tscache.build_task_code_hashes(task_name, task_obj)
+        wrapper_state = TaskState(
+            code_hashes=wrapper_code_hashes if wrapper_code_hashes else None,
+            status="SUCCESS",
+            end_time=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
+        )
+        tscache.db_client.create_task(wrapper_cache_key, wrapper_state)
+        tscache.db_client.update_task(wrapper_cache_key, wrapper_state)
+
+        logger.info("Wrapper task '%s' completed successfully", task_name)
+
+    except Exception as exc:
+        logger.error("Wrapper task '%s' failed: %s", task_name, exc)
+        raise
+    finally:
+        # Restore all original functions
+        for module, func_name, original_fn in patched_modules:
+            setattr(module, func_name, original_fn)

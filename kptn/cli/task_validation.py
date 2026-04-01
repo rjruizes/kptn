@@ -420,7 +420,77 @@ def _validate_python_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str
     return errors
 
 
+def _validate_wrapper_tasks(base_dir: Path, kap_conf: dict[str, Any]) -> list[str]:
+    """Validate wrapper task configuration.
+
+    Checks that:
+    - Wrapper tasks are Python tasks (not R or SQL).
+    - The wrapper function can be scanned for subtask calls.
+    - At least one subtask is discovered.
+    - All discovered subtasks have entries in the ``tasks:`` block.
+    """
+    settings = kap_conf.get("settings") or {}
+    tasks_def = kap_conf.get("tasks") or {}
+    errors: list[str] = []
+
+    py_dirs: list[str] = []
+    py_tasks_dir_entry = settings.get("py_tasks_dir")
+    if py_tasks_dir_entry is not None:
+        try:
+            py_tasks_dir_values = normalise_dir_setting(
+                py_tasks_dir_entry, setting_name="py_tasks_dir",
+            )
+        except (TypeError, ValueError):
+            py_tasks_dir_values = []
+        for entry in py_tasks_dir_values:
+            entry_path = Path(entry)
+            resolved = (
+                (base_dir / entry_path).resolve()
+                if not entry_path.is_absolute()
+                else entry_path.resolve()
+            )
+            py_dirs.append(str(resolved))
+    if not py_dirs:
+        py_dirs.append(str(base_dir.resolve()))
+
+    for task_name, task_config in tasks_def.items():
+        if not isinstance(task_config, dict):
+            continue
+        if not task_config.get("wrapper"):
+            continue
+
+        file_entry = task_config.get("file")
+        if not isinstance(file_entry, str):
+            errors.append(f"Wrapper task '{task_name}': missing 'file' field")
+            continue
+        file_path_str, _ = parse_task_file_spec(file_entry)
+        suffix = Path(file_path_str).suffix.lower()
+        if suffix not in {".py", ".pyw"}:
+            errors.append(
+                f"Wrapper task '{task_name}': must be a Python task (got '{suffix}' file)"
+            )
+            continue
+
+        try:
+            from kptn.caching.wrapper import discover_wrapper_subtasks
+            subtasks = discover_wrapper_subtasks(task_name, tasks_def, py_dirs=py_dirs)
+        except Exception as exc:
+            errors.append(
+                f"Wrapper task '{task_name}': subtask discovery failed: {exc}"
+            )
+            continue
+
+        if not subtasks:
+            errors.append(
+                f"Wrapper task '{task_name}': no known subtasks discovered "
+                f"(the wrapper function does not call any tasks defined in 'tasks:')"
+            )
+
+    return errors
+
+
 __all__ = [
     "_build_pipeline_config",
     "_validate_python_tasks",
+    "_validate_wrapper_tasks",
 ]

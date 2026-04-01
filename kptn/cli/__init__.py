@@ -35,6 +35,7 @@ from kptn.read_config import read_config
 from kptn.cli.task_validation import (
     _build_pipeline_config,
     _validate_python_tasks,
+    _validate_wrapper_tasks,
 )
 from kptn.lineage import SqlLineageAnalyzer, SqlLineageError, TableMetadata
 from kptn.lineage.html_renderer import render_lineage_html
@@ -494,6 +495,13 @@ def validate(
     if python_issues:
         typer.echo("kptn.yaml contains task configuration errors:")
         for issue in python_issues:
+            typer.echo(f"- {issue}")
+        raise typer.Exit(1)
+
+    wrapper_issues = _validate_wrapper_tasks(base_dir, kap_conf)
+    if wrapper_issues:
+        typer.echo("kptn.yaml contains wrapper task configuration errors:")
+        for issue in wrapper_issues:
             typer.echo(f"- {issue}")
         raise typer.Exit(1)
 
