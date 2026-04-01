@@ -94,3 +94,23 @@ def test_extends_args_override():
 
     args = cache.get_py_func_args("a")
     assert args == {"foo": "override", "bar": 1}
+
+
+def test_ordered_pipeline_tasks_is_topological_not_yaml_order():
+    cache = object.__new__(TaskStateCache)
+    cache.pipeline_name = "pipe"
+    cache.pipeline_config = SimpleNamespace(PIPELINE_NAME="pipe")
+    cache.tasks_config = {
+        "graphs": {
+            "pipe": {
+                "tasks": {
+                    "c": "b",
+                    "a": None,
+                    "b": "a",
+                }
+            }
+        },
+        "tasks": {},
+    }
+
+    assert cache._ordered_pipeline_tasks("pipe") == ["a", "b", "c"]

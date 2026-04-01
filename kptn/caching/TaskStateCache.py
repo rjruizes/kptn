@@ -7,6 +7,7 @@ import importlib.util
 import logging
 import os
 import json
+import shutil
 import sys
 from typing import Callable, Optional, Union, Mapping, Iterable, Any
 from types import ModuleType
@@ -18,6 +19,7 @@ import inspect
 from kptn.caching.Hasher import Hasher
 from kptn.caching.models import TaskState
 from kptn.caching.client.DbClientBase import DbClientBase, init_db_client
+from kptn.codegen.lib.stepfunctions import topological_sort
 from kptn.util.flow_type import is_flow_prefect
 from kptn.util.logger import get_logger
 from kptn.util.pipeline_config import PipelineConfig, get_storage_key
@@ -239,6 +241,7 @@ class TaskStateCache():
         self = cls._instance
         if self is None:
             self = super(TaskStateCache, cls).__new__(cls)
+            cls._instance = self
             self.pipeline_config = pipeline_config
             storage_key = get_storage_key(pipeline_config)
             self.pipeline_name = pipeline_config.PIPELINE_NAME
@@ -286,7 +289,13 @@ class TaskStateCache():
                 r_task_dirs.append(self.tasks_root_dir)
             self.r_task_dirs = r_task_dirs
 
-            self.runtime_config = self.build_runtime_config()
+            self.logger = get_logger(pipeline_config)
+            bootstrap_runtime_config = self.build_runtime_config()
+            restored = self.restore_initial_duckdb_checkpoint(bootstrap_runtime_config)
+            if restored is not None:
+                self._close_duckdb_connection(bootstrap_runtime_config)
+                bootstrap_runtime_config = self.build_runtime_config()
+            self.runtime_config = bootstrap_runtime_config
             self.hasher = Hasher(
                 r_dirs=[str(path) for path in self.r_task_dirs],
                 output_dir=pipeline_config.scratch_dir,
@@ -295,7 +304,6 @@ class TaskStateCache():
                 runtime_config=self.runtime_config,
                 pipeline_config=pipeline_config,
             )
-            self.logger = get_logger(pipeline_config)
             self._duckdb_sql_functions: dict[str, Callable[..., object]] = {}
             self._python_module_cache: dict[str, ModuleType] = {}
             self._task_has_prior_runs: dict[str, bool] = {}
@@ -354,6 +362,18 @@ class TaskStateCache():
         graphs_block = self.tasks_config.get("graphs") if isinstance(self.tasks_config, Mapping) else None
         graph_def = graphs_block.get(pipeline_name) if isinstance(graphs_block, Mapping) else None
         return _extract_graph_config(graph_def, graph_name=pipeline_name)
+
+    def _ordered_pipeline_tasks(self, pipeline_name: str) -> list[str]:
+        """Return tasks ordered from earliest to furthest along in the pipeline."""
+        graph_tasks = self._graph_tasks(pipeline_name)
+        deps_lookup: dict[str, Any] = {}
+        task_order = list(graph_tasks.keys())
+        for task_name, entry in graph_tasks.items():
+            if isinstance(entry, Mapping):
+                deps_lookup[task_name] = entry.get("deps")
+            else:
+                deps_lookup[task_name] = entry
+        return topological_sort(task_order, deps_lookup)
 
     def get_dep_list(self, task_name: str) -> list[str]:
         """Return the names of the dependencies of a task."""
@@ -418,6 +438,178 @@ class TaskStateCache():
         """Check if the task should be called on the main flow."""
         task = self.get_task(task_name)
         return task.get("main_flow") == True
+
+    def get_duckdb_checkpoint(self, task_name: str, task: dict | None = None) -> bool:
+        """Return whether DuckDB checkpointing is enabled for a task."""
+        if task is None:
+            task = self.get_task(task_name)
+        raw = task.get("duckdb_checkpoint")
+        if raw is None:
+            return False
+        if not isinstance(raw, bool):
+            raise TypeError(
+                f"Task '{task_name}' duckdb_checkpoint must be a boolean"
+            )
+        return raw
+
+    def _active_duckdb_database_path(self, runtime_config: RuntimeConfig) -> Path | None:
+        """Return the backing database path for the configured DuckDB connection, if file-based."""
+        conn = getattr(runtime_config, "duckdb", None)
+        if conn is None:
+            return None
+        try:
+            rows = conn.execute("PRAGMA database_list").fetchall()
+        except Exception as exc:
+            self.logger.warning("Unable to inspect DuckDB database path: %s", exc)
+            return None
+
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 3:
+                continue
+            _, name, path_value = row[:3]
+            if name == "temp" or not path_value:
+                continue
+            return Path(path_value).resolve()
+        return None
+
+    def _default_duckdb_checkpoint_path(
+        self,
+        db_path: Path,
+        task_name: str,
+        *,
+        key: str | None = None,
+    ) -> Path:
+        identifier = task_name if not key else f"{task_name}-{key}"
+        safe_identifier = "".join(
+            char if char.isalnum() or char in {"-", "_"} else "-"
+            for char in identifier
+        ).strip("-")
+        if not safe_identifier:
+            safe_identifier = task_name
+        suffix = db_path.suffix or ".ddb"
+        filename = f"{db_path.stem}.{safe_identifier}.backup{suffix}"
+        return db_path.with_name(filename)
+
+    def _resolve_duckdb_checkpoint_path(
+        self,
+        task_name: str,
+        db_path: Path,
+        *,
+        key: str | None = None,
+    ) -> Path:
+        return self._default_duckdb_checkpoint_path(db_path, task_name, key=key)
+
+    def _close_duckdb_connection(self, runtime_config: RuntimeConfig) -> None:
+        conn = getattr(runtime_config, "duckdb", None)
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception as exc:
+            self.logger.warning("Unable to close DuckDB connection cleanly: %s", exc)
+
+    def _duckdb_sidecar_paths(self, db_path: Path) -> list[Path]:
+        """Return auxiliary DuckDB files that should not survive a restore."""
+        return [
+            Path(f"{db_path}.wal"),
+        ]
+
+    def _copy_file_contents(self, source: Path, destination: Path) -> None:
+        """Copy bytes without filesystem clone optimisations."""
+        with source.open("rb") as src, destination.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+    def restore_duckdb_checkpoint(
+        self,
+        task_name: str,
+        runtime_config: RuntimeConfig,
+        *,
+        key: str | None = None,
+    ) -> Path | None:
+        """Restore a DuckDB database from its checkpoint if one exists."""
+        db_path = self._active_duckdb_database_path(runtime_config)
+        if db_path is None:
+            return None
+
+        backup_path = self._resolve_duckdb_checkpoint_path(
+            task_name,
+            db_path,
+            key=key,
+        )
+        if not backup_path.exists():
+            return None
+
+        self._close_duckdb_connection(runtime_config)
+        for sidecar_path in self._duckdb_sidecar_paths(db_path):
+            with suppress(FileNotFoundError):
+                sidecar_path.unlink()
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        self._copy_file_contents(backup_path, db_path)
+        self.logger.info(
+            "Restored DuckDB checkpoint for task %s from %s",
+            task_name,
+            backup_path,
+        )
+        return backup_path
+
+    def save_duckdb_checkpoint(
+        self,
+        task_name: str,
+        runtime_config: RuntimeConfig,
+        *,
+        key: str | None = None,
+    ) -> Path | None:
+        """Flush and back up a file-backed DuckDB database for a task."""
+        db_path = self._active_duckdb_database_path(runtime_config)
+        if db_path is None:
+            return None
+
+        conn = getattr(runtime_config, "duckdb", None)
+        if conn is None:
+            return None
+
+        try:
+            conn.execute("checkpoint")
+        except Exception as exc:
+            self.logger.warning("DuckDB checkpoint failed for task %s: %s", task_name, exc)
+
+        self._close_duckdb_connection(runtime_config)
+        if not db_path.exists():
+            self.logger.warning(
+                "DuckDB database file does not exist after task %s finished: %s",
+                task_name,
+                db_path,
+            )
+            return None
+
+        backup_path = self._resolve_duckdb_checkpoint_path(
+            task_name,
+            db_path,
+            key=key,
+        )
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        self._copy_file_contents(db_path, backup_path)
+        self.logger.info(
+            "Saved DuckDB checkpoint for task %s to %s",
+            task_name,
+            backup_path,
+        )
+        return backup_path
+
+    def restore_initial_duckdb_checkpoint(self, runtime_config: RuntimeConfig) -> Path | None:
+        """Restore the latest configured DuckDB checkpoint before task execution begins."""
+        try:
+            task_names = self._ordered_pipeline_tasks(self.pipeline_name)
+        except Exception:
+            return None
+
+        for task_name in reversed(task_names):
+            if not self.get_duckdb_checkpoint(task_name):
+                continue
+            restored = self.restore_duckdb_checkpoint(task_name, runtime_config)
+            if restored is not None:
+                return restored
+        return None
 
     def _parse_file_spec(self, task_name: str, task: dict | None = None) -> tuple[str, str | None]:
         if task is None:
@@ -1360,6 +1552,7 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
         for arg_name, arg_value in func_args.items():
             if arg_name not in kwargs:
                 kwargs[arg_name] = arg_value
+    checkpoint = tscache.get_duckdb_checkpoint(task_name)
     runtime_config = tscache.build_runtime_config(task_name=task_name)
     task_callable = tscache.get_python_callable(task_name)
     signature = inspect.signature(task_callable)
@@ -1375,6 +1568,12 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
         )
 
     result = task_callable(*call_args, **call_kwargs)
+    if checkpoint:
+        tscache.save_duckdb_checkpoint(
+            task_name,
+            runtime_config,
+            key=key,
+        )
     if key:
         tscache.db_client.set_subtask_ended(task_name, idx)
     else:

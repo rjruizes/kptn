@@ -25,6 +25,7 @@ graphs:
 tasks:
   raw_numbers:
     file: src/raw_numbers.sql # file://./src/raw_numbers.sql
+    duckdb_checkpoint: true
     outputs:
     - duckdb://main.raw_numbers
   fruit_metrics:

@@ -14,6 +14,7 @@ def _build_runtime_config(entries: dict) -> RuntimeConfig:
 
 def _make_cache(tmp_path: Path) -> TaskStateCache:
     cache = object.__new__(TaskStateCache)
+    cache.pipeline_name = "pipe"
     cache.tasks_root_dir = tmp_path
     cache.duckdb_tasks_dir = tmp_path
     cache.tasks_config = {"tasks": {}, "config": {}}
@@ -121,15 +122,27 @@ def test_statement_parameters_detect_dollar_notation(tmp_path):
 
 
 class FakeConn:
-    def __init__(self):
+    def __init__(self, db_path: str | None = None):
         self.calls: list[tuple[str, object | None]] = []
+        self.db_path = db_path
+        self.closed = False
+        self._last_sql = None
 
     def execute(self, sql, params=None):
         self.calls.append((sql, params))
+        self._last_sql = sql
         return self
 
     def fetchone(self):
         return None
+
+    def fetchall(self):
+        if self._last_sql == "PRAGMA database_list":
+            return [(592, "memory" if self.db_path is None else "main", self.db_path)]
+        return []
+
+    def close(self):
+        self.closed = True
 
 
 def test_duckdb_sql_runner_executes_statements_individually(tmp_path):
@@ -228,3 +241,71 @@ def test_flow_type_override_honors_env(monkeypatch, tmp_path):
 
     monkeypatch.setenv("KPTN_FLOW_TYPE", "prefect")
     assert cache.is_flow_prefect()
+
+
+def test_get_duckdb_checkpoint_supports_boolean(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.tasks_config["tasks"] = {"duck": {"file": "duck.sql", "duckdb_checkpoint": True}}
+
+    checkpoint = cache.get_duckdb_checkpoint("duck")
+
+    assert checkpoint is True
+
+
+def test_get_duckdb_checkpoint_rejects_non_boolean(tmp_path):
+    cache = _make_cache(tmp_path)
+    cache.tasks_config["tasks"] = {"duck": {"file": "duck.sql", "duckdb_checkpoint": "yes"}}
+
+    try:
+        cache.get_duckdb_checkpoint("duck")
+    except TypeError as exc:
+        assert "must be a boolean" in str(exc)
+    else:
+        raise AssertionError("Expected TypeError for non-boolean duckdb_checkpoint")
+
+
+def test_duckdb_checkpoint_restore_and_save_skip_memory(tmp_path):
+    cache = _make_cache(tmp_path)
+    runtime_config = _build_runtime_config({"duckdb": FakeConn()})
+
+    assert cache.restore_duckdb_checkpoint("duck", runtime_config) is None
+    assert cache.save_duckdb_checkpoint("duck", runtime_config) is None
+
+
+def test_duckdb_checkpoint_restore_and_save_for_file_backed_db(tmp_path):
+    cache = _make_cache(tmp_path)
+    db_path = tmp_path / "example.ddb"
+    db_path.write_text("current-db", encoding="utf-8")
+    wal_path = Path(f"{db_path}.wal")
+    wal_path.write_text("stale wal", encoding="utf-8")
+    conn = FakeConn(str(db_path))
+    runtime_config = _build_runtime_config({"duckdb": conn})
+    backup_path = tmp_path / "example.init_database.backup.ddb"
+    backup_path.write_text("saved-db", encoding="utf-8")
+
+    restored = cache.restore_duckdb_checkpoint("init_database", runtime_config)
+
+    assert restored == backup_path.resolve()
+    assert db_path.read_text(encoding="utf-8") == "saved-db"
+    assert not wal_path.exists()
+    assert conn.closed
+
+    conn_after = FakeConn(str(db_path))
+    runtime_after = _build_runtime_config({"duckdb": conn_after})
+    db_path.write_text("fresh-db", encoding="utf-8")
+
+    saved = cache.save_duckdb_checkpoint("init_database", runtime_after)
+
+    assert saved == backup_path.resolve()
+    assert backup_path.read_text(encoding="utf-8") == "fresh-db"
+    assert ("checkpoint", None) in conn_after.calls
+    assert conn_after.closed
+
+
+def test_duckdb_checkpoint_default_path_includes_task_name_and_key(tmp_path):
+    cache = _make_cache(tmp_path)
+    db_path = tmp_path / "example.ddb"
+
+    path = cache._default_duckdb_checkpoint_path(db_path, "init_database", key="a/b")
+
+    assert path == tmp_path / "example.init_database-a-b.backup.ddb"

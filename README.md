@@ -108,6 +108,7 @@ Create a file, `kptn.yaml` that contains definitions of the graphs of tasks and 
   <tr><td>tasks.[task_id].group_size</td><td>If `map_over` is set, an integer defining the number of subtasks sent to the Dask scheduler at one time. Default is infinity. For a large number of subtasks, setting a max on this number can prevent the scheduler from getting overwhelmed.</td><td>No</td></tr>
   <tr><td>tasks.[task_id].outputs</td><td>A list of files that the script outputs</td><td>No</td></tr>
   <tr><td>tasks.[task_id].compute</td><td>A dictionary that can contain two fields, cpu and memory, corresponding to the <a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#task_size">Fargate task definition values</a></td><td>No</td></tr>
+  <tr><td>tasks.[task_id].duckdb_checkpoint</td><td>Optional DuckDB file checkpointing for Python or DuckDB SQL tasks. If set to <code>true</code>, kptn saves a task-specific checkpoint after the task succeeds. At process startup, kptn restores the checkpoint from the task furthest along in the pipeline that has an existing checkpoint file.</td><td>No</td></tr>
   <tr><td>tasks.[task_id].tags</td><td>A list of strings, which will be used as the Prefect task's <a href="https://docs.prefect.io/v3/develop/write-tasks#tags">tags</a>; useful for <a href="https://docs.prefect.io/v3/develop/task-run-limits#limit-concurrent-task-runs-with-tags">concurrency limits</a></td><td>No</td></tr>
   </tbody>
 </table>
@@ -153,6 +154,36 @@ settings:
   logging:
     file: log/kptn.log
 ```
+
+### DuckDB Checkpoints
+
+If `config.duckdb` resolves to a file-backed DuckDB connection, individual tasks can opt into saving checkpoints.
+
+```yaml
+config:
+  duckdb:
+    function: src.utils:get_engine
+
+tasks:
+  init_database:
+    file: src/init_database.py
+    duckdb_checkpoint: true
+```
+
+Behavior:
+
+- At process startup, kptn restores the checkpoint from the task furthest along in the pipeline that has an existing checkpoint file.
+- `duckdb_checkpoint: true` only controls whether a task saves a checkpoint after it succeeds.
+- After a checkpointed task succeeds, kptn runs `checkpoint`, closes the DuckDB connection, and copies the refreshed database file to that task's default checkpoint path.
+- The checkpoint path is task-specific and is written next to the DuckDB database file using the format `<db_stem>.<task_name>.backup<db_suffix>`; for example, `example.ddb` and task `basic` produce `example.basic.backup.ddb`.
+- If the DuckDB connection is in-memory, checkpointing is skipped.
+
+Current scope:
+
+- This startup restore behavior is intended for pipelines that do not use `map_over` on checkpointed tasks.
+- The current implementation is designed for environments that intentionally share cache state via `settings.cache_namespace`.
+
+This is intended to replace one-off task logic like “restore the latest existing checkpoint at startup, then save fresh checkpoints at selected tasks” with a declarative task setting in `kptn.yaml`.
 
 ## Local runners for Step Functions projects
 
