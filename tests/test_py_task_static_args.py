@@ -199,7 +199,10 @@ def test_py_task_checkpoint_saves_after_success(tmp_path, monkeypatch):
     finally:
         TaskStateCache._instance = None
 
-    assert build_calls["count"] == 1
+    # py_task now calls build_runtime_config twice: once to build the per-task
+    # config before running the callable, and once to re-establish the bootstrap
+    # config after the task so that subsequent tasks have a valid DuckDB connection.
+    assert build_calls["count"] == 2
     assert db_path.read_text(encoding="utf-8") == "task output"
     assert backup_path.read_text(encoding="utf-8") == "task output"
     assert cache.db_client.task_ended[0][1] is None
