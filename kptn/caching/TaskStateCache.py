@@ -296,6 +296,7 @@ class TaskStateCache():
                 self._close_duckdb_connection(bootstrap_runtime_config)
                 bootstrap_runtime_config = self.build_runtime_config()
             self.runtime_config = bootstrap_runtime_config
+            self._wire_duckdb_client(bootstrap_runtime_config)
             self.hasher = Hasher(
                 r_dirs=[str(path) for path in self.r_task_dirs],
                 output_dir=pipeline_config.scratch_dir,
@@ -312,6 +313,16 @@ class TaskStateCache():
     def __str__(self):
         storage_key = get_storage_key(self.pipeline_config)
         return f"TaskStateCache(storage_key={storage_key}, client={self.db_client}, tasks_config={self.tasks_config})"
+
+    def _wire_duckdb_client(self, runtime_config: RuntimeConfig) -> None:
+        """Provide the DuckDB connection to the db_client if it is a DbClientDuckDB."""
+        from kptn.caching.client.DbClientDuckDB import DbClientDuckDB
+
+        if not isinstance(self.db_client, DbClientDuckDB):
+            return
+        conn = getattr(runtime_config, "duckdb", None)
+        if conn is not None:
+            self.db_client.wire_conn(conn)
 
     def _flow_type_override(self) -> str | None:
         """Return flow type override from environment, if provided."""
@@ -1691,17 +1702,18 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
         )
 
     result = task_callable(*call_args, **call_kwargs)
+    # Write kptn state before saving the checkpoint so the completion record
+    # is included in the checkpoint file and survives a restore.
+    if key:
+        tscache.db_client.set_subtask_ended(task_name, idx)
+    else:
+        tscache.db_client.set_task_ended(task_name, result=result, result_hash=hash_obj(result), subset_mode=pipeline_config.SUBSET_MODE)
     if checkpoint:
         tscache.save_duckdb_checkpoint(
             task_name,
             runtime_config,
             key=key,
         )
-    if key:
-        tscache.db_client.set_subtask_ended(task_name, idx)
-    else:
-        tscache.db_client.set_task_ended(task_name, result=result, result_hash=hash_obj(result), subset_mode=pipeline_config.SUBSET_MODE)
-    
 
 def run_task(
     pipeline_config: PipelineConfig, task_name: str, reason: str = ""

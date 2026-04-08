@@ -69,5 +69,13 @@ def init_db_client(table_name, storage_key, pipeline, tasks_config=None, tasks_c
             pipeline=pipeline,
             tasks_config_path=tasks_config_path,
         )
+    elif db_type == "duckdb":
+        from kptn.caching.client.DbClientDuckDB import DbClientDuckDB
+        return DbClientDuckDB(
+            table_name=table_name,
+            storage_key=storage_key,
+            pipeline=pipeline,
+            tasks_config_path=tasks_config_path,
+        )
     else:
-        raise ValueError(f"Unsupported database type: {db_type}. Supported types are: dynamodb, sqlite")
+        raise ValueError(f"Unsupported database type: {db_type}. Supported types are: dynamodb, sqlite, duckdb")
