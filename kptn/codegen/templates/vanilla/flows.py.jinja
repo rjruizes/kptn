@@ -11,7 +11,6 @@ from kptn.util.pipeline_config import PipelineConfig
 {#- from kptn.util.runtime_config import ensure_pythonpath #}
 
 os.environ["KPTN_FLOW_TYPE"] = "vanilla"
-os.environ.setdefault("KPTN_DB_TYPE", "sqlite")
 
 VALID_TASKS: set[str] = { {% for name in task_names %}"{{ name }}"{% if not loop.last %}, {% endif %}{% endfor %} }
 

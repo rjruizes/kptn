@@ -39,4 +39,3 @@ def test_generate_files_emits_python_runner_for_stepfunctions(tmp_path, monkeypa
     assert runner_path.exists()
     runner_text = runner_path.read_text()
     assert 'KPTN_FLOW_TYPE' in runner_text
-    assert 'KPTN_DB_TYPE' in runner_text

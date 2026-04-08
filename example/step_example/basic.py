@@ -6,7 +6,6 @@ from kptn.runner import cli_parser, parse_and_validate_tasks
 from kptn.util.pipeline_config import PipelineConfig
 
 os.environ["KPTN_FLOW_TYPE"] = "vanilla"
-os.environ.setdefault("KPTN_DB_TYPE", "sqlite")
 
 VALID_TASKS: set[str] = { "a", "b", "c", "d", "list_items", "process_item" }
 
