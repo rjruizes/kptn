@@ -3,7 +3,7 @@ settings:
   py_tasks_dir: "src" # Task code (.py)
   duckdb_tasks_dir: "src" # DuckDB SQL scripts (.sql)
   flow_type: vanilla # Workflow type is vanilla python (no framework)
-  db: sqlite
+  db: duckdb
 
 config:
   my_global: 42
