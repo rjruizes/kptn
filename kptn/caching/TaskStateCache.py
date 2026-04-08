@@ -1676,6 +1676,12 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
             if arg_name not in kwargs:
                 kwargs[arg_name] = arg_value
     checkpoint = tscache.get_duckdb_checkpoint(task_name)
+    # Close the stored bootstrap connection before opening the per-task one.
+    # Tasks that replace their backing database file (e.g. init_database) can
+    # then close the per-task connection too, leaving zero open handles so
+    # DuckDB purges its in-process registry and the next connect() reads the
+    # new file from disk rather than returning the stale in-memory catalog.
+    tscache._close_duckdb_connection(tscache.runtime_config)
     runtime_config = tscache.build_runtime_config(task_name=task_name)
     task_callable = tscache.get_python_callable(task_name)
     signature = inspect.signature(task_callable)
@@ -1701,7 +1707,11 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
         tscache.db_client.set_subtask_ended(task_name, idx)
     else:
         tscache.db_client.set_task_ended(task_name, result=result, result_hash=hash_obj(result), subset_mode=pipeline_config.SUBSET_MODE)
-    
+
+    # Re-establish the bootstrap runtime config so that the Hasher and any
+    # subsequent tasks in the same process have a valid DuckDB connection.
+    tscache.runtime_config = tscache.build_runtime_config()
+
 
 def run_task(
     pipeline_config: PipelineConfig, task_name: str, reason: str = ""
