@@ -172,9 +172,9 @@ tasks:
 
 Behavior:
 
-- At process startup, kptn restores the checkpoint from the task furthest along in the pipeline that has an existing checkpoint file.
+- At process startup, kptn restores the checkpoint from the task furthest along in the pipeline that has an existing checkpoint file, but only when the checkpoint task does not already have a completed cached state in the database. This prevents the restore from discarding cached state for tasks that ran after the checkpoint was saved.
 - `duckdb_checkpoint: true` only controls whether a task saves a checkpoint after it succeeds.
-- After a checkpointed task succeeds, kptn runs `checkpoint`, closes the DuckDB connection, and copies the refreshed database file to that task's default checkpoint path.
+- After a checkpointed task succeeds and its final state (code hashes, status) has been written, kptn runs `checkpoint`, closes the DuckDB connection, and copies the refreshed database file to that task's default checkpoint path.
 - The checkpoint path is task-specific and is written next to the DuckDB database file using the format `<db_stem>.<task_name>.backup<db_suffix>`; for example, `example.ddb` and task `basic` produce `example.basic.backup.ddb`.
 - If the DuckDB connection is in-memory, checkpointing is skipped.
 

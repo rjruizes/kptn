@@ -291,12 +291,15 @@ class TaskStateCache():
 
             self.logger = get_logger(pipeline_config)
             bootstrap_runtime_config = self.build_runtime_config()
+            # Wire the db_client early so restore_initial_duckdb_checkpoint
+            # can check existing task state before deciding to restore.
+            self._wire_duckdb_client(bootstrap_runtime_config)
             restored = self.restore_initial_duckdb_checkpoint(bootstrap_runtime_config)
             if restored is not None:
                 self._close_duckdb_connection(bootstrap_runtime_config)
                 bootstrap_runtime_config = self.build_runtime_config()
+                self._wire_duckdb_client(bootstrap_runtime_config)
             self.runtime_config = bootstrap_runtime_config
-            self._wire_duckdb_client(bootstrap_runtime_config)
             self.hasher = Hasher(
                 r_dirs=[str(path) for path in self.r_task_dirs],
                 output_dir=pipeline_config.scratch_dir,
@@ -717,7 +720,13 @@ class TaskStateCache():
         return backup_path
 
     def restore_initial_duckdb_checkpoint(self, runtime_config: RuntimeConfig) -> Path | None:
-        """Restore the latest configured DuckDB checkpoint before task execution begins."""
+        """Restore the latest configured DuckDB checkpoint before task execution begins.
+
+        Skips the restore when the checkpoint task already has a completed
+        cached state in the current database, since overwriting the database
+        file would discard cached state for tasks that ran after the
+        checkpoint was saved.
+        """
         try:
             task_names = self._ordered_pipeline_tasks(self.pipeline_name)
         except Exception:
@@ -726,6 +735,12 @@ class TaskStateCache():
         for task_name in reversed(task_names):
             if not self.get_duckdb_checkpoint(task_name):
                 continue
+            # If the checkpoint task already completed successfully the
+            # database is in a known-good state — skip the restore to
+            # preserve cached state for later tasks.
+            cached_state = self.fetch_state(task_name)
+            if cached_state and cached_state.end_time:
+                return None
             restored = self.restore_duckdb_checkpoint(task_name, runtime_config)
             if restored is not None:
                 return restored
@@ -1694,6 +1709,7 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
     # new file from disk rather than returning the stale in-memory catalog.
     tscache._close_duckdb_connection(tscache.runtime_config)
     runtime_config = tscache.build_runtime_config(task_name=task_name)
+    tscache._wire_duckdb_client(runtime_config)
     task_callable = tscache.get_python_callable(task_name)
     signature = inspect.signature(task_callable)
     call_args, call_kwargs, missing = plan_python_call(
@@ -1714,20 +1730,14 @@ def py_task(pipeline_config: PipelineConfig, task_name: str, **kwargs):
         tscache.db_client.set_subtask_ended(task_name, idx)
     else:
         tscache.db_client.set_task_ended(task_name, result=result, result_hash=hash_obj(result), subset_mode=pipeline_config.SUBSET_MODE)
-    if checkpoint:
-        tscache.save_duckdb_checkpoint(
-            task_name,
-            runtime_config,
-            key=key,
-        )
-    if key:
-        tscache.db_client.set_subtask_ended(task_name, idx)
-    else:
-        tscache.db_client.set_task_ended(task_name, result=result, result_hash=hash_obj(result), subset_mode=pipeline_config.SUBSET_MODE)
-
-    # Re-establish the bootstrap runtime config so that the Hasher and any
-    # subsequent tasks in the same process have a valid DuckDB connection.
+    # Close the per-task connection and re-establish the bootstrap runtime
+    # config so that the Hasher and any subsequent tasks in the same process
+    # have a valid DuckDB connection.  The DuckDB checkpoint (if configured)
+    # is saved later by the caller (run_task_vanilla) *after* set_final_state
+    # has written code hashes and status, so the backup includes all state.
+    tscache._close_duckdb_connection(runtime_config)
     tscache.runtime_config = tscache.build_runtime_config()
+    tscache._wire_duckdb_client(tscache.runtime_config)
 
 
 def run_task(

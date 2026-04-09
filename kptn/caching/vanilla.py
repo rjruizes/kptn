@@ -250,6 +250,13 @@ def run_task_vanilla(
 
     tscache.set_final_state(task_name, status="SUCCESS")
 
+    # Save the DuckDB checkpoint *after* final state (code hashes, status) has
+    # been written so the backup includes complete cache state for the task.
+    if tscache.get_duckdb_checkpoint(task_name):
+        tscache.save_duckdb_checkpoint(task_name, tscache.runtime_config)
+        tscache.runtime_config = tscache.build_runtime_config()
+        tscache._wire_duckdb_client(tscache.runtime_config)
+
 
 def run_wrapper_task(
     pipeline_config: PipelineConfig,
