@@ -341,8 +341,12 @@ shared-local-instance.db
 *.whl
 example/step_example/infra/lambda_decider
 
-# BMad generated output (commit specific docs manually)
+# BMad
+_bmad/
 _bmad-output/
 
 # Claude Code / AI tooling local state
-.claude/memory/
+.claude/
+
+# Example data (large, not for version control)
+example/nibrs/
