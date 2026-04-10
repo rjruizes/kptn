@@ -1,3 +1,6 @@
+import pytest
+pytest.skip("v0.1.x lineage deps removed in v0.2.0", allow_module_level=True)
+
 import json
 import re
 

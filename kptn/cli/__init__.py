@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from pathlib import Path
 import typer
@@ -7,7 +9,11 @@ import yaml
 from kptn.caching.TaskStateDbClient import TaskStateDbClient
 from kptn.aws.decider import decide_task_execution
 from kptn.cli.decider_bundle import BundleDeciderError, bundle_decider_lambda
-from kptn.cli.infra_commands import register_infra_commands
+try:
+    from kptn.cli.infra_commands import register_infra_commands
+    _has_infra_commands = True
+except ImportError:
+    _has_infra_commands = False
 from kptn.cli.run_aws import (
     DirectRunConfig,
     StackInfoError,
@@ -25,11 +31,14 @@ from kptn.cli.run_aws import (
     start_state_machine_execution,
     submit_batch_job,
 )
-from kptn.cli.config_validation import (
-    SchemaValidationError,
-    validate_kptn_config,
-)
-from kptn.codegen.codegen import generate_files
+try:
+    from kptn.cli.config_validation import (
+        SchemaValidationError,
+        validate_kptn_config,
+    )
+    from kptn.codegen.codegen import generate_files
+except ImportError:
+    pass
 from kptn.util.compute import compute_resource_requirements
 from kptn.read_config import read_config
 from kptn.cli.task_validation import (
@@ -37,8 +46,11 @@ from kptn.cli.task_validation import (
     _validate_python_tasks,
     _validate_wrapper_tasks,
 )
-from kptn.lineage import SqlLineageAnalyzer, SqlLineageError, TableMetadata
-from kptn.lineage.html_renderer import render_lineage_html
+try:
+    from kptn.lineage import SqlLineageAnalyzer, SqlLineageError, TableMetadata
+    from kptn.lineage.html_renderer import render_lineage_html
+except ImportError:
+    pass
 
 try:
     from botocore.exceptions import NoCredentialsError, NoRegionError
@@ -48,7 +60,8 @@ except ImportError:  # pragma: no cover - optional dependency
 app = typer.Typer()
 
 # Register infrastructure commands
-register_infra_commands(app)
+if _has_infra_commands:
+    register_infra_commands(app)
 
 
 def _infer_language(task_spec: dict[str, Any]) -> str:

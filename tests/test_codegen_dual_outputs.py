@@ -1,3 +1,6 @@
+import pytest
+pytest.skip("v0.1.x codegen deps removed in v0.2.0", allow_module_level=True)
+
 from textwrap import dedent
 
 from kptn.codegen.codegen import generate_files

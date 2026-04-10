@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -44,7 +45,7 @@ def test_graph_config_overrides_base(tmp_path, monkeypatch):
 
     cache = TaskStateCache(
         pipeline_config,
-        db_client=None,
+        db_client=MagicMock(),
         tasks_config=tasks_config,
         tasks_config_paths=[str(config_path)],
     )

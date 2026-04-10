@@ -7,11 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12.5",
     "pyyaml",
-    "jinja2",
-    "requests",
     "pydantic",
-    "jsonschema==4.21.1",
-    "sqlglot>=26.3.8",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +45,7 @@ packages = ["kptn", "kptn_server"]
 dev = [
     "pytest>=8.4.2",
     "ruff>=0.14.6",
+    "ty",
 ]
 
 [tool.pytest.ini_options]

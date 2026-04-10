@@ -5,7 +5,6 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from pydantic import BaseModel, computed_field, model_validator
 
-from kptn.deploy.ecr_image import get_full_image_and_branch
 from kptn.util.filepaths import project_root
 import yaml
 
@@ -215,6 +214,7 @@ class PipelineConfig(BaseModel):
 
 def generateConfig(pipeline_name: str, r_tasks_dir_path: str, py_module_path: str, tasks_config_path: str = "", authproxy_endpoint=None, storage_key="") -> PipelineConfig:
     """Called locally to generate a PipelineConfig for a Prefect Deployment"""
+    from kptn.deploy.ecr_image import get_full_image_and_branch
     image, branch = get_full_image_and_branch(authproxy_endpoint)
     return PipelineConfig(
         IMAGE=image,

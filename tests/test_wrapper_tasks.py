@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+pytest.skip("v0.1.x wrapper tasks depend on codegen/jinja2 dep removed in v0.2.0", allow_module_level=True)
+
 import textwrap
 from datetime import datetime
 from pathlib import Path

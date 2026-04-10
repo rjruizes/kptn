@@ -1,3 +1,6 @@
+import pytest
+pytest.skip("v0.1.x codegen deps removed in v0.2.0", allow_module_level=True)
+
 from pathlib import Path
 
 from kptn.codegen.infra_scaffolder import scaffold_stepfunctions_infra

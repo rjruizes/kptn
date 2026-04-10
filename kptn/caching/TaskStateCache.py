@@ -11,7 +11,10 @@ import shutil
 import sys
 from typing import Callable, Optional, Union, Mapping, Iterable, Any
 from types import ModuleType
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None  # type: ignore[assignment]
 import time
 from pathlib import Path
 import inspect

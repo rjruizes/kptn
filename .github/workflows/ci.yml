@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Test
+        run: uv run pytest
+
+      - name: Lint
+        run: uv run ruff check kptn/exceptions.py kptn/graph kptn/profiles kptn/runner kptn/change_detector kptn/state_store kptn/quality
+
+      - name: Type check
+        run: uv run ty check kptn/exceptions.py kptn/graph kptn/profiles kptn/runner kptn/change_detector kptn/state_store kptn/quality

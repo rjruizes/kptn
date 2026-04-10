@@ -309,6 +309,9 @@ Temporary Items
 # Prefect
 .prefect/
 
+# kptn state store
+.kptn/
+
 # Application specific
 scratch/
 artifacts/
@@ -337,3 +340,9 @@ shared-local-instance.db
 **/.terraform
 *.whl
 example/step_example/infra/lambda_decider
+
+# BMad generated output (commit specific docs manually)
+_bmad-output/
+
+# Claude Code / AI tooling local state
+.claude/memory/
