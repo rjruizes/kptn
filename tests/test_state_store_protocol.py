@@ -18,9 +18,13 @@ def sqlite_backend(tmp_path):
     return SqliteBackend(path=str(tmp_path / "test.db"))
 
 
-@pytest.fixture(params=["sqlite"])
-def backend(request, sqlite_backend):
-    return {"sqlite": sqlite_backend}[request.param]
+@pytest.fixture(params=["sqlite", "duckdb"])
+def backend(request, tmp_path, sqlite_backend):
+    if request.param == "duckdb":
+        pytest.importorskip("duckdb")
+        from kptn.state_store.duckdb import DuckDbBackend
+        return DuckDbBackend(path=str(tmp_path / "test.duckdb"))
+    return sqlite_backend
 
 
 # ─── AC-1: Protocol is runtime-checkable ─────────────────────────────────── #

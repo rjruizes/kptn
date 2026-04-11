@@ -11,6 +11,7 @@ def init_state_store(settings: Any = None) -> StateStoreBackend:
     if db == "sqlite":
         return SqliteBackend(path=path)
     elif db == "duckdb":
-        raise NotImplementedError("DuckDB backend not yet available — implement in Story 2.2")
+        from kptn.state_store.duckdb import DuckDbBackend  # deferred — duckdb is optional
+        return DuckDbBackend(path=path)
     else:
         raise ValueError(f"Unknown state store backend {db!r}. Expected 'sqlite' or 'duckdb'.")

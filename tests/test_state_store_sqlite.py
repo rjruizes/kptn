@@ -196,17 +196,6 @@ def test_init_state_store_returns_sqlite_by_default(tmp_path):
     assert isinstance(backend, SqliteBackend)
 
 
-def test_init_state_store_raises_for_duckdb():
-    from kptn.state_store import init_state_store
-
-    class Settings:
-        db = "duckdb"
-        db_path = None
-
-    with pytest.raises(NotImplementedError, match="Story 2.2"):
-        init_state_store(Settings())
-
-
 def test_init_state_store_raises_for_unknown_backend():
     from kptn.state_store import init_state_store
 
