@@ -55,5 +55,11 @@ class PipelineNode:
     name: str  # the pipeline name — used by topo_sort cycle error reporting
 
 
-# Union of all node types present after Epic 1 Stories 1.1–1.6.
-AnyNode = Union[TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode]
+@dataclass
+class ConfigNode:
+    spec: dict[str, Callable[[], Any]]  # {param_name: factory_callable}
+    name: str = "config"                # sentinel label — topo_sort uses n.name
+
+
+# Union of all node types present after Epic 1 Stories 1.1–1.7.
+AnyNode = Union[TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode, ConfigNode]
