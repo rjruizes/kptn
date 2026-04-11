@@ -1,6 +1,11 @@
 # kptn package
 __version__ = "0.1.0"
 
+# v0.2.0 public API
+from kptn.graph.decorators import task  # noqa: F401
+
+__all__ = ["task"]
+
 import importlib.util
 import inspect
 import sys
