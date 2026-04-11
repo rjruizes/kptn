@@ -28,11 +28,25 @@ class RTaskNode:
     name: str           # = Path(path).stem  e.g. "script" from "path/to/script.R"
 
 
-# Union of all node types present after Epic 1 Stories 1.1–1.3.
-# Extend in later stories: add ParallelNode, StageNode, etc. to this union.
-AnyNode = Union[TaskNode, SqlTaskNode, RTaskNode]
+@dataclass
+class ParallelNode:
+    name: str = "parallel"   # optional label; passed as first positional string to parallel()
 
 
-# TODO: Story 1.4+ — ParallelNode, StageNode, NoopNode
+@dataclass
+class StageNode:
+    name: str                # required — stage name for profile selection (Epic 3)
+
+
+@dataclass
+class NoopNode:
+    name: str = "noop"       # sentinel label
+
+
+# Union of all node types present after Epic 1 Stories 1.1–1.4.
+# Extend in later stories: add MapNode, PipelineNode to this union.
+AnyNode = Union[TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode]
+
+
 # TODO: Story 1.5+ — MapNode
 # TODO: Story 1.6+ — PipelineNode

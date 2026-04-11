@@ -3,19 +3,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Union
 
-from kptn.graph.nodes import TaskNode, SqlTaskNode, RTaskNode, AnyNode
+from kptn.graph.nodes import TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, AnyNode
 from kptn.graph.decorators import SqlTaskSpec, RTaskSpec
 
 
 def _to_task_node(obj: Any) -> AnyNode:
     """Auto-wrap a kptn-tagged handle or node into the correct node type."""
-    if isinstance(obj, (TaskNode, SqlTaskNode, RTaskNode)):
+    if isinstance(obj, (TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode)):
         return obj
     if not hasattr(obj, "__kptn__"):
         raise TypeError(
-            f"Expected a @kptn.task-decorated callable or a kptn.sql_task/r_task handle, "
+            f"Expected a @kptn.task-decorated callable, a kptn task handle "
+            f"(sql_task/r_task), or a kptn graph operator result (parallel/Stage/noop), "
             f"got {type(obj).__name__!r}. "
-            "Use @kptn.task, kptn.sql_task(), or kptn.r_task() before composing with >>."
+            "Use @kptn.task, kptn.sql_task(), kptn.r_task(), kptn.noop(), "
+            "kptn.parallel(), or kptn.Stage() before composing with >>."
         )
     spec = obj.__kptn__
     if isinstance(spec, SqlTaskSpec):

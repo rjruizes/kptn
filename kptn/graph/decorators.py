@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from kptn.graph.graph import Graph   # avoids circular at runtime
 
 
 @dataclass
@@ -159,3 +162,20 @@ def r_task(
     """Return a composable handle for an R script task."""
     spec = RTaskSpec(path=path, outputs=outputs, compute=compute, optional=optional)
     return _RTaskHandle(spec)
+
+
+# ──────────────────────────────────────────────────────────────────────────── #
+# Noop factory                                                                  #
+# ──────────────────────────────────────────────────────────────────────────── #
+
+
+def noop() -> "Graph":
+    """Return a single-node Graph containing a NoopNode sentinel.
+
+    Usage:
+        A >> kptn.noop() >> B      # NoopNode between A and B
+    """
+    from kptn.graph.graph import Graph
+    from kptn.graph.nodes import NoopNode
+
+    return Graph(nodes=[NoopNode(name="noop")], edges=[])
