@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections import deque
 
 from kptn.graph.graph import Graph
-from kptn.graph.nodes import TaskNode
+from kptn.graph.nodes import AnyNode
 from kptn.exceptions import GraphError
 
 
-def topo_sort(graph: Graph) -> list[TaskNode]:
+def topo_sort(graph: Graph) -> list[AnyNode]:
     """
     Topological sort of graph nodes using Kahn's algorithm (BFS-based).
     Raises GraphError if a cycle is detected.
@@ -15,8 +15,8 @@ def topo_sort(graph: Graph) -> list[TaskNode]:
     """
     # Build adjacency and in-degree maps keyed by object identity
     in_degree: dict[int, int] = {id(n): 0 for n in graph.nodes}
-    successors: dict[int, list[TaskNode]] = {id(n): [] for n in graph.nodes}
-    node_by_id: dict[int, TaskNode] = {id(n): n for n in graph.nodes}
+    successors: dict[int, list[AnyNode]] = {id(n): [] for n in graph.nodes}
+    node_by_id: dict[int, AnyNode] = {id(n): n for n in graph.nodes}
 
     for src, dst in graph.edges:
         if id(src) not in in_degree or id(dst) not in in_degree:
@@ -27,11 +27,11 @@ def topo_sort(graph: Graph) -> list[TaskNode]:
         successors[id(src)].append(dst)
         in_degree[id(dst)] += 1
 
-    queue: deque[TaskNode] = deque(
+    queue: deque[AnyNode] = deque(
         n for n in graph.nodes if in_degree[id(n)] == 0
     )
 
-    result: list[TaskNode] = []
+    result: list[AnyNode] = []
 
     while queue:
         node = queue.popleft()

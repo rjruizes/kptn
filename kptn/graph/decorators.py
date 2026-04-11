@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 
@@ -66,3 +67,95 @@ def task(
         return _KptnCallable(fn, spec)
 
     return decorator  # type: ignore[return-value]
+
+
+# ──────────────────────────────────────────────────────────────────────────── #
+# SQL task factory                                                              #
+# ──────────────────────────────────────────────────────────────────────────── #
+
+
+@dataclass
+class SqlTaskSpec:
+    path: str
+    outputs: list[str]
+    optional: str | None = None
+
+    def __post_init__(self) -> None:
+        self.outputs = list(self.outputs)          # copy-on-init defensive guard
+
+
+class _SqlTaskHandle:
+    """
+    Returned by sql_task().  Enables >> without being a SqlTaskNode.
+    Pattern mirrors _KptnCallable: the Graph wraps this into a SqlTaskNode.
+
+    Not callable — SQL tasks are executed by the runner, not Python.
+    """
+
+    def __init__(self, spec: SqlTaskSpec) -> None:
+        self.__kptn__: SqlTaskSpec = spec
+        self.__name__: str = Path(spec.path).stem
+
+    def __rshift__(self, other: Any) -> Any:
+        from kptn.graph.graph import Graph
+
+        return Graph._from_node(self) >> other
+
+    def __repr__(self) -> str:
+        return f"<kptn sql_task '{self.__name__}'>"
+
+
+def sql_task(
+    path: str,
+    outputs: list[str],
+    optional: str | None = None,
+) -> _SqlTaskHandle:
+    """Return a composable handle for a SQL task file."""
+    spec = SqlTaskSpec(path=path, outputs=outputs, optional=optional)
+    return _SqlTaskHandle(spec)
+
+
+# ──────────────────────────────────────────────────────────────────────────── #
+# R task factory                                                                #
+# ──────────────────────────────────────────────────────────────────────────── #
+
+
+@dataclass
+class RTaskSpec:
+    path: str
+    outputs: list[str]
+    compute: str | None = None
+    optional: str | None = None
+
+    def __post_init__(self) -> None:
+        self.outputs = list(self.outputs)          # copy-on-init defensive guard
+
+
+class _RTaskHandle:
+    """
+    Returned by r_task().  Same pattern as _SqlTaskHandle.
+    Not callable — R tasks are dispatched as subprocesses by the runner.
+    """
+
+    def __init__(self, spec: RTaskSpec) -> None:
+        self.__kptn__: RTaskSpec = spec
+        self.__name__: str = Path(spec.path).stem
+
+    def __rshift__(self, other: Any) -> Any:
+        from kptn.graph.graph import Graph
+
+        return Graph._from_node(self) >> other
+
+    def __repr__(self) -> str:
+        return f"<kptn r_task '{self.__name__}'>"
+
+
+def r_task(
+    path: str,
+    outputs: list[str],
+    compute: str | None = None,
+    optional: str | None = None,
+) -> _RTaskHandle:
+    """Return a composable handle for an R script task."""
+    spec = RTaskSpec(path=path, outputs=outputs, compute=compute, optional=optional)
+    return _RTaskHandle(spec)

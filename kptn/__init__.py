@@ -2,9 +2,9 @@
 __version__ = "0.1.0"
 
 # v0.2.0 public API
-from kptn.graph.decorators import task  # noqa: F401
+from kptn.graph.decorators import task, sql_task, r_task  # noqa: F401
 
-__all__ = ["task"]
+__all__ = ["task", "sql_task", "r_task"]
 
 import importlib.util
 import inspect
