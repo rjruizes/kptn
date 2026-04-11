@@ -101,4 +101,24 @@ def Stage(name: str, *branches: Any) -> "Graph":
     return Graph(nodes=all_nodes, edges=all_edges)
 
 
-# TODO: Story 1.5+ — map() factory (MapNode, dynamic fanout)
+def map(task_fn: Any, *, over: str) -> "Graph":  # noqa: A001 — shadows builtin intentionally
+    """Create a dynamic fanout node over a runtime collection.
+
+    Usage:
+        kptn.map(process_item, over="ctx.states")
+
+    Returns a single-node Graph containing a MapNode.
+    Fanout count is unknown at compile time — expanded by the runner after the
+    collection-provider task runs (Epic 2). Each item gets its own cache entry:
+      {storage_key}:{pipeline_name}:{task_name}[{item_value}]
+    """
+    if not hasattr(task_fn, "__kptn__"):
+        raise TypeError(
+            f"Expected a @kptn.task-decorated callable, got {type(task_fn).__name__!r}. "
+            "Use @kptn.task before passing to kptn.map()."
+        )
+    from kptn.graph.graph import Graph
+    from kptn.graph.nodes import MapNode
+
+    name = getattr(task_fn, "__name__", repr(task_fn))
+    return Graph(nodes=[MapNode(task=task_fn, over=over, name=name)], edges=[])

@@ -43,10 +43,17 @@ class NoopNode:
     name: str = "noop"       # sentinel label
 
 
-# Union of all node types present after Epic 1 Stories 1.1–1.4.
-# Extend in later stories: add MapNode, PipelineNode to this union.
-AnyNode = Union[TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode]
+@dataclass
+class MapNode:
+    task: Callable[..., Any]   # @kptn.task-decorated callable (has __kptn__ attribute)
+    over: str                   # dotted path into runtime context, e.g. "ctx.states"
+    name: str                   # = task.__name__, used by topo_sort cycle error reporting
 
 
-# TODO: Story 1.5+ — MapNode
-# TODO: Story 1.6+ — PipelineNode
+@dataclass
+class PipelineNode:
+    name: str  # the pipeline name — used by topo_sort cycle error reporting
+
+
+# Union of all node types present after Epic 1 Stories 1.1–1.6.
+AnyNode = Union[TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode]

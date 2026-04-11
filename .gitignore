@@ -344,6 +344,7 @@ example/step_example/infra/lambda_decider
 # BMad
 _bmad/
 _bmad-output/
+.github/skills
 
 # Claude Code / AI tooling local state
 .claude/
