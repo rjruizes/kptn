@@ -351,3 +351,5 @@ _bmad-output/
 
 # Example data (large, not for version control)
 example/nibrs/
+# Example generated output
+example/minimal/output/

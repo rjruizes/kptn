@@ -1,0 +1,8 @@
+settings:
+  db_path: .kptn/kptn.db
+
+profiles:
+  dev:
+    args:
+      extract:
+        greeting: "Hello, dev!"

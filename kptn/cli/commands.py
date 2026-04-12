@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 import tomllib
 from pathlib import Path
 
@@ -30,6 +31,7 @@ def _load_pipeline_from_pyproject(project_root: Path) -> Pipeline:
             "Add: [tool.kptn]\npipeline = \"your_package.pipeline\""
         )
 
+    sys.path.insert(0, str(project_root))
     module = importlib.import_module(pipeline_module)
 
     pipeline_attr = getattr(module, "pipeline", None)
