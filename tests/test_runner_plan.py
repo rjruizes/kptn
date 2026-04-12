@@ -5,8 +5,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from typer.testing import CliRunner
 
-from kptn.exceptions import HashError
+from kptn.cli.commands import app
+from kptn.exceptions import HashError, ProfileError
 from kptn.graph.decorators import TaskSpec
 from kptn.graph.graph import Graph
 from kptn.graph.nodes import (
@@ -18,7 +20,9 @@ from kptn.graph.nodes import (
     StageNode,
     TaskNode,
 )
+from kptn.graph.pipeline import Pipeline
 from kptn.profiles.resolved import ResolvedGraph
+from kptn.profiles.schema import KptnConfig
 from kptn.runner.plan import plan
 from tests.fakes import FakeStateStore
 
@@ -228,3 +232,38 @@ def test_plan_topological_order(capsys: pytest.CaptureFixture) -> None:
     captured = capsys.readouterr()
     lines = [ln for ln in captured.out.splitlines() if ln]
     assert lines.index("[RUN] task_a") < lines.index("[RUN] task_b")
+
+
+# ─── AC-4: ProfileError exits non-zero with stderr, no partial output ─────────
+
+
+def test_plan_profile_error_exits_nonzero_stderr_no_partial_output() -> None:
+    """AC-4: ProfileError during compile → exit 1, message on stderr, no partial plan output."""
+    runner = CliRunner()
+    pipeline = Pipeline("default", Graph(nodes=[], edges=[]))
+
+    with (
+        patch("kptn.cli.commands._load_pipeline_from_pyproject", return_value=pipeline),
+        patch("kptn.cli.commands.ProfileLoader") as mock_loader,
+        patch("kptn.cli.commands.ProfileResolver") as mock_resolver,
+    ):
+        mock_loader.load.return_value = KptnConfig()
+        mock_resolver.return_value.compile.side_effect = ProfileError("stale ref: 'missing_branch'")
+        result = runner.invoke(app, ["plan", "--profile", "dev"])
+
+    assert result.exit_code == 1
+    assert "stale ref: 'missing_branch'" in result.stderr
+    assert result.stdout == ""
+
+
+# ─── P1 guard: MapNode.over = "" raises ValueError ────────────────────────────
+
+
+def test_plan_map_empty_over_raises_value_error() -> None:
+    """MapNode with over='' raises ValueError — prevents malformed [MAP] output."""
+    node = _make_map_node("bad_node", "")
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+
+    with pytest.raises(ValueError, match="empty 'over' expression"):
+        plan(resolved, FakeStateStore())

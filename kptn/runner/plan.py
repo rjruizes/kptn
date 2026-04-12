@@ -52,6 +52,11 @@ def plan(resolved: ResolvedGraph, state_store: StateStoreBackend) -> None:
             continue
         if isinstance(node, MapNode):
             provider = node.over.split(".")[0]
+            if not provider:
+                raise ValueError(
+                    f"MapNode '{node.name}' has an empty 'over' expression; "
+                    "cannot determine provider for plan output."
+                )
             emit_map_plan(node.name, provider)
             continue
         # TaskNode, RTaskNode, SqlTaskNode
