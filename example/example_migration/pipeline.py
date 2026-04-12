@@ -41,11 +41,11 @@ def load_base_data() -> None:
 
 
 @kptn.task(outputs=[f"duckdb://{DATA_DB}::ds1"])
-def load_ds1() -> None:
+def load_ds1(steps_override: int = 8500) -> None:
     conn = duckdb.connect(DATA_DB)
     conn.execute("CREATE TABLE IF NOT EXISTS ds1 (subject_id TEXT, steps INTEGER)")
     conn.execute("DELETE FROM ds1")
-    conn.execute("INSERT INTO ds1 VALUES ('subj_001', 8500)")
+    conn.execute("INSERT INTO ds1 VALUES ('subj_001', ?)", [steps_override])
     conn.commit()
     conn.close()
 
