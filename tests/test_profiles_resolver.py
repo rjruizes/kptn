@@ -404,3 +404,234 @@ def test_compile_parallel_branches_survive_active_stage_pruning():
     assert "task_b" not in node_names   # pruned stage branch
     assert "task_c" in node_names       # parallel branch 1 — must survive
     assert "task_d" in node_names       # parallel branch 2 — must survive
+
+
+# ---------------------------------------------------------------------------
+# Cursor tests — Story 3.4
+# ---------------------------------------------------------------------------
+
+def test_compile_start_from_bypasses_upstream_nodes():
+    """AC-1: start_from: task_b bypasses pipeline sentinel + task_a; all nodes remain in graph."""
+    pipeline = Pipeline("p", task_a >> task_b >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_b")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    # PipelineNode("p") and task_a are topologically before task_b
+    assert resolved.bypassed_names == frozenset({"p", "task_a"})
+    node_names = {n.name for n in resolved.graph.nodes}
+    assert "task_a" in node_names   # bypass-flagged but still present
+    assert "task_b" in node_names
+    assert "task_c" in node_names
+
+
+def test_compile_start_from_cursor_node_not_bypassed():
+    """start_from cursor node itself is NOT in bypassed_names."""
+    pipeline = Pipeline("p", task_a >> task_b >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_b")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    assert "task_b" not in resolved.bypassed_names
+
+
+def test_compile_start_from_source_node_no_bypass():
+    """start_from the first task: the pipeline sentinel is bypassed, but task_a/b/c are not."""
+    pipeline = Pipeline("p", task_a >> task_b >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_a")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    assert "task_a" not in resolved.bypassed_names
+    assert "task_b" not in resolved.bypassed_names
+    assert "task_c" not in resolved.bypassed_names
+    # PipelineNode("p") is topologically before task_a and IS bypassed
+    assert "p" in resolved.bypassed_names
+
+
+def test_compile_stop_after_prunes_downstream():
+    """AC-2: stop_after: task_b prunes task_c; A and B present; bypassed_names empty."""
+    pipeline = Pipeline("p", task_a >> task_b >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="task_b")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    node_names = {n.name for n in resolved.graph.nodes}
+    assert "task_c" not in node_names
+    assert "task_a" in node_names
+    assert "task_b" in node_names
+    assert resolved.bypassed_names == frozenset()
+
+
+def test_compile_stop_after_last_node_no_prune():
+    """stop_after the last node: all nodes are present."""
+    pipeline = Pipeline("p", task_a >> task_b >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="task_c")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    node_names = {n.name for n in resolved.graph.nodes}
+    assert "task_a" in node_names
+    assert "task_b" in node_names
+    assert "task_c" in node_names
+
+
+def test_compile_stop_after_bypassed_names_empty():
+    """stop_after alone never sets bypassed_names."""
+    pipeline = Pipeline("p", task_a >> task_b >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="task_b")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    assert resolved.bypassed_names == frozenset()
+
+
+def test_compile_start_from_stage_group_cursor_unit():
+    """AC-3: start_from a Stage branch → StageNode sentinel used as cursor anchor.
+
+    Graph: PipelineNode → StageNode("ds") → task_a, task_b → task_c
+    start_from: task_a (inside Stage "ds") → cursor anchor = StageNode("ds") at index 1
+    bypassed_names = {PipelineNode("p")} only; StageNode, task_a, task_b, task_c NOT bypassed.
+    """
+    stage_g = kptn.Stage("ds", task_a, task_b)
+    pipeline = Pipeline("p", stage_g >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_a")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    assert "ds" not in resolved.bypassed_names
+    assert "task_a" not in resolved.bypassed_names
+    assert "task_b" not in resolved.bypassed_names
+    assert "task_c" not in resolved.bypassed_names
+    # The PipelineNode sentinel ("p") is before the StageNode, so it is bypassed
+    assert "p" in resolved.bypassed_names
+
+
+def test_compile_start_from_stage_group_no_upstream():
+    """Stage is the first node after pipeline sentinel; start_from a branch → no task bypassed."""
+    stage_g = kptn.Stage("ds", task_a, task_b)
+    pipeline = Pipeline("p", stage_g)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_a")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    assert "ds" not in resolved.bypassed_names
+    assert "task_a" not in resolved.bypassed_names
+    assert "task_b" not in resolved.bypassed_names
+    # Cursor anchor = StageNode("ds"); PipelineNode("p") precedes it and IS bypassed
+    assert "p" in resolved.bypassed_names
+
+
+def test_compile_start_from_unknown_raises_profile_error():
+    """AC-4: start_from references a node not in the graph → ProfileError with node name."""
+    pipeline = Pipeline("p", task_a >> task_b)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="nonexistent")})
+    with pytest.raises(ProfileError, match="nonexistent"):
+        ProfileResolver(config).compile(pipeline, "dev")
+
+
+def test_compile_start_from_unknown_did_you_mean():
+    """AC-4: start_from close match → 'Did you mean' suggestion in error message."""
+    pipeline = Pipeline("p", task_a >> task_b)
+    # "task_b_typo" is close enough to "task_b" (cutoff 0.6)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_b_typo")})
+    with pytest.raises(ProfileError, match="Did you mean"):
+        ProfileResolver(config).compile(pipeline, "dev")
+
+
+def test_compile_start_from_excluded_by_stage_raises():
+    """AC-4: start_from a node excluded by Stage selection → ProfileError (not in pruned graph)."""
+    stage_g = kptn.Stage("ds", task_a, task_b)
+    pipeline = Pipeline("p", stage_g)
+    # task_b is pruned by stage selection; start_from: task_b → ProfileError
+    config = KptnConfig(profiles={
+        "dev": ProfileSpec(
+            stage_selections={"ds": ["task_a"]},
+            start_from="task_b",
+        )
+    })
+    with pytest.raises(ProfileError, match="task_b"):
+        ProfileResolver(config).compile(pipeline, "dev")
+
+
+def test_compile_stop_after_unknown_raises_profile_error():
+    """stop_after references an unknown node → ProfileError."""
+    pipeline = Pipeline("p", task_a >> task_b)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="nonexistent")})
+    with pytest.raises(ProfileError, match="nonexistent"):
+        ProfileResolver(config).compile(pipeline, "dev")
+
+
+def test_compile_conflict_stop_before_start_raises():
+    """AC-5: stop_after is topologically before start_from → ProfileError with both names."""
+    pipeline = Pipeline("p", task_a >> task_b >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_c", stop_after="task_a")})
+    with pytest.raises(ProfileError, match="task_a") as exc_info:
+        ProfileResolver(config).compile(pipeline, "dev")
+    assert "task_c" in str(exc_info.value)
+
+
+def test_compile_both_cursors_valid():
+    """start_from: task_b + stop_after: task_c in A >> B >> C >> D → bypass A, prune D."""
+    pipeline = Pipeline("p", task_a >> task_b >> task_c >> task_d)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_b", stop_after="task_c")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    # bypassed: pipeline sentinel "p" + task_a
+    assert "task_a" in resolved.bypassed_names
+    assert "p" in resolved.bypassed_names
+    assert "task_b" not in resolved.bypassed_names
+    # task_d pruned by stop_after
+    node_names = {n.name for n in resolved.graph.nodes}
+    assert "task_d" not in node_names
+    assert "task_b" in node_names
+    assert "task_c" in node_names
+
+
+def test_compile_stop_after_unknown_did_you_mean():
+    """AC-4 (stop_after): close match → 'Did you mean' suggestion in error message."""
+    pipeline = Pipeline("p", task_a >> task_b)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="task_b_typo")})
+    with pytest.raises(ProfileError, match="Did you mean"):
+        ProfileResolver(config).compile(pipeline, "dev")
+
+
+def test_compile_stop_after_stage_member_cursor():
+    """stop_after a Stage branch → Stage atomicity: stop after last branch in topo order.
+
+    Graph: PipelineNode → StageNode("ds") → task_a, task_b → task_c
+    stop_after: task_a (inside Stage "ds") → cursor = max(idx_of[task_a], idx_of[task_b])
+    Both task_a and task_b are retained; task_c is pruned.
+    """
+    stage_g = kptn.Stage("ds", task_a, task_b)
+    pipeline = Pipeline("p", stage_g >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="task_a")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    node_names = {n.name for n in resolved.graph.nodes}
+    assert "task_a" in node_names
+    assert "task_b" in node_names   # sibling kept by Stage atomicity
+    assert "task_c" not in node_names
+    assert resolved.bypassed_names == frozenset()
+
+
+def test_compile_stop_after_stage_sentinel_cursor():
+    """stop_after the StageNode name directly → Stage atomicity: all branches retained.
+
+    Graph: PipelineNode → StageNode("ds") → task_a, task_b → task_c
+    stop_after: "ds" (StageNode sentinel) → cursor = max(idx_of[task_a], idx_of[task_b])
+    Both branches are retained; task_c is pruned.
+    """
+    stage_g = kptn.Stage("ds", task_a, task_b)
+    pipeline = Pipeline("p", stage_g >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="ds")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    node_names = {n.name for n in resolved.graph.nodes}
+    assert "ds" in node_names
+    assert "task_a" in node_names
+    assert "task_b" in node_names
+    assert "task_c" not in node_names
+    assert resolved.bypassed_names == frozenset()
+
+
+def test_compile_single_node_slice():
+    """start_from == stop_after: valid 'single-node slice' idiom.
+
+    Predecessors are bypass-flagged; successors are pruned; only the named node runs.
+    Graph: p → task_a → task_b → task_c; start_from=stop_after="task_b"
+    """
+    pipeline = Pipeline("p", task_a >> task_b >> task_c)
+    config = KptnConfig(profiles={"dev": ProfileSpec(start_from="task_b", stop_after="task_b")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    # Predecessors bypassed
+    assert "p" in resolved.bypassed_names
+    assert "task_a" in resolved.bypassed_names
+    assert "task_b" not in resolved.bypassed_names
+    # Successors pruned
+    node_names = {n.name for n in resolved.graph.nodes}
+    assert "task_c" not in node_names
+    # task_b and its predecessors present in graph
+    assert "task_b" in node_names
+    assert "task_a" in node_names

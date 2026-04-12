@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import difflib
 from typing import Any
 
 from kptn.exceptions import ProfileError
 from kptn.graph.graph import Graph
 from kptn.graph.nodes import AnyNode, TaskNode, SqlTaskNode, RTaskNode, StageNode
 from kptn.graph.pipeline import Pipeline
+from kptn.graph.topo import topo_sort
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.schema import KptnConfig, ProfileSpec
 
@@ -125,6 +127,101 @@ def _prune(graph: Graph, profile: ProfileSpec) -> Graph:
     )
 
 
+def _apply_cursors(graph: Graph, profile: ProfileSpec) -> tuple[Graph, frozenset[str]]:
+    """Apply start_from and stop_after cursor operations to a pruned Graph.
+
+    start_from:  all nodes topologically before the cursor are bypass-flagged.
+                 They remain in the graph but are recorded in bypassed_names.
+    stop_after:  all nodes topologically after the cursor are pruned from the graph.
+
+    Stage atomicity: if a cursor references a direct child of a StageNode OR the
+    StageNode sentinel itself:
+      - start_from: cursor anchor = the StageNode sentinel (bypass before it)
+      - stop_after:  cursor anchor = last branch of the Stage group in topo order
+                     (so all branches are retained)
+
+    Single-node slice: start_from == stop_after on the same node is valid.
+    Predecessors are bypass-flagged; successors are pruned; the named node runs.
+
+    Raises ProfileError on unknown cursor targets or start/stop conflict (stop
+    is strictly before start in topo order).
+
+    Returns: (modified_graph, bypassed_names)
+    """
+    if profile.start_from is None and profile.stop_after is None:
+        return graph, frozenset()
+
+    ordered: list[AnyNode] = topo_sort(graph)
+    idx_of: dict[int, int] = {id(n): i for i, n in enumerate(ordered)}
+    name_to_node: dict[str, AnyNode] = {n.name: n for n in ordered}
+
+    # Map branch name → its direct StageNode parent
+    stage_of: dict[str, StageNode] = {}
+    stage_branches: dict[str, list[AnyNode]] = {}
+    for src, dst in graph.edges:
+        if isinstance(src, StageNode):
+            stage_of[dst.name] = src
+            stage_branches.setdefault(src.name, []).append(dst)
+
+    def _did_you_mean(name: str) -> str:
+        matches = difflib.get_close_matches(name, list(name_to_node), n=1, cutoff=0.6)
+        return f" Did you mean '{matches[0]}'?" if matches else ""
+
+    def _resolve_start_idx(cursor_name: str) -> int:
+        if cursor_name not in name_to_node:
+            raise ProfileError(
+                f"'start_from' references unknown node '{cursor_name}'.{_did_you_mean(cursor_name)}"
+            )
+        if cursor_name in stage_of:
+            # Stage atomicity: cursor = StageNode sentinel
+            return idx_of[id(stage_of[cursor_name])]
+        return idx_of[id(name_to_node[cursor_name])]
+
+    def _resolve_stop_idx(cursor_name: str) -> int:
+        if cursor_name not in name_to_node:
+            raise ProfileError(
+                f"'stop_after' references unknown node '{cursor_name}'.{_did_you_mean(cursor_name)}"
+            )
+        if cursor_name in stage_of:
+            # Stage atomicity for branch cursor: stop after last branch in topo order
+            return max(idx_of[id(b)] for b in stage_branches[stage_of[cursor_name].name])
+        if isinstance(name_to_node[cursor_name], StageNode):
+            # Stage atomicity for StageNode-name cursor: stop after last branch
+            branches = stage_branches.get(cursor_name, [])
+            if branches:
+                return max(idx_of[id(b)] for b in branches)
+        return idx_of[id(name_to_node[cursor_name])]
+
+    start_idx: int | None = None
+    stop_idx: int | None = None
+
+    if profile.start_from is not None:
+        start_idx = _resolve_start_idx(profile.start_from)
+    if profile.stop_after is not None:
+        stop_idx = _resolve_stop_idx(profile.stop_after)
+
+    # Conflict: stop_after before start_from in topo order
+    if start_idx is not None and stop_idx is not None and stop_idx < start_idx:
+        raise ProfileError(
+            f"'stop_after' ({profile.stop_after!r}) is topologically before "
+            f"'start_from' ({profile.start_from!r})"
+        )
+
+    bypassed_names: frozenset[str] = (
+        frozenset(ordered[i].name for i in range(start_idx))
+        if start_idx is not None
+        else frozenset()
+    )
+
+    if stop_idx is not None:
+        keep_ids = {id(ordered[i]) for i in range(stop_idx + 1)}
+        pruned_nodes = [n for n in graph.nodes if id(n) in keep_ids]
+        pruned_edges = [(s, d) for s, d in graph.edges if id(s) in keep_ids and id(d) in keep_ids]
+        graph = Graph(nodes=pruned_nodes, edges=pruned_edges)
+
+    return graph, bypassed_names
+
+
 class ProfileResolver:
     """Resolves ProfileSpec `extends` chains into a fully merged ProfileSpec."""
 
@@ -151,10 +248,11 @@ class ProfileResolver:
         profile = self.resolve(profile_name)
         pruned = _prune(pipeline, profile)
         storage_key = self._settings.db_path or ".kptn/kptn.db"
+        final_graph, bypassed_names = _apply_cursors(pruned, profile)
         return ResolvedGraph(
-            graph=pruned,
+            graph=final_graph,
             pipeline=pipeline.name,
             storage_key=storage_key,
-            bypassed_names=frozenset(),  # start_from/stop_after: Story 3.4
+            bypassed_names=bypassed_names,
             profile_args=dict(profile.args),
         )
