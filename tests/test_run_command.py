@@ -1,87 +1,33 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
+import pytest
+from unittest.mock import MagicMock, patch
 
 import kptn
+from kptn.graph.graph import Graph
+from kptn.graph.pipeline import Pipeline
+from kptn.runner.api import run
 
 
-def _create_basic_project(root: Path, *, include_pipeline_config: bool) -> Path:
-    """Set up a minimal kptn project for testing kptn.run."""
-    project_dir = root / ("with_config" if include_pipeline_config else "no_config")
-    flows_dir = project_dir
-    py_tasks_dir = project_dir / "py_tasks"
-    py_tasks_dir.mkdir(parents=True, exist_ok=True)
-    (py_tasks_dir / "__init__.py").write_text("", encoding="utf-8")
-    (py_tasks_dir / "alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
-
-    kptn_yaml = {
-        "settings": {
-            "flows_dir": ".",
-            "py_tasks_dir": "py_tasks",
-            "r_tasks_dir": ".",
-        },
-        "graphs": {
-            "demo": {"tasks": {"alpha": None}},
-        },
-        "tasks": {
-            "alpha": {"file": "py_tasks/alpha.py"}
-        },
-    }
-
-    (project_dir / "kptn.yaml").write_text(json.dumps(kptn_yaml), encoding="utf-8")
-
-    call_file = flows_dir / "call.json"
-    call_file_literal = json.dumps(str(call_file))
-
-    if include_pipeline_config:
-        flow_source = f"""
-import json
-from pathlib import Path
-from kptn.util.pipeline_config import PipelineConfig
-
-def demo(pipeline_config: PipelineConfig, task_list=None, ignore_cache=False):
-    data = {{
-        "has_pipeline_config": isinstance(pipeline_config, PipelineConfig),
-        "task_list": list(task_list or []),
-        "ignore_cache": ignore_cache,
-    }}
-    Path({call_file_literal}).write_text(json.dumps(data), encoding="utf-8")
-"""
-    else:
-        flow_source = f"""
-import json
-from pathlib import Path
-
-def demo(task_list=None, ignore_cache=False):
-    data = {{
-        "task_list": list(task_list or []),
-        "ignore_cache": ignore_cache,
-    }}
-    Path({call_file_literal}).write_text(json.dumps(data), encoding="utf-8")
-"""
-
-    (flows_dir / "demo.py").write_text(flow_source.strip() + "\n", encoding="utf-8")
-
-    return project_dir
+def _make_pipeline(name: str = "default") -> Pipeline:
+    return Pipeline(name, Graph())
 
 
-def test_run_invokes_pipeline_with_pipeline_config(tmp_path):
-    project_dir = _create_basic_project(tmp_path, include_pipeline_config=True)
+def test_run_v2_accepts_pipeline_object() -> None:
+    """kptn.run() accepts a Pipeline object (v0.2.0 API)."""
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
 
-    kptn.run("alpha", project_dir=str(project_dir), force=True)
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute"), \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.return_value = mock_config
+        kptn.run(pipeline)  # should not raise
 
-    call_data = json.loads((project_dir / "call.json").read_text(encoding="utf-8"))
-    assert call_data["has_pipeline_config"] is True
-    assert call_data["task_list"] == ["alpha"]
-    assert call_data["ignore_cache"] is True
 
+def test_run_v2_does_not_accept_old_kwargs() -> None:
+    """kptn.run() no longer accepts v0.1.x kwargs (project_dir, force, task_names)."""
+    pipeline = _make_pipeline("default")
+    with pytest.raises(TypeError):
+        kptn.run(pipeline, project_dir=".")  # type: ignore[call-arg]
 
-def test_run_invokes_pipeline_without_pipeline_config(tmp_path):
-    project_dir = _create_basic_project(tmp_path, include_pipeline_config=False)
-
-    kptn.run(["alpha"], project_dir=str(project_dir))
-
-    call_data = json.loads((project_dir / "call.json").read_text(encoding="utf-8"))
-    assert call_data["task_list"] == ["alpha"]
-    assert call_data["ignore_cache"] is False
