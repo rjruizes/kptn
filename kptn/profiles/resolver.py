@@ -127,6 +127,40 @@ def _prune(graph: Graph, profile: ProfileSpec) -> Graph:
     )
 
 
+def _validate_stage_refs(
+    graph: Graph,
+    profile: ProfileSpec,
+    profile_name: str,
+) -> None:
+    """Raise ProfileError if any stage_selections branch name is absent from the graph.
+
+    Validates that every branch referenced in profile.stage_selections exists as
+    a direct child of the corresponding StageNode in the graph.
+
+    Silent-skip behavior: if a stage_name in stage_selections has no corresponding
+    StageNode in the graph, it is skipped (consistent with _prune's behavior).
+
+    Must be called BEFORE _prune() so all branches are still visible in the graph.
+    """
+    stage_branches: dict[str, set[str]] = {}
+    for src, dst in graph.edges:
+        if isinstance(src, StageNode):
+            stage_branches.setdefault(src.name, set()).add(dst.name)
+
+    for stage_name, branch_refs in profile.stage_selections.items():
+        if stage_name not in stage_branches:
+            continue  # stage absent from graph — silently ignored (mirrors _prune)
+        valid = stage_branches[stage_name]
+        for ref in branch_refs:
+            if ref not in valid:
+                matches = difflib.get_close_matches(ref, list(valid), n=1, cutoff=0.6)
+                suggestion = f" Did you mean '{matches[0]}'?" if matches else ""
+                raise ProfileError(
+                    f"profile '{profile_name}' stage '{stage_name}' "
+                    f"references unknown pipeline '{ref}'.{suggestion}"
+                )
+
+
 def _apply_cursors(graph: Graph, profile: ProfileSpec) -> tuple[Graph, frozenset[str]]:
     """Apply start_from and stop_after cursor operations to a pruned Graph.
 
@@ -246,6 +280,7 @@ class ProfileResolver:
             ProfileError: if profile_name is unknown (delegated to resolve()).
         """
         profile = self.resolve(profile_name)
+        _validate_stage_refs(pipeline, profile, profile_name)
         pruned = _prune(pipeline, profile)
         storage_key = self._settings.db_path or ".kptn/kptn.db"
         final_graph, bypassed_names = _apply_cursors(pruned, profile)

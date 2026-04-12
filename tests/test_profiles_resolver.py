@@ -277,14 +277,36 @@ def test_compile_stage_active_branch_present():
 
 
 def test_compile_stage_downstream_of_dead_branch_pruned():
-    """Node reachable only via dead branch B is also pruned (forward propagation)."""
+    """Empty stage selection prunes all branches and forward-propagates to downstream nodes.
+
+    stage_selections=[] deactivates all branches; task_b and its successor task_c are
+    both removed from the resolved graph (forward-propagation).
+
+    Note: the previous version of this test used stage_selections={"data_sources": ["task_a"]}
+    where task_a was not a branch of the stage (only task_b was). That scenario now raises
+    ProfileError via _validate_stage_refs — see test_compile_invalid_branch_ref_raises.
+    """
     stage_g = kptn.Stage("data_sources", task_b)
     pipeline = Pipeline("test", stage_g >> task_c)
-    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": ["task_a"]})})
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": []})})
     result = ProfileResolver(config).compile(pipeline, "ci")
     node_names = {n.name for n in result.graph.nodes}
     assert "task_b" not in node_names
     assert "task_c" not in node_names
+
+
+def test_compile_invalid_branch_ref_raises():
+    """An invalid (non-existent) branch ref in stage_selections raises ProfileError.
+
+    Prior to Story 3.5, referencing a non-existent branch silently selected nothing
+    (equivalent to an empty selection). _validate_stage_refs now catches this at
+    compile time with an actionable error.
+    """
+    stage_g = kptn.Stage("data_sources", task_b)
+    pipeline = Pipeline("test", stage_g >> task_c)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": ["task_a"]})})
+    with pytest.raises(ProfileError, match="task_a"):
+        ProfileResolver(config).compile(pipeline, "ci")
 
 
 def test_compile_fan_in_with_one_active_branch_survives():
@@ -635,3 +657,142 @@ def test_compile_single_node_slice():
     # task_b and its predecessors present in graph
     assert "task_b" in node_names
     assert "task_a" in node_names
+
+
+# ---------------------------------------------------------------------------
+# Story 3.5 — Stale reference detection with did-you-mean
+# ---------------------------------------------------------------------------
+
+
+def test_compile_stale_stage_branch_raises_profile_error():
+    """AC-1: stale branch ref raises ProfileError containing the unknown name."""
+    @kptn.task(outputs=[])
+    def load_source(): ...
+
+    @kptn.task(outputs=[])
+    def downstream(): ...
+
+    pipeline = Pipeline("p", kptn.Stage("data_sources", load_source) >> downstream)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": ["load_raw"]})})
+    with pytest.raises(ProfileError, match="load_raw"):
+        ProfileResolver(config).compile(pipeline, "ci")
+
+
+def test_compile_stale_stage_branch_did_you_mean():
+    """AC-1: when a close match exists, the error includes 'Did you mean ...'."""
+    @kptn.task(outputs=[])
+    def load_source(): ...
+
+    @kptn.task(outputs=[])
+    def downstream(): ...
+
+    pipeline = Pipeline("p", kptn.Stage("data_sources", load_source) >> downstream)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": ["load_raw"]})})
+    with pytest.raises(ProfileError, match="Did you mean 'load_source'"):
+        ProfileResolver(config).compile(pipeline, "ci")
+
+
+def test_compile_stale_stage_branch_message_format():
+    """AC-1: full error message matches the exact prescribed format."""
+    @kptn.task(outputs=[])
+    def load_source(): ...
+
+    @kptn.task(outputs=[])
+    def downstream(): ...
+
+    pipeline = Pipeline("p", kptn.Stage("data_sources", load_source) >> downstream)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": ["load_raw"]})})
+    with pytest.raises(ProfileError) as exc_info:
+        ProfileResolver(config).compile(pipeline, "ci")
+    assert str(exc_info.value) == (
+        "profile 'ci' stage 'data_sources' references unknown pipeline 'load_raw'."
+        " Did you mean 'load_source'?"
+    )
+
+
+def test_compile_stale_stage_branch_no_suggestion():
+    """AC-2: when no close match exists, 'Did you mean' is absent."""
+    @kptn.task(outputs=[])
+    def load_source(): ...
+
+    @kptn.task(outputs=[])
+    def downstream(): ...
+
+    pipeline = Pipeline("p", kptn.Stage("data_sources", load_source) >> downstream)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": ["xyzzy_no_match"]})})
+    with pytest.raises(ProfileError) as exc_info:
+        ProfileResolver(config).compile(pipeline, "ci")
+    assert "Did you mean" not in str(exc_info.value)
+
+
+def test_compile_stale_stage_branch_no_close_match_message():
+    """AC-2: error message still contains the exact unknown name when no suggestion."""
+    @kptn.task(outputs=[])
+    def load_source(): ...
+
+    @kptn.task(outputs=[])
+    def downstream(): ...
+
+    pipeline = Pipeline("p", kptn.Stage("data_sources", load_source) >> downstream)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": ["xyzzy_no_match"]})})
+    with pytest.raises(ProfileError, match="xyzzy_no_match"):
+        ProfileResolver(config).compile(pipeline, "ci")
+
+
+def test_compile_valid_stage_refs_no_error():
+    """AC-3: all refs valid → no exception, returns ResolvedGraph."""
+    @kptn.task(outputs=[])
+    def load_source(): ...
+
+    @kptn.task(outputs=[])
+    def downstream(): ...
+
+    pipeline = Pipeline("p", kptn.Stage("data_sources", load_source) >> downstream)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"data_sources": ["load_source"]})})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    assert isinstance(result, ResolvedGraph)
+
+
+def test_compile_stage_selection_for_absent_stage_no_error():
+    """Stage absent from graph → silently skipped (no ProfileError), consistent with _prune."""
+    pipeline = Pipeline("p", task_a >> task_b)
+    config = KptnConfig(
+        profiles={"ci": ProfileSpec(stage_selections={"nonexistent_stage": ["branch"]})}
+    )
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    assert isinstance(result, ResolvedGraph)
+
+
+def test_compile_stale_ref_detected_before_prune():
+    """Stale ref is detected even when mixed with valid refs in a multi-branch selection.
+
+    Verifies that _validate_stage_refs catches a stale ref ("old_name") alongside a
+    valid ref ("branch_active") in the same stage_selections list.
+
+    Note on ordering invariant: calling _validate_stage_refs before _prune() ensures
+    the full set of stage branches is visible when building the did-you-mean candidate
+    pool. If called post-prune, unselected branches would be absent from the graph and
+    could not appear as suggestions for misspelled refs.
+    """
+    @kptn.task(outputs=[])
+    def branch_active(): ...
+
+    @kptn.task(outputs=[])
+    def branch_inactive(): ...
+
+    @kptn.task(outputs=[])
+    def downstream(): ...
+
+    pipeline = Pipeline(
+        "p",
+        kptn.Stage("data_sources", branch_active, branch_inactive) >> downstream,
+    )
+    config = KptnConfig(
+        profiles={
+            "ci": ProfileSpec(
+                stage_selections={"data_sources": ["branch_active", "old_name"]}
+            )
+        }
+    )
+    with pytest.raises(ProfileError, match="old_name"):
+        ProfileResolver(config).compile(pipeline, "ci")
