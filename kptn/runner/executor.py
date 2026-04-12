@@ -24,8 +24,9 @@ from kptn.graph.config import invoke_config
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.state_store.protocol import StateStoreBackend
 from kptn.change_detector.hasher import hash_file, hash_sqlite_table, hash_duckdb_table
+from kptn.change_detector.detector import is_stale
 from kptn.exceptions import HashError, TaskError
-from kptn.runner.plan import emit_map, emit_fail
+from kptn.runner.plan import emit_map, emit_fail, emit_skip, emit_run
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,23 @@ def _compute_hash(node: AnyNode) -> str | None:
     hashes.sort()
     combined = ":".join(hashes)
     return hashlib.sha256(combined.encode()).hexdigest()
+
+
+def _compute_hash_for_map_item(node: MapNode, item_task_name: str) -> str | None:
+    spec = getattr(node.task, "__kptn__", None)
+    if spec is None or not spec.outputs:
+        return None
+    hashes: list[str] = []
+    for output in spec.outputs:
+        if output.startswith("duckdb://"):
+            h = hash_duckdb_table(output[len("duckdb://"):])
+        elif output.startswith("sqlite://"):
+            h = hash_sqlite_table(output[len("sqlite://"):])
+        else:
+            h = hash_file(output)
+        hashes.append(h)
+    hashes.sort()
+    return hashlib.sha256(":".join(hashes).encode()).hexdigest()
 
 
 def _resolve_collection(over: str, runtime_ctx: dict[str, Any]) -> list[Any]:
@@ -138,6 +156,18 @@ def execute(
             emit_map(node.name, len(collection))
             for item in collection:
                 item_task_name = f"{node.name}[{item}]"
+                stored_hash = state_store.read_hash(
+                    resolved.storage_key, resolved.pipeline, item_task_name
+                )
+                if stored_hash is not None:
+                    try:
+                        current_hash = _compute_hash_for_map_item(node, item_task_name)
+                    except HashError:
+                        current_hash = None  # treat as stale
+                    if current_hash is not None and current_hash == stored_hash:
+                        emit_skip(item_task_name)
+                        continue
+                emit_run(item_task_name)
                 kwargs = {
                     **config_kwargs,
                     **resolved.profile_args.get(node.name, {}),
@@ -153,7 +183,14 @@ def execute(
                     )
                     emit_fail(item_task_name, str(task_err))
                     raise task_err from exc
-                hash_ = _compute_hash_for_map_item(node, item_task_name)
+                try:
+                    hash_ = _compute_hash_for_map_item(node, item_task_name)
+                except HashError:
+                    logger.warning(
+                        "Hash computation failed for map item %r — skipping hash write",
+                        item_task_name,
+                    )
+                    hash_ = None
                 if hash_ is not None:
                     state_store.write_hash(
                         resolved.storage_key, resolved.pipeline, item_task_name, hash_
@@ -162,6 +199,15 @@ def execute(
 
         # TaskNode
         if isinstance(node, TaskNode):
+            stale, reason = False, ""
+            try:
+                stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline)
+            except HashError:
+                stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
+            if not stale and reason == "cached":
+                emit_skip(node.name)
+                continue
+            emit_run(node.name)
             profile_kwargs = resolved.profile_args.get(node.name, {})
             try:
                 result = _dispatch_task(node, config_kwargs, profile_kwargs)
@@ -182,6 +228,15 @@ def execute(
 
         # RTaskNode
         if isinstance(node, RTaskNode):
+            stale, reason = False, ""
+            try:
+                stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline)
+            except HashError:
+                stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
+            if not stale and reason == "cached":
+                emit_skip(node.name)
+                continue
+            emit_run(node.name)
             try:
                 _dispatch_r_task(node, cwd)
             except TaskError as exc:
@@ -214,11 +269,3 @@ def execute(
                     resolved.storage_key, resolved.pipeline, node.name, hash_
                 )
             continue
-
-
-def _compute_hash_for_map_item(node: MapNode, item_task_name: str) -> str | None:
-    """MapNode items don't have outputs tracked — return None for now.
-
-    Story 2.5 extends this with per-item output tracking.
-    """
-    return None
