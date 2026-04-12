@@ -353,3 +353,5 @@ _bmad-output/
 example/nibrs/
 # Example generated output
 example/minimal/output/
+example/example_migration/output/
+example/example_migration/.kptn/

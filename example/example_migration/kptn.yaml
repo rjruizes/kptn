@@ -1,0 +1,11 @@
+settings:
+  db: duckdb
+  db_path: .kptn/state.duckdb
+
+profiles:
+  prod:
+    args:
+      load_ds1:
+        steps_override: 9000
+    stage_selections:
+      datasets: [load_ds1]
