@@ -352,6 +352,10 @@ Do not make direct repo edits outside a GSD workflow unless the user explicitly 
 
 
 
+## Git Hygiene
+
+`.planning/` is listed in `.gitignore` and must **never** be committed or force-added (`git add -f`). All files under `.planning/` are local-only planning artifacts. If a tool or workflow attempts to stage them, skip that step.
+
 <!-- GSD:profile-start -->
 ## Developer Profile
 
