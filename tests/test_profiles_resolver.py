@@ -5,6 +5,7 @@ import pytest
 import kptn
 from kptn.exceptions import ProfileError
 from kptn.graph.graph import Graph
+from kptn.graph.nodes import StageNode
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.resolver import ProfileResolver
@@ -251,6 +252,14 @@ def task_d(): pass
 
 @kptn.task(outputs=[], optional="validate")
 def validate_task(): pass
+
+
+@kptn.task(outputs=[], optional="opt_grp")
+def opt_task_1(): pass
+
+
+@kptn.task(outputs=[], optional="opt_grp")
+def opt_task_2(): pass
 
 
 def test_compile_stage_branch_pruned():
@@ -796,3 +805,173 @@ def test_compile_stale_ref_detected_before_prune():
     )
     with pytest.raises(ProfileError, match="old_name"):
         ProfileResolver(config).compile(pipeline, "ci")
+
+
+# ---------------------------------------------------------------------------
+# Bypass tests — Phase 1 fix (OPT-01 through OPT-04)
+# ---------------------------------------------------------------------------
+
+
+def test_bypass_single_optional_in_chain():
+    """OPT-01/D-01: disabled optional in A→B_opt→C reconnects A directly to C."""
+    graph = task_a >> opt_task_1 >> task_c
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec()})  # opt_grp absent → disabled
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    assert "opt_task_1" not in node_names, "optional node must be removed"
+    assert "task_a" in node_names
+    assert "task_c" in node_names
+    edge_pairs = {(s.name, d.name) for s, d in result.graph.edges}
+    assert ("task_a", "task_c") in edge_pairs, "bypass edge task_a→task_c must exist"
+    assert ("task_a", "opt_task_1") not in edge_pairs
+    assert ("opt_task_1", "task_c") not in edge_pairs
+
+
+def test_bypass_source_optional_successor_becomes_source():
+    """OPT-03: source optional (no predecessors) — successor survives with no incoming edges."""
+    graph = opt_task_1 >> task_c
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec()})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    assert "opt_task_1" not in node_names
+    assert "task_c" in node_names
+    incoming_to_c = [s.name for s, d in result.graph.edges if d.name == "task_c"]
+    assert incoming_to_c == [], f"task_c must have no predecessors (is source), got {incoming_to_c}"
+
+
+def test_bypass_sink_optional_predecessor_becomes_tail():
+    """OPT-03: sink optional (no successors) — predecessor remains in graph as tail node."""
+    graph = task_a >> opt_task_1
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec()})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    assert "opt_task_1" not in node_names
+    assert "task_a" in node_names
+    outgoing_from_a = [d.name for s, d in result.graph.edges if s.name == "task_a"]
+    assert outgoing_from_a == [], f"task_a must have no successors (is tail), got {outgoing_from_a}"
+
+
+def test_bypass_adjacent_optionals_transitive():
+    """D-03: X→A_opt→B_opt→C — transitive BFS produces X→C (not two separate bypasses)."""
+    graph = task_a >> opt_task_1 >> opt_task_2 >> task_c
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec()})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    assert "opt_task_1" not in node_names
+    assert "opt_task_2" not in node_names
+    assert "task_a" in node_names
+    assert "task_c" in node_names
+    edge_pairs = {(s.name, d.name) for s, d in result.graph.edges}
+    assert ("task_a", "task_c") in edge_pairs, "transitive bypass task_a→task_c must exist"
+    # No dangling edges to/from removed optional nodes
+    all_names = {n for pair in edge_pairs for n in pair}
+    assert "opt_task_1" not in all_names
+    assert "opt_task_2" not in all_names
+
+
+def test_bypass_fanin_optional_both_preds_reconnected():
+    """OPT-01: optional with multiple predecessors (A→C_opt←B; C_opt→D) — both A and B connect to D."""
+    # Manual construction avoids duplicate TaskNode instances (M-1 concern)
+    a_node = Graph._from_node(task_a).nodes[0]
+    b_node = Graph._from_node(task_b).nodes[0]
+    opt_node = Graph._from_node(opt_task_1).nodes[0]
+    d_node = Graph._from_node(task_d).nodes[0]
+    graph = Graph(
+        nodes=[a_node, b_node, opt_node, d_node],
+        edges=[(a_node, opt_node), (b_node, opt_node), (opt_node, d_node)],
+    )
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec()})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    assert "opt_task_1" not in node_names
+    assert "task_a" in node_names
+    assert "task_b" in node_names
+    assert "task_d" in node_names
+    edge_pairs = {(s.name, d.name) for s, d in result.graph.edges}
+    assert ("task_a", "task_d") in edge_pairs, "bypass edge task_a→task_d must exist"
+    assert ("task_b", "task_d") in edge_pairs, "bypass edge task_b→task_d must exist"
+
+
+def test_bypass_fanout_optional_all_succs_reconnected():
+    """OPT-01: optional with multiple successors (A→B_opt→C, A→B_opt→D) — A connects to both C and D."""
+    # Manual construction to express fan-out from one optional node
+    a_node = Graph._from_node(task_a).nodes[0]
+    opt_node = Graph._from_node(opt_task_1).nodes[0]
+    c_node = Graph._from_node(task_c).nodes[0]
+    d_node = Graph._from_node(task_d).nodes[0]
+    graph = Graph(
+        nodes=[a_node, opt_node, c_node, d_node],
+        edges=[(a_node, opt_node), (opt_node, c_node), (opt_node, d_node)],
+    )
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec()})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    assert "opt_task_1" not in node_names
+    assert "task_a" in node_names
+    assert "task_c" in node_names
+    assert "task_d" in node_names
+    edge_pairs = {(s.name, d.name) for s, d in result.graph.edges}
+    assert ("task_a", "task_c") in edge_pairs, "bypass edge task_a→task_c must exist"
+    assert ("task_a", "task_d") in edge_pairs, "bypass edge task_a→task_d must exist"
+
+
+def test_bypass_stage_dead_plus_optional_cascade_boundary():
+    """OPT-02/D-02: stage_dead→A, A→B_opt→C — stage cascade does NOT jump the optional boundary; C survives as source."""
+    # Manual construction: StageNode("env") → task_a (stage-dead) → opt_task_1 (optional-dead) → task_c
+    # task_b is the active branch (just to satisfy _validate_stage_refs)
+    stage_node = StageNode("env")
+    a_node = Graph._from_node(task_a).nodes[0]   # will be stage-dead
+    b_node = Graph._from_node(task_b).nodes[0]   # active branch (goes nowhere else)
+    opt_node = Graph._from_node(opt_task_1).nodes[0]
+    c_node = Graph._from_node(task_c).nodes[0]
+    graph = Graph(
+        nodes=[stage_node, a_node, b_node, opt_node, c_node],
+        edges=[
+            (stage_node, a_node),   # StageNode → task_a (stage branch)
+            (stage_node, b_node),   # StageNode → task_b (active branch)
+            (a_node, opt_node),     # task_a → opt_task_1
+            (opt_node, c_node),     # opt_task_1 → task_c
+        ],
+    )
+    pipeline = Pipeline("test", graph)
+    # stage_selections: task_b is active → task_a is stage-dead
+    config = KptnConfig(
+        profiles={"ci": ProfileSpec(stage_selections={"env": ["task_b"]})}
+    )
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    assert "task_a" not in node_names, "stage-dead node task_a must be removed"
+    assert "opt_task_1" not in node_names, "optional-dead node must be removed"
+    assert "task_c" in node_names, "task_c must survive (optional firewall)"
+    # task_c must have no predecessors — it becomes a source node
+    # (no bypass: opt_task_1's only pred is stage-dead task_a, BFS yields empty surv_preds)
+    incoming_to_c = [s.name for s, d in result.graph.edges if d.name == "task_c"]
+    assert incoming_to_c == [], f"task_c must be a source node, got predecessors: {incoming_to_c}"
+
+
+def test_bypass_edge_dedup_no_duplicate_edges():
+    """D-04: bypass injection skips edge if it already exists in the original graph (seen_bypass dedup)."""
+    # Graph: task_a → opt_task_1 → task_c   AND   task_a → task_c (direct edge already exists)
+    a_node = Graph._from_node(task_a).nodes[0]
+    opt_node = Graph._from_node(opt_task_1).nodes[0]
+    c_node = Graph._from_node(task_c).nodes[0]
+    graph = Graph(
+        nodes=[a_node, opt_node, c_node],
+        edges=[(a_node, opt_node), (opt_node, c_node), (a_node, c_node)],
+    )
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec()})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    # task_a → task_c must appear EXACTLY ONCE
+    ac_edges = [
+        (s.name, d.name)
+        for s, d in result.graph.edges
+        if s.name == "task_a" and d.name == "task_c"
+    ]
+    assert len(ac_edges) == 1, f"task_a→task_c must appear exactly once, got {len(ac_edges)}: {ac_edges}"
