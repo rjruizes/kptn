@@ -829,7 +829,7 @@ def test_bypass_single_optional_in_chain():
 
 
 def test_bypass_source_optional_successor_becomes_source():
-    """OPT-03: source optional (no predecessors) — successor survives with no incoming edges."""
+    """OPT-03: source optional (no task predecessors) — successor survives with no task-level predecessors."""
     graph = opt_task_1 >> task_c
     pipeline = Pipeline("test", graph)
     config = KptnConfig(profiles={"ci": ProfileSpec()})
@@ -837,8 +837,10 @@ def test_bypass_source_optional_successor_becomes_source():
     node_names = {n.name for n in result.graph.nodes}
     assert "opt_task_1" not in node_names
     assert "task_c" in node_names
-    incoming_to_c = [s.name for s, d in result.graph.edges if d.name == "task_c"]
-    assert incoming_to_c == [], f"task_c must have no predecessors (is source), got {incoming_to_c}"
+    # The pipeline sentinel ("test") may be bypass-connected to task_c, but no task-level
+    # predecessors should remain (opt_task_1 was the only one and it was removed).
+    task_preds = [s.name for s, d in result.graph.edges if d.name == "task_c" and s.name != "test"]
+    assert task_preds == [], f"task_c must have no task predecessors (is source), got {task_preds}"
 
 
 def test_bypass_sink_optional_predecessor_becomes_tail():
