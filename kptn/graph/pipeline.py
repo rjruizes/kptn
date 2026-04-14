@@ -17,6 +17,10 @@ class Pipeline(Graph):
     """
 
     def __init__(self, name: str, graph: Graph) -> None:
+        # Auto-wrap graph in Graph.from_node if user passed a single node instead of a Graph, for convenience.
+        # This allows users to write kptn.Pipeline("foo", task_a) instead of kptn.Pipeline("foo", kptn.Graph.from_node(task_a)).
+        if not isinstance(graph, Graph):
+            graph = Graph._from_node(graph)
         sentinel = PipelineNode(name=name)
         all_nodes = [sentinel] + graph.nodes
         cross_edges = [(sentinel, h) for h in graph._heads()]
