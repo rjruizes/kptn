@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 _NON_TASK_NODES = (ParallelNode, StageNode, NoopNode, ConfigNode, PipelineNode, MapNode)
 
 
-def _hash_outputs(node: AnyNode) -> str | None:
+def _hash_outputs(node: AnyNode, duckdb_conn: Any = None) -> str | None:
     if isinstance(node, (ParallelNode, StageNode, NoopNode, ConfigNode, PipelineNode, MapNode)):
         return None
 
@@ -37,8 +37,13 @@ def _hash_outputs(node: AnyNode) -> str | None:
     individual_hashes: list[str] = []
     for output in spec.outputs:
         if output.startswith("duckdb://"):
-            table_uri = output[len("duckdb://"):]
-            individual_hashes.append(hash_duckdb_table(table_uri))
+            table_name = output[len("duckdb://"):]
+            if duckdb_conn is None:
+                raise HashError(
+                    f"Task declares 'duckdb://' output but no DuckDB connection is available. "
+                    f"Add kptn.config(duckdb=get_engine) to your pipeline."
+                )
+            individual_hashes.append(hash_duckdb_table(table_name, conn=duckdb_conn))
         elif output.startswith("sqlite://"):
             table_uri = output[len("sqlite://"):]
             individual_hashes.append(hash_sqlite_table(table_uri))
@@ -55,6 +60,8 @@ def is_stale(
     state_store: StateStoreBackend,
     storage_key: str,
     pipeline: str,
+    *,
+    duckdb_conn: Any = None,
 ) -> tuple[bool, str]:
     """Return ``(stale, reason)`` for *node*.
 
@@ -66,7 +73,7 @@ def is_stale(
 
     task_name = node.name
 
-    current = _hash_outputs(node)
+    current = _hash_outputs(node, duckdb_conn=duckdb_conn)
     if current is None:
         return (False, "no outputs")
 

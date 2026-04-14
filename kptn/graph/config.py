@@ -3,23 +3,44 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
-def config(**kwargs: Callable[[], Any]) -> "Graph":
+def config(**kwargs) -> "Graph":
     """Declare runtime dependency injection for tasks.
 
-    Usage:
+    Usage::
+
         deps = kptn.config(engine=get_engine, config=get_config)
 
-    Returns a single-node Graph containing a ConfigNode. Compose with >>
-    to include in a pipeline. Callables are invoked at task dispatch time
-    by the runner (Epic 2), not at graph definition time.
+    The special ``duckdb`` key accepts a ``(factory, alias)`` tuple so kptn
+    knows both the connection factory and the kwarg name tasks use::
+
+        deps = kptn.config(duckdb=(get_engine, "engine"), config=get_config)
+
+    Tasks receive ``engine=get_engine()`` as their keyword argument.  kptn uses
+    the factory internally for state store operations and output hashing.
+
+    Callables are invoked at task dispatch time by the runner, not at graph
+    definition time.
 
     Raises:
-        TypeError: if any value is not callable
+        TypeError: if any value is not callable (or a valid duckdb tuple)
     """
     if not kwargs:
         raise TypeError("kptn.config() requires at least one callable argument; got none.")
     for key, val in kwargs.items():
-        if not callable(val):
+        if key == "duckdb":
+            # Allow (callable, alias_str) tuple for duckdb
+            if isinstance(val, tuple):
+                if len(val) != 2 or not callable(val[0]) or not isinstance(val[1], str):
+                    raise TypeError(
+                        "kptn.config() duckdb value must be a callable or a (callable, alias) tuple; "
+                        f"got {val!r}."
+                    )
+            elif not callable(val):
+                raise TypeError(
+                    f"kptn.config() requires callable values; "
+                    f"got {type(val).__name__!r} for key 'duckdb'."
+                )
+        elif not callable(val):
             raise TypeError(
                 f"kptn.config() requires callable values; "
                 f"got {type(val).__name__!r} for key '{key}'."

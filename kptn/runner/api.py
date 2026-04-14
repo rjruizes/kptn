@@ -19,15 +19,20 @@ logger = logging.getLogger(__name__)
 
 
 def _find_duckdb_factory(pipeline: Pipeline):
-    """Return the duckdb factory callable if the pipeline declares kptn.config(duckdb=...).
+    """Return ``(factory, alias)`` if the pipeline declares ``kptn.config(duckdb=...)``.
 
-    Scans the pipeline's node list for a ConfigNode that contains a 'duckdb' key
-    and returns the associated callable.  Returns None if no such node exists.
+    *factory* is the callable; *alias* is the kwarg name tasks use (e.g. ``"engine"``).
+    Returns ``(None, None)`` if no duckdb config node exists.
     """
     for node in pipeline.nodes:
         if isinstance(node, ConfigNode) and "duckdb" in node.spec:
-            return node.spec["duckdb"]
-    return None
+            val = node.spec["duckdb"]
+            if isinstance(val, tuple):
+                factory, alias = val
+            else:
+                factory, alias = val, "duckdb"
+            return factory, alias
+    return None, None
 
 
 def run(
@@ -72,7 +77,7 @@ def run(
             storage_key=config.settings.db_path or ".kptn/kptn.db",
         )
 
-    duckdb_factory = _find_duckdb_factory(pipeline)
+    duckdb_factory, duckdb_alias = _find_duckdb_factory(pipeline)
     state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
 
     return execute(
@@ -80,5 +85,6 @@ def run(
         state_store,
         cwd=cwd,
         duckdb_factory=duckdb_factory,
+        duckdb_alias=duckdb_alias,
         keep_db_open=keep_db_open,
     )

@@ -23,6 +23,16 @@ def _escape_identifier(name: str) -> str:
     return name.replace('"', '""')
 
 
+def _quote_qualified_name(name: str) -> str:
+    """Return a properly SQL-quoted identifier, handling schema.table notation.
+
+    Each dot-separated part is quoted independently so that
+    ``"redcap_m1"."participants"`` is produced instead of the invalid
+    ``"redcap_m1.participants"``.
+    """
+    return ".".join(f'"{_escape_identifier(part)}"' for part in name.split("."))
+
+
 def _parse_table_uri(table_uri: str) -> tuple[str, str]:
     if _TABLE_URI_SEP not in table_uri:
         raise HashError(
@@ -32,41 +42,42 @@ def _parse_table_uri(table_uri: str) -> tuple[str, str]:
     return db_path, table_name
 
 
-def hash_duckdb_table(table_uri: str) -> str:
+def hash_duckdb_table(table_name: str, *, conn: "Any") -> str:
+    """Hash a DuckDB table using an existing active connection.
+
+    *table_name* is the bare table reference after stripping the ``duckdb://``
+    prefix, e.g. ``schema.table`` or just ``table``.  The caller supplies the
+    active connection; kptn never opens a separate file handle for hashing.
+    """
     try:
         import duckdb
     except ModuleNotFoundError as exc:
         raise HashError("duckdb extra not installed: pip install kptn[duckdb]") from exc
 
-    db_path, table_name = _parse_table_uri(table_uri)
-    safe_table = _escape_identifier(table_name)
+    quoted_table = _quote_qualified_name(table_name)
     try:
-        conn = duckdb.connect(db_path, read_only=True)
-        try:
-            cols_result = conn.execute(f'DESCRIBE "{safe_table}"').fetchall()
-            col_names = sorted(row[0] for row in cols_result)
+        cols_result = conn.execute(f'DESCRIBE {quoted_table}').fetchall()
+        col_names = sorted(row[0] for row in cols_result)
 
-            row_count = conn.execute(f'SELECT COUNT(*) FROM "{safe_table}"').fetchone()[0]
+        row_count = conn.execute(f'SELECT COUNT(*) FROM {quoted_table}').fetchone()[0]
 
-            if row_count == 0:
-                return EMPTY_TABLE_HASH
+        if row_count == 0:
+            return EMPTY_TABLE_HASH
 
-            col_checksums = []
-            for col in col_names:
-                safe_col = _escape_identifier(col)
-                result = conn.execute(
-                    f'SELECT md5(string_agg("{safe_col}"::VARCHAR, \',\' ORDER BY "{safe_col}"::VARCHAR)) FROM "{safe_table}"'
-                ).fetchone()[0]
-                col_checksums.append(result if result is not None else "null")
+        col_checksums = []
+        for col in col_names:
+            safe_col = _escape_identifier(col)
+            result = conn.execute(
+                f'SELECT md5(string_agg("{safe_col}"::VARCHAR, \',\' ORDER BY "{safe_col}"::VARCHAR)) FROM {quoted_table}'
+            ).fetchone()[0]
+            col_checksums.append(result if result is not None else "null")
 
-            combined = f"{row_count}:{';'.join(col_checksums)}"
-            return hashlib.md5(combined.encode()).hexdigest()
-        finally:
-            conn.close()
+        combined = f"{row_count}:{';'.join(col_checksums)}"
+        return hashlib.md5(combined.encode()).hexdigest()
     except HashError:
         raise
     except Exception as exc:
-        raise HashError(f"DuckDB hashing failed for {table_uri!r}: {exc}") from exc
+        raise HashError(f"DuckDB hashing failed for {table_name!r}: {exc}") from exc
 
 
 def hash_sqlite_table(table_uri: str) -> str:

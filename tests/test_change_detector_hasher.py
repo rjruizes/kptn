@@ -2,6 +2,7 @@
 
 import hashlib
 import sqlite3
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -172,46 +173,45 @@ def test_hash_task_source_changes_when_logic_changes():
 # ---------------------------------------------------------------------------
 
 
-def _make_duckdb(path, rows: list[tuple]) -> str:
+def _make_duckdb(path, rows: list[tuple]) -> "duckdb.DuckDBPyConnection":
     conn = duckdb.connect(str(path))
     conn.execute("CREATE TABLE t (a VARCHAR, b INTEGER)")
     for row in rows:
         conn.execute("INSERT INTO t VALUES (?, ?)", row)
-    conn.close()
-    return f"{path}::t"
+    return conn
 
 
 def test_hash_duckdb_table_determinism(tmp_path):
-    uri = _make_duckdb(tmp_path / "db.duckdb", [("x", 1), ("y", 2)])
-    h1 = hash_duckdb_table(uri)
-    h2 = hash_duckdb_table(uri)
+    conn = _make_duckdb(tmp_path / "db.duckdb", [("x", 1), ("y", 2)])
+    h1 = hash_duckdb_table("t", conn=conn)
+    h2 = hash_duckdb_table("t", conn=conn)
+    conn.close()
     assert h1 == h2
     assert isinstance(h1, str) and len(h1) == 32
 
 
 def test_hash_duckdb_table_changes_when_row_added(tmp_path):
-    uri = _make_duckdb(tmp_path / "db.duckdb", [("x", 1)])
-    h1 = hash_duckdb_table(uri)
-    conn = duckdb.connect(str(tmp_path / "db.duckdb"))
+    conn = _make_duckdb(tmp_path / "db.duckdb", [("x", 1)])
+    h1 = hash_duckdb_table("t", conn=conn)
     conn.execute("INSERT INTO t VALUES ('z', 99)")
+    h2 = hash_duckdb_table("t", conn=conn)
     conn.close()
-    h2 = hash_duckdb_table(uri)
     assert h1 != h2
 
 
 def test_hash_duckdb_table_empty_table_stable_sentinel(tmp_path):
-    db = tmp_path / "db.duckdb"
-    conn = duckdb.connect(str(db))
+    conn = duckdb.connect(str(tmp_path / "db.duckdb"))
     conn.execute("CREATE TABLE t (a VARCHAR)")
+    h1 = hash_duckdb_table("t", conn=conn)
+    h2 = hash_duckdb_table("t", conn=conn)
     conn.close()
-    uri = f"{db}::t"
-    h1 = hash_duckdb_table(uri)
-    h2 = hash_duckdb_table(uri)
     expected = hashlib.md5(b"empty:").hexdigest()
     assert h1 == expected
     assert h1 == h2
 
 
 def test_hash_duckdb_table_invalid_uri_raises_hash_error():
-    with pytest.raises(HashError, match="missing '::' separator"):
-        hash_duckdb_table("no-separator")
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = Exception("no such table")
+    with pytest.raises(HashError):
+        hash_duckdb_table("no_such_table", conn=mock_conn)
