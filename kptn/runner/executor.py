@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from kptn.graph.nodes import (
     AnyNode,
@@ -33,12 +34,32 @@ logger = logging.getLogger(__name__)
 _NON_EXEC_NODES = (ParallelNode, StageNode, NoopNode, PipelineNode)
 
 
+def _filter_kwargs(fn: Callable, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Return only the kwargs that *fn* declares in its signature.
+
+    Tasks should only receive the config/profile values they explicitly ask for.
+    If the function accepts **kwargs it receives everything; otherwise only the
+    intersection of the supplied dict and the function's parameter names is passed.
+    """
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        return kwargs  # can't introspect — pass everything and let Python raise
+    params = sig.parameters
+    if any(
+        p.kind == inspect.Parameter.VAR_KEYWORD
+        for p in params.values()
+    ):
+        return kwargs  # fn accepts **kwargs — pass everything
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
 def _dispatch_task(
     node: TaskNode,
     config_kwargs: dict[str, Any],
     profile_kwargs: dict[str, Any],
 ) -> Any:
-    kwargs = {**config_kwargs, **profile_kwargs}
+    kwargs = _filter_kwargs(node.fn, {**config_kwargs, **profile_kwargs})
     try:
         return node.fn(**kwargs)
     except TaskError:
@@ -127,7 +148,24 @@ def execute(
     resolved: ResolvedGraph,
     state_store: StateStoreBackend,
     cwd: Path | None = None,
-) -> None:
+    *,
+    duckdb_factory: "Callable[[], Any] | None" = None,
+    keep_db_open: bool = False,
+) -> "Any | None":
+    """Execute the resolved pipeline graph.
+
+    When *duckdb_factory* is supplied (because the user declared
+    ``kptn.config(duckdb=get_engine)``), kptn calls the factory directly to
+    populate ``config_kwargs["duckdb"]`` rather than using the generic
+    ``invoke_config`` path for that key.
+
+    After all nodes have run:
+    * ``keep_db_open=False`` (default) — close the connection via the factory.
+    * ``keep_db_open=True`` — leave it open and return the live connection.
+
+    Returns the DuckDB connection when ``keep_db_open=True`` and a factory was
+    provided; ``None`` otherwise.
+    """
     if cwd is None:
         cwd = Path.cwd()
 
@@ -145,9 +183,19 @@ def execute(
             state_store.read_hash(resolved.storage_key, resolved.pipeline, node.name)
             continue
 
-        # ConfigNode — invoke and accumulate config kwargs
+        # ConfigNode — invoke and accumulate config kwargs.
+        # When duckdb_factory is set, the "duckdb" key is handled by the factory
+        # (already wired into the state store); skip it in invoke_config to avoid
+        # opening a second connection.
         if isinstance(node, ConfigNode):
-            config_kwargs.update(invoke_config(node))
+            if duckdb_factory is not None and "duckdb" in node.spec:
+                other_spec = {k: v for k, v in node.spec.items() if k != "duckdb"}
+                from kptn.graph.nodes import ConfigNode as _CN
+                if other_spec:
+                    invoke_config(_CN(spec=other_spec))
+                config_kwargs["duckdb"] = duckdb_factory()
+            else:
+                config_kwargs.update(invoke_config(node))
             continue
 
         # MapNode — resolve collection and dispatch per-item
@@ -168,10 +216,10 @@ def execute(
                         emit_skip(item_task_name)
                         continue
                 emit_run(item_task_name)
-                kwargs = {
+                kwargs = _filter_kwargs(node.task, {
                     **config_kwargs,
                     **resolved.profile_args.get(node.name, {}),
-                }
+                })
                 try:
                     result = node.task(item, **kwargs)
                 except TaskError as exc:
@@ -269,3 +317,14 @@ def execute(
                     resolved.storage_key, resolved.pipeline, node.name, hash_
                 )
             continue
+
+    # Post-run: manage duckdb connection lifecycle
+    if duckdb_factory is not None:
+        if keep_db_open:
+            return duckdb_factory()
+        else:
+            try:
+                duckdb_factory().close()
+            except Exception:
+                logger.debug("Failed to close duckdb connection after pipeline run")
+    return None

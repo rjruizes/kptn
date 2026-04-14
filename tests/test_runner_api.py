@@ -46,7 +46,7 @@ def test_run_sources_db_settings_from_config() -> None:
         mock_loader.load.return_value = mock_config
         run(pipeline)
 
-    mock_store.assert_called_once_with(mock_settings)
+    mock_store.assert_called_once_with(mock_settings, duckdb_factory=None)
     resolved = mock_exec.call_args[0][0]
     assert resolved.storage_key == ".kptn/prod.db"
 

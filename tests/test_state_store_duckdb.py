@@ -67,9 +67,9 @@ def test_schema_composite_pk(tmp_path):
 def _make_erroring_backend(tmp_path):
     """Return a DuckDbBackend whose connection raises OperationalError on execute."""
     b = DuckDbBackend(path=str(tmp_path / "test.duckdb"))
-    mock_conn = MagicMock()
-    mock_conn.execute.side_effect = duckdb.OperationalError("injected error")
-    b._conn = mock_conn
+    mock_conn_instance = MagicMock()
+    mock_conn_instance.execute.side_effect = duckdb.OperationalError("injected error")
+    b._conn = lambda: mock_conn_instance
     return b
 
 
@@ -100,9 +100,9 @@ def test_list_tasks_duckdb_error_raises_state_store_error(tmp_path):
 def test_state_store_error_has_cause(tmp_path):
     original = duckdb.OperationalError("disk full")
     b = DuckDbBackend(path=str(tmp_path / "test.duckdb"))
-    mock_conn = MagicMock()
-    mock_conn.execute.side_effect = original
-    b._conn = mock_conn
+    mock_conn_instance = MagicMock()
+    mock_conn_instance.execute.side_effect = original
+    b._conn = lambda: mock_conn_instance
     with pytest.raises(StateStoreError) as exc_info:
         b.write_hash("sk", "pipe", "task", "hash")
     assert exc_info.value.__cause__ is original
@@ -169,3 +169,157 @@ def test_factory_returns_duckdb_backend(tmp_path):
 
     result = init_state_store(Settings())
     assert isinstance(result, DuckDbBackend)
+
+
+# ─── DuckDbBackend factory mode ──────────────────────────────────────────── #
+
+
+def test_backend_factory_mode_reads_and_writes(tmp_path):
+    """DuckDbBackend(factory=...) can read and write hashes."""
+    db_path = str(tmp_path / "shared.duckdb")
+    conn = duckdb.connect(db_path)
+
+    def get_engine():
+        return conn
+
+    b = DuckDbBackend(factory=get_engine)
+    b.write_hash("sk", "pipe", "t1", "abc123")
+    result = b.read_hash("sk", "pipe", "t1")
+    assert result == "abc123"
+    conn.close()
+
+
+def test_backend_factory_mode_calls_factory_each_time(tmp_path):
+    """Factory is called on every operation — simulates connection being replaced mid-pipeline."""
+    db_path = str(tmp_path / "shared.duckdb")
+    # Start with connection A
+    conn_a = duckdb.connect(db_path)
+    connections = [conn_a]
+
+    call_count = 0
+
+    def get_engine():
+        nonlocal call_count
+        call_count += 1
+        return connections[-1]
+
+    b = DuckDbBackend(factory=get_engine)
+    b.write_hash("sk", "pipe", "t1", "hash1")
+    # Simulate task replacing connection: close A, open B on same file
+    conn_a.close()
+    conn_b = duckdb.connect(db_path)
+    connections.append(conn_b)
+
+    result = b.read_hash("sk", "pipe", "t1")
+    assert result == "hash1"
+    assert call_count >= 2  # factory was called at least for write + read
+    conn_b.close()
+
+
+def test_backend_factory_mode_close_delegates_to_factory():
+    """DuckDbBackend.close() calls factory().close()."""
+    mock_conn = MagicMock()
+    b = DuckDbBackend(factory=lambda: mock_conn)
+    b.close()
+    mock_conn.close.assert_called_once()
+
+
+def test_init_state_store_with_duckdb_factory(tmp_path):
+    """init_state_store(duckdb_factory=...) returns a DuckDbBackend in factory mode."""
+    from kptn.state_store.factory import init_state_store
+
+    conn = duckdb.connect(str(tmp_path / "shared.duckdb"))
+
+    b = init_state_store(duckdb_factory=lambda: conn)
+    assert isinstance(b, DuckDbBackend)
+    b.write_hash("sk", "pipe", "t1", "xyz")
+    assert b.read_hash("sk", "pipe", "t1") == "xyz"
+    conn.close()
+
+
+def test_init_state_store_factory_takes_precedence_over_settings(tmp_path):
+    """duckdb_factory overrides settings.db when both are provided."""
+    from kptn.state_store.factory import init_state_store
+
+    conn = duckdb.connect(str(tmp_path / "factory.duckdb"))
+
+    class Settings:
+        db = "sqlite"  # would normally use sqlite
+        db_path = str(tmp_path / "settings.db")
+
+    b = init_state_store(Settings(), duckdb_factory=lambda: conn)
+    assert isinstance(b, DuckDbBackend)
+    conn.close()
+
+
+# ─── keep_db_open behaviour ──────────────────────────────────────────────── #
+
+
+def test_keep_db_open_true_returns_connection(tmp_path):
+    """pipeline.run(keep_db_open=True) returns the live duckdb connection."""
+    from kptn.graph.decorators import TaskSpec
+    from kptn.graph.nodes import TaskNode, ConfigNode
+    from kptn.graph.graph import Graph
+    from kptn.graph.pipeline import Pipeline
+    from kptn.runner.executor import execute
+    from kptn.profiles.resolved import ResolvedGraph
+    from tests.fakes import FakeStateStore
+
+    mock_conn = MagicMock()
+
+    def get_engine():
+        return mock_conn
+
+    task_fn = MagicMock(return_value=None)
+    task_fn.__name__ = "my_task"
+    task_node = TaskNode(fn=task_fn, spec=TaskSpec(outputs=[]), name="my_task")
+    config_node = ConfigNode(spec={"duckdb": get_engine})
+
+    graph = Graph(
+        nodes=[config_node, task_node],
+        edges=[(config_node, task_node)],
+    )
+    resolved = ResolvedGraph(graph=graph, pipeline="test", storage_key="sk")
+    state_store = FakeStateStore()
+
+    result = execute(
+        resolved, state_store,
+        duckdb_factory=get_engine,
+        keep_db_open=True,
+    )
+    assert result is mock_conn
+
+
+def test_keep_db_open_false_closes_connection(tmp_path):
+    """pipeline.run(keep_db_open=False) closes the duckdb connection."""
+    from kptn.graph.decorators import TaskSpec
+    from kptn.graph.nodes import TaskNode, ConfigNode
+    from kptn.graph.graph import Graph
+    from kptn.profiles.resolved import ResolvedGraph
+    from kptn.runner.executor import execute
+    from tests.fakes import FakeStateStore
+
+    mock_conn = MagicMock()
+
+    def get_engine():
+        return mock_conn
+
+    task_fn = MagicMock(return_value=None)
+    task_fn.__name__ = "my_task"
+    task_node = TaskNode(fn=task_fn, spec=TaskSpec(outputs=[]), name="my_task")
+    config_node = ConfigNode(spec={"duckdb": get_engine})
+
+    graph = Graph(
+        nodes=[config_node, task_node],
+        edges=[(config_node, task_node)],
+    )
+    resolved = ResolvedGraph(graph=graph, pipeline="test", storage_key="sk")
+    state_store = FakeStateStore()
+
+    result = execute(
+        resolved, state_store,
+        duckdb_factory=get_engine,
+        keep_db_open=False,
+    )
+    assert result is None
+    mock_conn.close.assert_called_once()
