@@ -28,6 +28,35 @@ def test_run_v2_accepts_pipeline_object() -> None:
         kptn.run(pipeline)  # should not raise
 
 
+def test_pipeline_run_method() -> None:
+    """pipeline.run() is equivalent to kptn.run(pipeline)."""
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute") as mock_exec, \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.return_value = mock_config
+        pipeline.run()
+        mock_exec.assert_called_once()
+
+
+def test_pipeline_run_method_passes_profile() -> None:
+    """pipeline.run(profile=...) forwards the profile to kptn.run()."""
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    mock_resolved = MagicMock()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.ProfileResolver") as mock_resolver_cls, \
+         patch("kptn.runner.api.execute"), \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.return_value = mock_config
+        mock_resolver_cls.return_value.compile.return_value = mock_resolved
+        pipeline.run(profile="prod")
+        mock_resolver_cls.return_value.compile.assert_called_once_with(pipeline, "prod")
+
+
 def test_run_v2_does_not_accept_old_kwargs() -> None:
     """kptn.run() no longer accepts v0.1.x kwargs (project_dir, force, task_names)."""
     pipeline = _make_pipeline("default")

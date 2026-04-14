@@ -27,3 +27,8 @@ class Pipeline(Graph):
     @property
     def name(self) -> str:
         return self._name
+
+    def run(self, *, profile: str | None = None) -> None:
+        """Run this pipeline — equivalent to kptn.run(pipeline, profile=profile)."""
+        from kptn.runner.api import run as _run  # lazy import avoids circular dependency
+        _run(self, profile=profile)
