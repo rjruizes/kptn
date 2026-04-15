@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
-
 from kptn.graph.graph import Graph
 from kptn.graph.nodes import AnyNode
 from kptn.exceptions import GraphError
@@ -9,7 +7,13 @@ from kptn.exceptions import GraphError
 
 def topo_sort(graph: Graph) -> list[AnyNode]:
     """
-    Topological sort of graph nodes using Kahn's algorithm (BFS-based).
+    Topological sort of graph nodes using a depth-first variant of Kahn's algorithm.
+
+    Uses a LIFO stack instead of a FIFO queue so that sequential chains (e.g. all
+    tasks inside a Pipeline branch) are kept together in the output rather than
+    being interleaved with sibling branches.  Successors are pushed in reversed
+    declaration order so the first-declared successor is processed first.
+
     Raises GraphError if a cycle is detected.
     Returns nodes in dependency order (predecessors before successors).
     """
@@ -27,19 +31,24 @@ def topo_sort(graph: Graph) -> list[AnyNode]:
         successors[id(src)].append(dst)
         in_degree[id(dst)] += 1
 
-    queue: deque[AnyNode] = deque(
-        n for n in graph.nodes if in_degree[id(n)] == 0
+    # Seed the stack in reversed declaration order so the first-declared node
+    # ends up on top and is processed first.
+    stack: list[AnyNode] = list(
+        reversed([n for n in graph.nodes if in_degree[id(n)] == 0])
     )
 
     result: list[AnyNode] = []
 
-    while queue:
-        node = queue.popleft()
+    while stack:
+        node = stack.pop()
         result.append(node)
-        for successor in successors[id(node)]:
+        # Push successors in reversed declaration order so the first-declared
+        # successor lands on top of the stack and is processed next, keeping
+        # each pipeline's task chain contiguous in the output.
+        for successor in reversed(successors[id(node)]):
             in_degree[id(successor)] -= 1
             if in_degree[id(successor)] == 0:
-                queue.append(successor)
+                stack.append(successor)
 
     if len(result) < len(graph.nodes):
         remaining = [
