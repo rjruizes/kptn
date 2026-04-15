@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch, call
 
+import logging
 import pytest
 
-from kptn.exceptions import TaskError
-from kptn.graph.decorators import TaskSpec, RTaskSpec
+from kptn.exceptions import HashError, TaskError
+from kptn.graph.decorators import TaskSpec, RTaskSpec, SqlTaskSpec
 from kptn.graph.graph import Graph
 from kptn.graph.nodes import (
     ConfigNode,
@@ -23,7 +24,7 @@ from kptn.graph.nodes import (
     TaskNode,
 )
 from kptn.profiles.resolved import ResolvedGraph
-from kptn.runner.executor import execute
+from kptn.runner.executor import execute, _dispatch_sql_task
 from tests.fakes import FakeStateStore
 
 
@@ -43,6 +44,11 @@ def _make_r_task_node(name: str, path: str = "script.R", outputs: list[str] | No
     return RTaskNode(path=path, spec=spec, name=name)
 
 
+def _make_sql_task_node(name: str, path: str = "query.sql", outputs: list[str] | None = None) -> SqlTaskNode:
+    spec = SqlTaskSpec(path=path, outputs=outputs or [])
+    return SqlTaskNode(path=path, spec=spec, name=name)
+
+
 def _make_resolved(graph: Graph, bypassed_names: frozenset[str] | None = None) -> ResolvedGraph:
     return ResolvedGraph(
         graph=graph,
@@ -50,6 +56,72 @@ def _make_resolved(graph: Graph, bypassed_names: frozenset[str] | None = None) -
         storage_key="kptn",
         bypassed_names=bypassed_names or frozenset(),
     )
+
+
+# ─── _dispatch_sql_task unit tests ───────────────────────────────────────────
+
+
+def test_dispatch_sql_task_executes_single_statement(tmp_path: Path) -> None:
+    """Single-statement SQL file: conn.execute called once with statement text."""
+    sql_file = tmp_path / "query.sql"
+    sql_file.write_text("CREATE TABLE foo AS SELECT 1 AS n")
+    node = _make_sql_task_node("query", path=str(sql_file))
+    conn = MagicMock()
+    _dispatch_sql_task(node, conn, cwd=tmp_path)
+    conn.execute.assert_called_once_with("CREATE TABLE foo AS SELECT 1 AS n")
+
+
+def test_dispatch_sql_task_executes_multiple_statements(tmp_path: Path) -> None:
+    """Multi-statement SQL file: each non-empty statement is executed separately."""
+    sql_file = tmp_path / "multi.sql"
+    sql_file.write_text("CREATE TABLE a AS SELECT 1; CREATE TABLE b AS SELECT 2")
+    node = _make_sql_task_node("multi", path=str(sql_file))
+    conn = MagicMock()
+    _dispatch_sql_task(node, conn, cwd=tmp_path)
+    conn.execute.assert_has_calls([
+        call("CREATE TABLE a AS SELECT 1"),
+        call("CREATE TABLE b AS SELECT 2"),
+    ])
+
+
+def test_dispatch_sql_task_ignores_trailing_semicolons(tmp_path: Path) -> None:
+    """Trailing semicolon does not produce a spurious empty statement."""
+    sql_file = tmp_path / "trailing.sql"
+    sql_file.write_text("CREATE TABLE a AS SELECT 1; CREATE TABLE b AS SELECT 2;")
+    node = _make_sql_task_node("trailing", path=str(sql_file))
+    conn = MagicMock()
+    _dispatch_sql_task(node, conn, cwd=tmp_path)
+    assert conn.execute.call_count == 2
+
+
+def test_dispatch_sql_task_missing_file_raises_task_error(tmp_path: Path) -> None:
+    """OSError when reading SQL file is wrapped as TaskError."""
+    node = _make_sql_task_node("missing", path=str(tmp_path / "missing.sql"))
+    conn = MagicMock()
+    with pytest.raises(TaskError, match="could not read"):
+        _dispatch_sql_task(node, conn, cwd=tmp_path)
+
+
+def test_dispatch_sql_task_execution_error_raises_task_error(tmp_path: Path) -> None:
+    """conn.execute raising is wrapped as TaskError."""
+    sql_file = tmp_path / "bad.sql"
+    sql_file.write_text("INVALID SQL")
+    node = _make_sql_task_node("bad", path=str(sql_file))
+    conn = MagicMock()
+    conn.execute.side_effect = RuntimeError("Parser error")
+    with pytest.raises(TaskError, match="failed at statement 1/1"):
+        _dispatch_sql_task(node, conn, cwd=tmp_path)
+
+
+def test_dispatch_sql_task_resolves_path_relative_to_cwd(tmp_path: Path) -> None:
+    """Relative path in node.path is resolved against cwd."""
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    (subdir / "query.sql").write_text("SELECT 42")
+    node = _make_sql_task_node("query", path="subdir/query.sql")
+    conn = MagicMock()
+    _dispatch_sql_task(node, conn, cwd=tmp_path)
+    conn.execute.assert_called_once_with("SELECT 42")
 
 
 # ─── AC-1: Topological execution order ────────────────────────────────────────
@@ -483,3 +555,122 @@ def test_execute_no_cache_skips_state_store_for_map_node() -> None:
 
     mock_store.read_hash.assert_not_called()
     mock_store.write_hash.assert_not_called()
+
+
+# ─── SqlTaskNode executor integration ────────────────────────────────────────
+
+
+def test_execute_sql_task_runs_when_duckdb_factory_available(tmp_path: Path) -> None:
+    """SqlTaskNode executes its SQL file when duckdb_factory is provided."""
+    sql_file = tmp_path / "query.sql"
+    sql_file.write_text("CREATE TABLE foo AS SELECT 1 AS n")
+    node = _make_sql_task_node("query", path=str(sql_file))
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    conn = MagicMock()
+    factory = MagicMock(return_value=conn)
+    execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=True)
+    conn.execute.assert_called_once_with("CREATE TABLE foo AS SELECT 1 AS n")
+
+
+def test_execute_sql_task_skips_without_duckdb_factory(tmp_path: Path, caplog) -> None:
+    """SqlTaskNode without duckdb_factory logs a warning and is skipped."""
+    node = _make_sql_task_node("query", path="query.sql")
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    with caplog.at_level(logging.WARNING, logger="kptn.runner.executor"):
+        execute(resolved, FakeStateStore(), cwd=tmp_path, no_cache=True)
+    assert "no DuckDB connection" in caplog.text
+
+
+def test_execute_sql_task_skips_if_cached(tmp_path: Path, capsys) -> None:
+    """SqlTaskNode is skipped when is_stale returns (False, 'cached')."""
+    sql_file = tmp_path / "query.sql"
+    sql_file.write_text("SELECT 1")
+    node = _make_sql_task_node("query", path=str(sql_file))
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    conn = MagicMock()
+    factory = MagicMock(return_value=conn)
+    with patch("kptn.runner.executor.is_stale", return_value=(False, "cached")):
+        execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
+    conn.execute.assert_not_called()
+    assert "[SKIP] query" in capsys.readouterr().out
+
+
+def test_execute_sql_task_no_cache_bypasses_staleness_check(tmp_path: Path) -> None:
+    """no_cache=True forces execution without calling is_stale."""
+    sql_file = tmp_path / "query.sql"
+    sql_file.write_text("SELECT 1")
+    node = _make_sql_task_node("query", path=str(sql_file))
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    conn = MagicMock()
+    factory = MagicMock(return_value=conn)
+    with patch("kptn.runner.executor.is_stale") as mock_stale:
+        execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=True)
+    mock_stale.assert_not_called()
+    conn.execute.assert_called_once_with("SELECT 1")
+
+
+def test_execute_sql_task_emit_fail_on_execution_error(tmp_path: Path, capsys) -> None:
+    """TaskError from _dispatch_sql_task triggers emit_fail and is re-raised."""
+    sql_file = tmp_path / "bad.sql"
+    sql_file.write_text("BAD SQL")
+    node = _make_sql_task_node("bad", path=str(sql_file))
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    conn = MagicMock()
+    conn.execute.side_effect = RuntimeError("parse error")
+    factory = MagicMock(return_value=conn)
+    with pytest.raises(TaskError, match="failed at statement"):
+        execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=True)
+    assert "[FAIL] bad" in capsys.readouterr().err
+
+
+def test_execute_sql_task_writes_hash_after_successful_run(tmp_path: Path) -> None:
+    """Hash is written to the state store after the SQL task runs successfully."""
+    sql_file = tmp_path / "query.sql"
+    sql_file.write_text("SELECT 1")
+    node = _make_sql_task_node("query", path=str(sql_file), outputs=["duckdb://main.foo"])
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    store = FakeStateStore()
+    conn = MagicMock()
+    factory = MagicMock(return_value=conn)
+    with patch("kptn.runner.executor.is_stale", return_value=(True, "no cached hash")):
+        with patch("kptn.runner.executor._compute_hash", return_value="abc123def456"):
+            execute(resolved, store, duckdb_factory=factory, no_cache=False)
+    conn.execute.assert_called_once_with("SELECT 1")
+    assert store.read_hash("kptn", "default", "query") == "abc123def456"
+
+
+def test_execute_sql_task_emit_fail_on_hash_error(tmp_path: Path, capsys) -> None:
+    """HashError from _compute_hash after successful execution triggers emit_fail and TaskError."""
+    sql_file = tmp_path / "query.sql"
+    sql_file.write_text("SELECT 1")
+    node = _make_sql_task_node("query", path=str(sql_file), outputs=["duckdb://main.foo"])
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    conn = MagicMock()
+    factory = MagicMock(return_value=conn)
+    with patch("kptn.runner.executor.is_stale", return_value=(True, "no cached hash")):
+        with patch("kptn.runner.executor._compute_hash", side_effect=HashError("table missing")):
+            with pytest.raises(TaskError, match="Hash computation failed"):
+                execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
+    conn.execute.assert_called_once_with("SELECT 1")
+    assert "[FAIL] query" in capsys.readouterr().err
+
+
+def test_execute_sql_task_hash_error_in_staleness_forces_rerun(tmp_path: Path) -> None:
+    """HashError from is_stale treats the task as stale and re-executes it."""
+    sql_file = tmp_path / "query.sql"
+    sql_file.write_text("SELECT 1")
+    node = _make_sql_task_node("query", path=str(sql_file))
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    conn = MagicMock()
+    factory = MagicMock(return_value=conn)
+    with patch("kptn.runner.executor.is_stale", side_effect=HashError("missing")):
+        execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
+    conn.execute.assert_called_once_with("SELECT 1")

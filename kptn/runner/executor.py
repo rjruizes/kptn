@@ -81,6 +81,32 @@ def _dispatch_r_task(node: RTaskNode, cwd: Path) -> None:
         raise TaskError(msg)
 
 
+def _dispatch_sql_task(node: SqlTaskNode, conn: Any, cwd: Path) -> None:
+    """Execute a SQL file against *conn*.
+
+    The file is split on ``;`` and each non-empty statement is executed
+    individually.  Semicolons inside string literals or SQL comments are not
+    handled — keep SQL files simple or use single-statement files.
+    """
+    sql_path = Path(node.path)
+    if not sql_path.is_absolute():
+        sql_path = cwd / sql_path
+    try:
+        sql_text = sql_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise TaskError(f"SQL task '{node.name}' could not read {sql_path}: {exc}") from exc
+    statements = [s.strip() for s in sql_text.split(";") if s.strip()]
+    for i, stmt in enumerate(statements, start=1):
+        try:
+            conn.execute(stmt)
+        except Exception as exc:
+            preview = stmt[:120] + ("…" if len(stmt) > 120 else "")
+            raise TaskError(
+                f"SQL task '{node.name}' failed at statement {i}/{len(statements)}: {exc}\n"
+                f"  Statement: {preview}"
+            ) from exc
+
+
 def _compute_hash(node: AnyNode, duckdb_conn: "Any | None" = None) -> str | None:
     if not isinstance(node, (TaskNode, SqlTaskNode, RTaskNode)):
         return None
@@ -179,7 +205,8 @@ def execute(
     Args:
         resolved: The resolved pipeline graph to execute.
         state_store: Backend store for persisting task hashes and state.
-        cwd: Working directory for RTaskNode subprocess execution; defaults to current directory.
+        cwd: Working directory for RTaskNode subprocess execution and SqlTaskNode SQL file
+             path resolution; defaults to current directory.
         duckdb_factory: Callable that returns a DuckDB connection instance when provided.
         duckdb_alias: Key name for the DuckDB connection in config kwargs (default: "duckdb").
         keep_db_open: When True, return the live DuckDB connection instead of closing it.
@@ -341,21 +368,41 @@ def execute(
                     )
             continue
 
-        # SqlTaskNode — out of scope for local runner v0.2.0
+        # SqlTaskNode — dispatch SQL file against DuckDB connection
         if isinstance(node, SqlTaskNode):
-            logger.warning(
-                "SqlTaskNode %r encountered — SQL dispatch is out of scope for v0.2.0 local runner; skipping",
-                node.name,
-            )
-            try:
-                hash_ = _compute_hash(node, duckdb_factory() if duckdb_factory else None)
-            except HashError as exc:
-                logger.warning("Hash computation failed for SqlTaskNode %r: %s", node.name, exc)
-                continue
-            if hash_ is not None:
-                state_store.write_hash(
-                    resolved.storage_key, resolved.pipeline, node.name, hash_
+            if duckdb_factory is None:
+                logger.warning(
+                    "SqlTaskNode %r encountered but no DuckDB connection is available — "
+                    "add kptn.config(duckdb=get_engine) to your pipeline; skipping",
+                    node.name,
                 )
+                continue
+            conn = duckdb_factory()  # acquire once; factory should return a cached singleton
+            if not no_cache:
+                stale, reason = False, ""
+                try:
+                    stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline, duckdb_conn=conn)
+                except HashError:
+                    stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
+                if not stale and reason == "cached":
+                    emit_skip(node.name)
+                    continue
+            emit_run(node.name)
+            try:
+                _dispatch_sql_task(node, conn, cwd)
+            except TaskError as exc:
+                emit_fail(node.name, str(exc))
+                raise
+            if not no_cache:
+                try:
+                    hash_ = _compute_hash(node, conn)
+                except HashError as exc:
+                    emit_fail(node.name, str(exc))
+                    raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
+                if hash_ is not None:
+                    state_store.write_hash(
+                        resolved.storage_key, resolved.pipeline, node.name, hash_
+                    )
             continue
 
     # Post-run: manage duckdb connection lifecycle
