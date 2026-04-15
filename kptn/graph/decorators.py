@@ -92,7 +92,9 @@ class _SqlTaskHandle:
     Returned by sql_task().  Enables >> without being a SqlTaskNode.
     Pattern mirrors _KptnCallable: the Graph wraps this into a SqlTaskNode.
 
-    Not callable — SQL tasks are executed by the runner, not Python.
+    Directly callable: ``my_sql_task(duckdb=engine)`` executes the SQL
+    file against the provided DuckDB connection without caching or
+    pipeline overhead.  See ``__call__`` for details.
     """
 
     def __init__(self, spec: SqlTaskSpec) -> None:
@@ -103,6 +105,53 @@ class _SqlTaskHandle:
         from kptn.graph.graph import Graph
 
         return Graph._from_node(self) >> other
+
+    def __call__(self, **kwargs: Any) -> None:
+        """Execute this SQL task directly against a DuckDB connection.
+
+        Always runs with no_cache=True — the state store is bypassed entirely.
+        Pass the DuckDB connection as ``duckdb=<conn>``.
+
+        Example::
+
+            my_sql_task(duckdb=engine)
+        """
+        if "no_cache" in kwargs:
+            raise TypeError(
+                "_SqlTaskHandle.__call__() does not accept 'no_cache'; "
+                "it always runs without caching. "
+                "Remove 'no_cache' from the call."
+            )
+        known = {"duckdb"}
+        unknown = set(kwargs) - known
+        if unknown:
+            raise TypeError(
+                f"_SqlTaskHandle.__call__() got unexpected keyword arguments: "
+                f"{sorted(unknown)!r}. Only 'duckdb=' is accepted."
+            )
+        if "duckdb" not in kwargs:
+            raise TypeError(
+                f"sql_task '{self.__name__}' requires a DuckDB connection: "
+                f"call it as my_sql_task(duckdb=engine). No 'duckdb' kwarg was provided."
+            )
+        conn = kwargs["duckdb"]
+        if conn is None:
+            raise TypeError(
+                f"sql_task '{self.__name__}' received duckdb=None. "
+                f"Pass a live connection: my_sql_task(duckdb=engine)."
+            )
+
+        from kptn.graph.nodes import SqlTaskNode
+        from kptn.runner.executor import _dispatch_sql_task
+        from kptn.runner.plan import emit_fail, emit_run
+
+        node = SqlTaskNode(path=self.__kptn__.path, spec=self.__kptn__, name=self.__name__)
+        emit_run(node.name)
+        try:
+            _dispatch_sql_task(node, conn, cwd=Path.cwd())
+        except Exception as exc:
+            emit_fail(node.name, str(exc))
+            raise
 
     def __repr__(self) -> str:
         return f"<kptn sql_task '{self.__name__}'>"
