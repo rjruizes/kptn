@@ -10,6 +10,7 @@ from kptn.profiles.loader import ProfileLoader
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.resolver import ProfileResolver
 from kptn.runner.executor import execute
+from kptn.runner.plan import plan as _plan
 from kptn.state_store.factory import init_state_store
 
 if TYPE_CHECKING:
@@ -88,3 +89,35 @@ def run(
         duckdb_alias=duckdb_alias,
         keep_db_open=keep_db_open,
     )
+
+
+def plan(
+    pipeline: Pipeline,
+    *,
+    profile: str | None = None,
+) -> None:
+    """Print which tasks would run or be skipped without executing anything.
+
+    Parameters
+    ----------
+    pipeline:
+        The pipeline to inspect.
+    profile:
+        Optional profile name to resolve from ``kptn.yaml``.
+    """
+    cwd = Path.cwd()
+    config = ProfileLoader.load(cwd / "kptn.yaml")
+
+    if profile is not None:
+        resolved = ProfileResolver(config).compile(pipeline, profile)
+    else:
+        resolved = ResolvedGraph(
+            graph=pipeline,
+            pipeline=pipeline.name,
+            storage_key=config.settings.db_path or ".kptn/kptn.db",
+        )
+
+    duckdb_factory, _ = _find_duckdb_factory(pipeline)
+    state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
+
+    _plan(resolved, state_store)

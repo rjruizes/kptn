@@ -8,6 +8,6 @@ from kptn.graph.decorators import task, sql_task, r_task, noop  # noqa: F401
 from kptn.graph.composition import parallel, Stage, map  # noqa: F401
 from kptn.graph.pipeline import Pipeline  # noqa: F401
 from kptn.graph.config import config  # noqa: F401
-from kptn.runner.api import run  # noqa: F401
+from kptn.runner.api import run, plan  # noqa: F401
 
-__all__ = ["task", "sql_task", "r_task", "noop", "parallel", "Stage", "map", "Pipeline", "config", "run"]
+__all__ = ["task", "sql_task", "r_task", "noop", "parallel", "Stage", "map", "Pipeline", "config", "run", "plan"]
