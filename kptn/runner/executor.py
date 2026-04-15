@@ -162,6 +162,8 @@ def execute(
     duckdb_factory: "Callable[[], Any] | None" = None,
     duckdb_alias: str | None = None,
     keep_db_open: bool = False,
+    no_cache: bool = False,
+    extra_kwargs: "dict[str, Any] | None" = None,
 ) -> "Any | None":
     """Execute the resolved pipeline graph.
 
@@ -174,6 +176,20 @@ def execute(
     * ``keep_db_open=False`` (default) — close the connection via the factory.
     * ``keep_db_open=True`` — leave it open and return the live connection.
 
+    Args:
+        resolved: The resolved pipeline graph to execute.
+        state_store: Backend store for persisting task hashes and state.
+        cwd: Working directory for RTaskNode subprocess execution; defaults to current directory.
+        duckdb_factory: Callable that returns a DuckDB connection instance when provided.
+        duckdb_alias: Key name for the DuckDB connection in config kwargs (default: "duckdb").
+        keep_db_open: When True, return the live DuckDB connection instead of closing it.
+        no_cache:
+            When ``True``, bypass all state-store hash reads and writes — every task
+            runs unconditionally and no hashes are persisted. (Behaviour added in Task 2.)
+        extra_kwargs:
+            Additional key/value pairs merged into ``config_kwargs`` before execution.
+            Caller-supplied values take precedence over ConfigNode-resolved values.
+
     Returns the DuckDB connection when ``keep_db_open=True`` and a factory was
     provided; ``None`` otherwise.
     """
@@ -185,6 +201,9 @@ def execute(
     ordered: list[AnyNode] = topo_sort(resolved.graph)
     config_kwargs: dict[str, Any] = {}
     runtime_ctx: dict[str, Any] = {}
+
+    if extra_kwargs is not None:
+        config_kwargs.update(extra_kwargs)
 
     for node in ordered:
         # Non-exec nodes — pass through silently
@@ -209,6 +228,8 @@ def execute(
                 config_kwargs[_duckdb_alias] = duckdb_factory()
             else:
                 config_kwargs.update(invoke_config(node))
+            if extra_kwargs is not None:
+                config_kwargs.update(extra_kwargs)
             continue
 
         # MapNode — resolve collection and dispatch per-item
@@ -217,17 +238,18 @@ def execute(
             emit_map(node.name, len(collection))
             for item in collection:
                 item_task_name = f"{node.name}[{item}]"
-                stored_hash = state_store.read_hash(
-                    resolved.storage_key, resolved.pipeline, item_task_name
-                )
-                if stored_hash is not None:
-                    try:
-                        current_hash = _compute_hash_for_map_item(node, item_task_name, duckdb_factory() if duckdb_factory else None)
-                    except HashError:
-                        current_hash = None  # treat as stale
-                    if current_hash is not None and current_hash == stored_hash:
-                        emit_skip(item_task_name)
-                        continue
+                if not no_cache:
+                    stored_hash = state_store.read_hash(
+                        resolved.storage_key, resolved.pipeline, item_task_name
+                    )
+                    if stored_hash is not None:
+                        try:
+                            current_hash = _compute_hash_for_map_item(node, item_task_name, duckdb_factory() if duckdb_factory else None)
+                        except HashError:
+                            current_hash = None  # treat as stale
+                        if current_hash is not None and current_hash == stored_hash:
+                            emit_skip(item_task_name)
+                            continue
                 emit_run(item_task_name)
                 kwargs = _filter_kwargs(node.task, {
                     **config_kwargs,
@@ -244,30 +266,32 @@ def execute(
                     )
                     emit_fail(item_task_name, str(task_err))
                     raise task_err from exc
-                try:
-                    hash_ = _compute_hash_for_map_item(node, item_task_name, duckdb_factory() if duckdb_factory else None)
-                except HashError:
-                    logger.warning(
-                        "Hash computation failed for map item %r — skipping hash write",
-                        item_task_name,
-                    )
-                    hash_ = None
-                if hash_ is not None:
-                    state_store.write_hash(
-                        resolved.storage_key, resolved.pipeline, item_task_name, hash_
-                    )
+                if not no_cache:
+                    try:
+                        hash_ = _compute_hash_for_map_item(node, item_task_name, duckdb_factory() if duckdb_factory else None)
+                    except HashError:
+                        logger.warning(
+                            "Hash computation failed for map item %r — skipping hash write",
+                            item_task_name,
+                        )
+                        hash_ = None
+                    if hash_ is not None:
+                        state_store.write_hash(
+                            resolved.storage_key, resolved.pipeline, item_task_name, hash_
+                        )
             continue
 
         # TaskNode
         if isinstance(node, TaskNode):
-            stale, reason = False, ""
-            try:
-                stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline, duckdb_conn=duckdb_factory() if duckdb_factory else None)
-            except HashError:
-                stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
-            if not stale and reason == "cached":
-                emit_skip(node.name)
-                continue
+            if not no_cache:
+                stale, reason = False, ""
+                try:
+                    stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline, duckdb_conn=duckdb_factory() if duckdb_factory else None)
+                except HashError:
+                    stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
+                if not stale and reason == "cached":
+                    emit_skip(node.name)
+                    continue
             emit_run(node.name)
             profile_kwargs = resolved.profile_args.get(node.name, {})
             try:
@@ -276,42 +300,45 @@ def execute(
                 emit_fail(node.name, str(exc))
                 raise
             runtime_ctx[node.name] = result
-            try:
-                hash_ = _compute_hash(node, duckdb_factory() if duckdb_factory else None)
-            except HashError as exc:
-                emit_fail(node.name, str(exc))
-                raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
-            if hash_ is not None:
-                state_store.write_hash(
-                    resolved.storage_key, resolved.pipeline, node.name, hash_
-                )
+            if not no_cache:
+                try:
+                    hash_ = _compute_hash(node, duckdb_factory() if duckdb_factory else None)
+                except HashError as exc:
+                    emit_fail(node.name, str(exc))
+                    raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
+                if hash_ is not None:
+                    state_store.write_hash(
+                        resolved.storage_key, resolved.pipeline, node.name, hash_
+                    )
             continue
 
         # RTaskNode
         if isinstance(node, RTaskNode):
-            stale, reason = False, ""
-            try:
-                stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline, duckdb_conn=duckdb_factory() if duckdb_factory else None)
-            except HashError:
-                stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
-            if not stale and reason == "cached":
-                emit_skip(node.name)
-                continue
+            if not no_cache:
+                stale, reason = False, ""
+                try:
+                    stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline, duckdb_conn=duckdb_factory() if duckdb_factory else None)
+                except HashError:
+                    stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
+                if not stale and reason == "cached":
+                    emit_skip(node.name)
+                    continue
             emit_run(node.name)
             try:
                 _dispatch_r_task(node, cwd)
             except TaskError as exc:
                 emit_fail(node.name, str(exc))
                 raise
-            try:
-                hash_ = _compute_hash(node, duckdb_factory() if duckdb_factory else None)
-            except HashError as exc:
-                emit_fail(node.name, str(exc))
-                raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
-            if hash_ is not None:
-                state_store.write_hash(
-                    resolved.storage_key, resolved.pipeline, node.name, hash_
-                )
+            if not no_cache:
+                try:
+                    hash_ = _compute_hash(node, duckdb_factory() if duckdb_factory else None)
+                except HashError as exc:
+                    emit_fail(node.name, str(exc))
+                    raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
+                if hash_ is not None:
+                    state_store.write_hash(
+                        resolved.storage_key, resolved.pipeline, node.name, hash_
+                    )
             continue
 
         # SqlTaskNode — out of scope for local runner v0.2.0

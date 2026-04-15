@@ -348,3 +348,138 @@ def test_execute_non_exec_nodes_skipped() -> None:
 
     # No hashes written
     assert store.list_tasks("kptn", "default") == []
+
+
+# ─── extra_kwargs injection ───────────────────────────────────────────────────
+
+
+def test_execute_extra_kwargs_reach_task() -> None:
+    """extra_kwargs values are forwarded to tasks that declare matching params."""
+    received: dict[str, Any] = {}
+
+    def capture(engine: Any, config: Any) -> None:
+        received["engine"] = engine
+        received["config"] = config
+
+    capture.__name__ = "capture"
+    node = TaskNode(fn=capture, spec=TaskSpec(outputs=[]), name="capture")
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+    store = FakeStateStore()
+
+    execute(resolved, store, extra_kwargs={"engine": "eng", "config": "cfg"})
+
+    assert received == {"engine": "eng", "config": "cfg"}
+
+
+def test_execute_extra_kwargs_override_config_node() -> None:
+    """extra_kwargs must take precedence over ConfigNode values for the same key."""
+    received: dict[str, Any] = {}
+
+    def get_engine() -> str:
+        return "config_engine"
+
+    def task_a(engine: Any) -> None:
+        received["engine"] = engine
+
+    task_a.__name__ = "task_a"
+    config_node = ConfigNode(spec={"engine": get_engine})
+    task_node = TaskNode(fn=task_a, spec=TaskSpec(outputs=[]), name="task_a")
+    graph = Graph(nodes=[config_node, task_node], edges=[(config_node, task_node)])
+    resolved = _make_resolved(graph)
+    store = FakeStateStore()
+
+    execute(resolved, store, extra_kwargs={"engine": "override_engine"})
+
+    assert received["engine"] == "override_engine"
+
+
+def test_execute_extra_kwargs_empty_dict_is_harmless() -> None:
+    """Passing an empty dict must not raise and must not affect execution."""
+    called: list[bool] = []
+
+    def task_a() -> None:
+        called.append(True)
+
+    task_a.__name__ = "task_a"
+    node = TaskNode(fn=task_a, spec=TaskSpec(outputs=[]), name="task_a")
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+
+    execute(resolved, FakeStateStore(), extra_kwargs={})
+
+    assert called
+
+
+# ─── Task 2: no_cache flag ────────────────────────────────────────────────────
+
+
+def test_execute_no_cache_skips_state_store_reads_and_writes() -> None:
+    """When no_cache=True, state_store.read_hash and write_hash are never called."""
+    mock_store = MagicMock()
+    node = _make_task_node("t", outputs=["nonexistent_output.txt"])
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+
+    execute(resolved, mock_store, no_cache=True)
+
+    mock_store.read_hash.assert_not_called()
+    mock_store.write_hash.assert_not_called()
+
+
+def test_execute_no_cache_runs_task_even_when_hash_cached() -> None:
+    """When no_cache=True, tasks run even when is_stale would return cached."""
+    ran: list[str] = []
+
+    def t() -> None:
+        ran.append("t")
+
+    t.__name__ = "t"
+    node = TaskNode(fn=t, spec=TaskSpec(outputs=[]), name="t")
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+
+    with patch("kptn.runner.executor.is_stale", return_value=(False, "cached")):
+        # Without no_cache=True this patched is_stale would cause a skip
+        execute(resolved, FakeStateStore(), no_cache=True)
+
+    assert ran == ["t"]
+
+
+def test_execute_no_cache_false_respects_stale_check() -> None:
+    """Complementary: without no_cache, a cached is_stale result causes a skip."""
+    ran: list[str] = []
+
+    def t() -> None:
+        ran.append("t")
+
+    t.__name__ = "t"
+    node = TaskNode(fn=t, spec=TaskSpec(outputs=[]), name="t")
+    graph = Graph(nodes=[node], edges=[])
+    resolved = _make_resolved(graph)
+
+    with patch("kptn.runner.executor.is_stale", return_value=(False, "cached")):
+        execute(resolved, FakeStateStore(), no_cache=False)
+
+    assert ran == []  # skipped because is_stale returned "cached"
+
+
+def test_execute_no_cache_skips_state_store_for_map_node() -> None:
+    """When no_cache=True, MapNode items skip all state-store reads and writes."""
+    import kptn
+
+    @kptn.task(outputs=[])
+    def process_item(item: Any) -> None:
+        pass
+
+    map_node = MapNode(task=process_item, over="items", name="process_item")
+    graph = Graph(nodes=[map_node], edges=[])
+    resolved = _make_resolved(graph)
+    mock_store = MagicMock()
+
+    # Provide a runtime context so the MapNode has items to iterate over
+    with patch("kptn.runner.executor._resolve_collection", return_value=["a", "b"]):
+        execute(resolved, mock_store, no_cache=True)
+
+    mock_store.read_hash.assert_not_called()
+    mock_store.write_hash.assert_not_called()

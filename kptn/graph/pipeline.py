@@ -32,7 +32,7 @@ class Pipeline(Graph):
     def name(self) -> str:
         return self._name
 
-    def run(self, *, profile: str | None = None, keep_db_open: bool = False):
+    def run(self, *, profile: str | None = None, keep_db_open: bool = False, no_cache: bool = False, **kwargs):
         """Run this pipeline — equivalent to kptn.run(pipeline, ...).
 
         Parameters
@@ -47,10 +47,38 @@ class Pipeline(Graph):
                 def engine():
                     return main_pipeline.run(keep_db_open=True)
 
+        no_cache:
+            When ``True``, skip all state-store reads and writes — every task runs
+            unconditionally.  Runtime values passed as keyword arguments are forwarded
+            to tasks that declare matching parameters. ``kptn.yaml`` is optional in
+            this mode unless a ``profile`` is also specified.
+
+        **kwargs:
+            Runtime values forwarded to tasks (e.g. ``engine=engine, config=config``).
+
         Returns
         -------
         The live ``duckdb.DuckDBPyConnection`` when ``keep_db_open=True`` and a
         duckdb factory was declared; ``None`` otherwise.
         """
         from kptn.runner.api import run as _run  # lazy import avoids circular dependency
-        return _run(self, profile=profile, keep_db_open=keep_db_open)
+        return _run(self, profile=profile, keep_db_open=keep_db_open, no_cache=no_cache, **kwargs)
+
+    def __call__(self, **kwargs):
+        """Call this pipeline directly, bypassing the state store.
+
+        Equivalent to ``pipeline.run(no_cache=True, **kwargs)``.
+        ``no_cache`` is always ``True`` in direct calls; use ``.run(no_cache=...)``
+        for explicit control.
+
+        Example::
+
+            load_mcac(engine=engine, config=config)
+        """
+        if "no_cache" in kwargs:
+            raise TypeError(
+                "Pipeline.__call__() does not accept 'no_cache'; "
+                "it always runs with no_cache=True. "
+                "Use pipeline.run(no_cache=...) for explicit control."
+            )
+        return self.run(no_cache=True, **kwargs)

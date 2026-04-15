@@ -57,11 +57,12 @@ def test_pipeline_run_method_passes_profile() -> None:
         mock_resolver_cls.return_value.compile.assert_called_once_with(pipeline, "prod")
 
 
-def test_run_v2_does_not_accept_old_kwargs() -> None:
+@pytest.mark.parametrize("bad_kwarg", ["project_dir", "force", "task_names"])
+def test_run_v2_does_not_accept_old_kwargs(bad_kwarg: str) -> None:
     """kptn.run() no longer accepts v0.1.x kwargs (project_dir, force, task_names)."""
     pipeline = _make_pipeline("default")
-    with pytest.raises(TypeError):
-        kptn.run(pipeline, project_dir=".")  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="v0.1.x"):
+        kptn.run(pipeline, **{bad_kwarg: "."})  # type: ignore[call-arg]
 
 
 def test_load_pipeline_inserts_project_root_into_sys_path(tmp_path: Path) -> None:

@@ -36,11 +36,16 @@ def _find_duckdb_factory(pipeline: Pipeline):
     return None, None
 
 
+_LEGACY_KWARGS = frozenset({"project_dir", "force", "task_names"})
+
+
 def run(
     pipeline: Pipeline,
     *,
     profile: str | None = None,
     keep_db_open: bool = False,
+    no_cache: bool = False,
+    **kwargs: Any,
 ) -> "duckdb.DuckDBPyConnection | None":
     """Run a pipeline.
 
@@ -60,14 +65,37 @@ def run(
                 return main_pipeline.run(keep_db_open=True)
 
         When ``False`` (default) the connection is closed before returning.
+    no_cache:
+        When ``True``, skip all state-store reads and writes — every task runs
+        unconditionally. ``kptn.yaml`` is optional in this mode unless a
+        ``profile`` is also specified.
+    **kwargs:
+        Runtime values forwarded to tasks that declare matching parameters
+        (e.g. ``engine=engine, config=config``).
 
     Returns
     -------
     The live ``duckdb.DuckDBPyConnection`` when ``keep_db_open=True`` and a duckdb
     factory was declared; ``None`` otherwise.
     """
+    bad = set(kwargs) & _LEGACY_KWARGS
+    if bad:
+        raise TypeError(
+            f"kptn.run() received unsupported v0.1.x argument(s): {bad!r}. "
+            "Pass runtime values for tasks via pipeline(key=value) or "
+            "pipeline.run(no_cache=True, key=value) instead."
+        )
+
+    from kptn.profiles.schema import KptnConfig
+
     cwd = Path.cwd()
-    config = ProfileLoader.load(cwd / "kptn.yaml")
+
+    try:
+        config = ProfileLoader.load(cwd / "kptn.yaml")
+    except FileNotFoundError:
+        if not no_cache or profile is not None:
+            raise
+        config = KptnConfig()  # sensible defaults; state store won't be used
 
     if profile is not None:
         resolved = ProfileResolver(config).compile(pipeline, profile)
@@ -79,7 +107,16 @@ def run(
         )
 
     duckdb_factory, duckdb_alias = _find_duckdb_factory(pipeline)
-    state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
+
+    # no_cache without a profile: skip the state store entirely.
+    # When a profile IS specified the config system is needed, so the
+    # real backend is still initialised (no_cache only suppresses hash
+    # reads/writes inside execute(), not state-store creation).
+    if no_cache and profile is None:
+        from kptn.state_store.noop import NoOpBackend
+        state_store = NoOpBackend()
+    else:
+        state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
 
     return execute(
         resolved,
@@ -88,6 +125,8 @@ def run(
         duckdb_factory=duckdb_factory,
         duckdb_alias=duckdb_alias,
         keep_db_open=keep_db_open,
+        no_cache=no_cache,
+        extra_kwargs=kwargs or None,
     )
 
 

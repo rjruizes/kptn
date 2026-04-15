@@ -1,3 +1,7 @@
+import inspect
+from unittest.mock import patch
+
+import pytest
 import kptn
 from kptn.graph.nodes import PipelineNode, TaskNode
 from kptn.graph.graph import Graph
@@ -221,3 +225,75 @@ def test_pipeline_node_in_kptn_graph_all():
     from kptn import graph
     assert "PipelineNode" in graph.__all__
     assert "Pipeline" in graph.__all__
+
+
+# ─── AC-4: Pipeline.run() and Pipeline.__call__() ─────────────────────────── #
+
+
+def test_pipeline_run_accepts_no_cache_and_kwargs() -> None:
+    """Pipeline.run() signature has no_cache and **kwargs parameters."""
+    sig = inspect.signature(Pipeline.run)
+    assert "no_cache" in sig.parameters
+    assert sig.parameters["no_cache"].default is False
+    assert any(
+        p.kind == inspect.Parameter.VAR_KEYWORD
+        for p in sig.parameters.values()
+    )
+
+
+def test_pipeline_call_is_sugar_for_run_no_cache() -> None:
+    """pipeline(engine=x, config=y) delegates to run(no_cache=True, engine=x, config=y)."""
+    @kptn.task(outputs=[])
+    def a():
+        pass
+
+    p = kptn.Pipeline("p", a)
+    captured: dict = {}
+
+    def fake_run(self, *, profile=None, keep_db_open=False, no_cache=False, **kwargs):
+        captured.update({"no_cache": no_cache, **kwargs})
+
+    with patch.object(Pipeline, "run", fake_run):
+        p(engine="eng", config="cfg")
+
+    assert captured["no_cache"] is True
+    assert captured["engine"] == "eng"
+    assert captured["config"] == "cfg"
+
+
+def test_pipeline_call_returns_run_result() -> None:
+    """pipeline() returns whatever pipeline.run() returns and forwards no_cache=True."""
+    @kptn.task(outputs=[])
+    def a():
+        pass
+
+    p = kptn.Pipeline("p", a)
+
+    with patch.object(Pipeline, "run", return_value="sentinel") as mock_run:
+        result = p()
+
+    assert result == "sentinel"
+    mock_run.assert_called_once_with(no_cache=True)
+
+
+def test_pipeline_call_no_kwargs() -> None:
+    """p() with no kwargs calls run(no_cache=True) with no extra args."""
+    @kptn.task(outputs=[])
+    def a():
+        pass
+
+    p = kptn.Pipeline("p", a)
+    with patch.object(Pipeline, "run", return_value=None) as mock_run:
+        p()
+    mock_run.assert_called_once_with(no_cache=True)
+
+
+def test_pipeline_call_rejects_no_cache_kwarg() -> None:
+    """Passing no_cache= to __call__ raises TypeError with a clear message."""
+    @kptn.task(outputs=[])
+    def a():
+        pass
+
+    p = kptn.Pipeline("p", a)
+    with pytest.raises(TypeError, match="no_cache"):
+        p(no_cache=True)

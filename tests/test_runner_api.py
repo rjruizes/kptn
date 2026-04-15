@@ -109,3 +109,64 @@ def test_run_is_v2_implementation() -> None:
     sig = inspect.signature(kptn.run)
     assert "pipeline" in sig.parameters
     assert "task_names" not in sig.parameters
+
+
+def test_run_no_cache_and_kwargs_forwarded_to_execute() -> None:
+    """no_cache=True and runtime kwargs are forwarded to execute()."""
+    pipeline = _make_pipeline()
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute") as mock_exec, \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.return_value = mock_config
+        run(pipeline, no_cache=True, engine="eng", config="cfg")
+
+    _, exec_kwargs = mock_exec.call_args
+    assert exec_kwargs["no_cache"] is True
+    assert exec_kwargs["extra_kwargs"] == {"engine": "eng", "config": "cfg"}
+
+
+def test_run_no_cache_graceful_when_kptn_yaml_absent() -> None:
+    """no_cache=True does not crash when kptn.yaml is absent, and still forwards params."""
+    pipeline = _make_pipeline()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute") as mock_exec, \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.side_effect = FileNotFoundError
+        run(pipeline, no_cache=True)
+
+    mock_exec.assert_called_once()
+    _, exec_kwargs = mock_exec.call_args
+    assert exec_kwargs["no_cache"] is True
+    assert exec_kwargs["extra_kwargs"] is None
+
+
+def test_run_missing_yaml_raises_when_cache_enabled() -> None:
+    """FileNotFoundError propagates normally when no_cache is False."""
+    pipeline = _make_pipeline()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader:
+        mock_loader.load.side_effect = FileNotFoundError
+        with pytest.raises(FileNotFoundError):
+            run(pipeline)
+
+
+def test_run_no_cache_with_profile_still_requires_yaml() -> None:
+    """no_cache=True does not suppress FileNotFoundError when a profile is requested."""
+    pipeline = _make_pipeline()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader:
+        mock_loader.load.side_effect = FileNotFoundError
+        with pytest.raises(FileNotFoundError):
+            run(pipeline, no_cache=True, profile="prod")
+
+
+def test_run_no_cache_does_not_create_db_file(tmp_path, monkeypatch) -> None:
+    """pipeline() with no_cache=True must not create .kptn/kptn.db on disk."""
+    monkeypatch.chdir(tmp_path)
+    # No kptn.yaml here — this should be fine with no_cache=True
+    pipeline = _make_pipeline("no_db")
+    run(pipeline, no_cache=True)
+    assert not (tmp_path / ".kptn").exists(), ".kptn/ directory must not be created"
