@@ -924,7 +924,8 @@ def test_bypass_fanout_optional_all_succs_reconnected():
 
 
 def test_bypass_stage_dead_plus_optional_cascade_boundary():
-    """OPT-02/D-02: stage_dead→A, A→B_opt→C — stage cascade does NOT jump the optional boundary; C survives as source."""
+    """D-02b: stage_dead→A, A→B_opt→C — optional-dead B has ALL-dead predecessors, so B
+    moves to dead_ids and cascade continues: task_c is fully pruned (not a source node)."""
     # Manual construction: StageNode("env") → task_a (stage-dead) → opt_task_1 (optional-dead) → task_c
     # task_b is the active branch (just to satisfy _validate_stage_refs)
     stage_node = StageNode("env")
@@ -950,11 +951,41 @@ def test_bypass_stage_dead_plus_optional_cascade_boundary():
     node_names = {n.name for n in result.graph.nodes}
     assert "task_a" not in node_names, "stage-dead node task_a must be removed"
     assert "opt_task_1" not in node_names, "optional-dead node must be removed"
-    assert "task_c" in node_names, "task_c must survive (optional firewall)"
-    # task_c must have no predecessors — it becomes a source node
-    # (no bypass: opt_task_1's only pred is stage-dead task_a, BFS yields empty surv_preds)
-    incoming_to_c = [s.name for s, d in result.graph.edges if d.name == "task_c"]
-    assert incoming_to_c == [], f"task_c must be a source node, got predecessors: {incoming_to_c}"
+    # D-02b: opt_task_1's only predecessor (task_a) is stage-dead, so opt_task_1 moves to
+    # dead_ids and task_c is cascade-killed — no source-node stranding.
+    assert "task_c" not in node_names, "task_c must be removed (D-02b: fully-dead-branch optional)"
+
+
+def test_bypass_stage_dead_optional_with_alive_pred_creates_bypass():
+    """D-02 (firewall valid case): alive_A→opt_B→C, dead_D→opt_B — opt_B has an alive pred,
+    so it stays in optional_dead_ids and bypass creates alive_A→C (D-02 guard intact)."""
+    a_node = Graph._from_node(task_a).nodes[0]   # alive source
+    opt_node = Graph._from_node(opt_task_1).nodes[0]  # optional-dead
+    c_node = Graph._from_node(task_c).nodes[0]
+    d_node = Graph._from_node(task_d).nodes[0]   # will be stage-dead
+    b_node = Graph._from_node(task_b).nodes[0]   # active stage branch
+    stage_node = StageNode("env")
+    graph = Graph(
+        nodes=[stage_node, a_node, b_node, c_node, d_node, opt_node],
+        edges=[
+            (stage_node, d_node),   # stage branch: dead
+            (stage_node, b_node),   # stage branch: active
+            (a_node, opt_node),     # alive pred → optional-dead
+            (d_node, opt_node),     # stage-dead pred → optional-dead
+            (opt_node, c_node),
+        ],
+    )
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(
+        profiles={"ci": ProfileSpec(stage_selections={"env": ["task_b"]})}
+    )
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    # opt_task_1 has alive pred (task_a) → D-02b does NOT apply → bypass created
+    assert "task_c" in node_names, "task_c must survive (opt_task_1 has alive pred task_a)"
+    assert "opt_task_1" not in node_names, "optional-dead node must be removed"
+    edge_pairs = {(s.name, d.name) for s, d in result.graph.edges}
+    assert ("task_a", "task_c") in edge_pairs, "bypass edge task_a→task_c must be created"
 
 
 def test_bypass_edge_dedup_no_duplicate_edges():
@@ -977,3 +1008,127 @@ def test_bypass_edge_dedup_no_duplicate_edges():
         if s.name == "task_a" and d.name == "task_c"
     ]
     assert len(ac_edges) == 1, f"task_a→task_c must appear exactly once, got {len(ac_edges)}: {ac_edges}"
+
+
+# ---------------------------------------------------------------------------
+# D-05: Fully-dead Stage preserves exit node via StageNode bypass
+# ---------------------------------------------------------------------------
+
+def test_d05_fully_dead_stage_two_branches_exit_node_preserved():
+    """D-05: Stage with 2 branches, both dead → exit node survives and gets StageNode bypass edge."""
+    # Graph: StageNode("env") → branch_a_head (dead) → branch_a_tail
+    #                         → branch_b_head (dead) → branch_b_tail
+    # branch_a_tail → exit_node (task_c)
+    # branch_b_tail → exit_node (task_c)   [fan-in from both dead branches]
+    stage_node = StageNode("env")
+    a_head = Graph._from_node(task_a).nodes[0]   # branch a head (stage-dead)
+    a_tail = Graph._from_node(task_b).nodes[0]   # branch a tail (cascade-dead)
+    b_head = Graph._from_node(task_d).nodes[0]   # branch b head (stage-dead)
+    exit_node = Graph._from_node(task_c).nodes[0]
+    graph = Graph(
+        nodes=[stage_node, a_head, a_tail, b_head, exit_node],
+        edges=[
+            (stage_node, a_head),   # stage branch a
+            (stage_node, b_head),   # stage branch b (no inner tasks — b_head IS the tail)
+            (a_head, a_tail),       # branch a inner chain
+            (a_tail, exit_node),    # branch a tail → exit
+            (b_head, exit_node),    # branch b tail → exit
+        ],
+    )
+    pipeline = Pipeline("test", graph)
+    # Both branches are dead (empty stage_selections for "env")
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"env": []})})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    # Internal branch nodes must be pruned
+    assert "task_a" not in node_names, "branch a head must be pruned"
+    assert "task_b" not in node_names, "branch a tail must be pruned"
+    assert "task_d" not in node_names, "branch b head must be pruned"
+    # Exit node must survive (D-05)
+    assert "task_c" in node_names, "exit node must survive (D-05)"
+    # Bypass edge: StageNode("env") → exit_node
+    edge_pairs = {(s.name, d.name) for s, d in result.graph.edges}
+    assert ("env", "task_c") in edge_pairs, "bypass edge StageNode(env) → task_c must exist"
+
+
+def test_d05_internal_branch_nodes_are_cascade_killed():
+    """D-05: internal branch nodes (before the exit) are cascade-killed, not preserved."""
+    stage_node = StageNode("env")
+    # Branch a: a_head → a_mid → a_tail → exit_node
+    # Branch b: b_head → b_tail → exit_node
+    a_head = Graph._from_node(task_a).nodes[0]
+    a_mid = Graph._from_node(task_b).nodes[0]
+    a_tail = Graph._from_node(task_d).nodes[0]
+    b_head = Graph._from_node(opt_task_2).nodes[0]   # use opt_task_2 as a plain node
+    exit_node = Graph._from_node(task_c).nodes[0]
+    graph = Graph(
+        nodes=[stage_node, a_head, a_mid, a_tail, b_head, exit_node],
+        edges=[
+            (stage_node, a_head),
+            (stage_node, b_head),
+            (a_head, a_mid),
+            (a_mid, a_tail),
+            (a_tail, exit_node),
+            (b_head, exit_node),
+        ],
+    )
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"env": []})})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    # ALL internal branch nodes must be pruned
+    assert "task_a" not in node_names, "branch a head must be killed"
+    assert "task_b" not in node_names, "branch a mid node must be killed"
+    assert "task_d" not in node_names, "branch a tail must be killed"
+    assert "opt_task_2" not in node_names, "branch b head must be killed"
+    # Only exit node and StageNode survive
+    assert "task_c" in node_names, "exit node must survive (D-05)"
+
+
+def test_d05_partial_dead_stage_exit_node_via_alive_branch():
+    """D-05 not triggered: one alive branch means exit node has an alive predecessor."""
+    stage_node = StageNode("env")
+    a_head = Graph._from_node(task_a).nodes[0]   # dead branch
+    b_head = Graph._from_node(task_b).nodes[0]   # alive branch
+    exit_node = Graph._from_node(task_c).nodes[0]
+    graph = Graph(
+        nodes=[stage_node, a_head, b_head, exit_node],
+        edges=[
+            (stage_node, a_head),
+            (stage_node, b_head),
+            (a_head, exit_node),
+            (b_head, exit_node),
+        ],
+    )
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"env": ["task_b"]})})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    assert "task_a" not in node_names, "dead branch pruned"
+    assert "task_b" in node_names, "alive branch survives"
+    assert "task_c" in node_names, "exit node survives (has alive pred task_b)"
+    # No D-05 bypass needed — task_b → task_c edge should exist
+    edge_pairs = {(s.name, d.name) for s, d in result.graph.edges}
+    assert ("task_b", "task_c") in edge_pairs
+
+
+def test_d05_single_branch_fully_dead_no_d05():
+    """D-05 requires N>=2 branches; single-branch fully-dead stage cascades into exit node."""
+    stage_node = StageNode("env")
+    a_head = Graph._from_node(task_a).nodes[0]   # only branch (dead)
+    exit_node = Graph._from_node(task_c).nodes[0]
+    graph = Graph(
+        nodes=[stage_node, a_head, exit_node],
+        edges=[
+            (stage_node, a_head),
+            (a_head, exit_node),
+        ],
+    )
+    pipeline = Pipeline("test", graph)
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"env": []})})
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    node_names = {n.name for n in result.graph.nodes}
+    # D-05 does not apply for single-branch stages — exit_node is cascade-killed
+    assert "task_a" not in node_names
+    assert "task_c" not in node_names, "exit node cascade-killed (single-branch, D-05 not applied)"
+

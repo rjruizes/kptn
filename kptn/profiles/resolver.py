@@ -87,14 +87,23 @@ def _prune(graph: Graph, profile: ProfileSpec) -> Graph:
     1b. Seed optional_dead_ids (separate set): disabled optional task nodes.
         This set is intentionally separate from dead_ids — bypass injection applies
         ONLY to optional_dead_ids nodes (D-01 guard).
-    2.  Forward cascade from dead_ids only. optional_dead_ids nodes act as a firewall:
-        they are NOT added to dead_ids, so a node whose only dead predecessors are
-        optional-dead is NOT cascade-killed (D-02 guard).
+    2.  Forward cascade. optional_dead_ids nodes normally act as a firewall:
+        a node whose only dead predecessors are optional-dead is NOT cascade-killed
+        (D-02 guard). Exception (D-02b): if an optional-dead node itself has ALL
+        predecessors in dead_ids, it is inside a fully dead stage branch — it is
+        moved from optional_dead_ids into dead_ids so cascade continues through it.
     3.  Bypass injection: for each optional-dead node, BFS backwards through optional-dead
         intermediaries to find transitive surviving predecessors, and BFS forwards through
         optional-dead intermediaries to find transitive surviving successors. Add a bypass
         edge for every surviving_pred × surviving_succ pair not already in the graph (D-03,
-        D-04 dedup via seen_bypass set).
+        D-04 dedup via seen_bypass set). Also inject D-05 stage-exit bypass edges.
+
+    D-05 (Stage exit): If ALL branches of a Stage (N >= 2) are dead, any node immediately
+    downstream (connected via branch-tail → node edges) is NOT cascade-killed. The exit node
+    is detected because its backward BFS through dead nodes reaches ALL N branch heads of that
+    Stage. Internal branch nodes only trace to ONE branch head and are correctly cascade-killed.
+    A bypass edge StageNode → exit_node is injected so the pipeline continues past the empty
+    Stage.
 
     Nodes with zero predecessors (source nodes) can only be dead if explicitly seeded.
     StageNode and ParallelNode sentinels are never seeded — they are always retained.
@@ -105,13 +114,17 @@ def _prune(graph: Graph, profile: ProfileSpec) -> Graph:
         predecessors[id(dst)].append(src)
         successors[id(src)].append(dst)
 
-    # Phase 1a: Stage branch pruning — seeds dead_ids (stage-selection-dead only)
+    # Phase 1a: Stage branch pruning — seeds dead_ids (stage-selection-dead only).
+    # seeded_dead_ids tracks the exact set of branch heads killed here; cascade-dead nodes
+    # added in Phase 2 are NOT in seeded_dead_ids. This distinction drives the D-05 check.
     dead_ids: set[int] = set()
+    seeded_dead_ids: set[int] = set()
     for src, dst in graph.edges:
         if isinstance(src, StageNode):
             active_names = profile.stage_selections.get(src.name)
             if active_names is not None and dst.name not in active_names:
                 dead_ids.add(id(dst))
+                seeded_dead_ids.add(id(dst))
 
     # Phase 1b: Optional group pruning — seeds optional_dead_ids (separate from dead_ids)
     # D-01: bypass injection applies only to optional_dead_ids; stage-killed nodes must not
@@ -124,18 +137,92 @@ def _prune(graph: Graph, profile: ProfileSpec) -> Graph:
                 optional_dead_ids.add(id(node))
 
     # Phase 2: Forward cascade from dead_ids only.
-    # D-02: optional_dead_ids nodes are NOT in dead_ids, so a node that has an optional-dead
-    # predecessor is NOT cascade-killed by that predecessor (optional-dead acts as a firewall).
+    # D-02: optional_dead_ids nodes are NOT in dead_ids by default, so a node that has an
+    # optional-dead predecessor is NOT cascade-killed by that predecessor (optional-dead acts
+    # as a firewall for alive predecessor chains — bypass injection handles those in Phase 3).
+    # D-02b: If an optional-dead node itself has ALL predecessors in dead_ids, it is inside a
+    # fully dead branch and no bypass can help it (no alive source to route around it). Move it
+    # from optional_dead_ids into dead_ids so the cascade can continue through it.
+    # D-05 (Stage exit): If ALL branches of a Stage (N >= 2) are dead and a node's backward BFS
+    # through dead nodes reaches ALL branch heads of that Stage, it is a "stage exit" node —
+    # downstream of every dead branch tail. Do NOT cascade-kill it; inject a bypass
+    # StageNode → exit_node instead. Internal branch nodes only trace to ONE branch head and
+    # are correctly cascade-killed.
+
+    # Pre-compute fully-dead stages for D-05.
+    # A Stage is fully-dead when ALL its direct successors are in seeded_dead_ids.
+    # We require N >= 2 branches: for single-branch stages every internal node also traces
+    # back to that one branch head, so exit detection would be ambiguous.
+    _stage_branch_heads: dict[int, list[int]] = {}  # stage_id → [seeded branch head ids]
+    _stage_node_by_id: dict[int, StageNode] = {}
+    for src, dst in graph.edges:
+        if isinstance(src, StageNode):
+            _stage_node_by_id[id(src)] = src  # type: ignore[assignment]
+            _stage_branch_heads.setdefault(id(src), []).append(id(dst))
+
+    fully_dead_stages: list[tuple[StageNode, frozenset[int]]] = []
+    for stage_id, branch_head_ids in _stage_branch_heads.items():
+        if len(branch_head_ids) >= 2 and all(bhid in seeded_dead_ids for bhid in branch_head_ids):
+            fully_dead_stages.append(
+                (_stage_node_by_id[stage_id], frozenset(branch_head_ids))
+            )
+
+    def _find_seeded_dead_roots(start: AnyNode) -> set[int]:
+        """BFS backward from start through dead nodes; collect seeded-dead roots."""
+        roots: set[int] = set()
+        queue: list[AnyNode] = list(predecessors[id(start)])
+        visited: set[int] = {id(start)}
+        while queue:
+            n = queue.pop(0)
+            if id(n) in visited:
+                continue
+            visited.add(id(n))
+            if id(n) in seeded_dead_ids:
+                roots.add(id(n))
+            elif id(n) in dead_ids:
+                for pred in predecessors[id(n)]:
+                    if id(pred) not in visited:
+                        queue.append(pred)
+        return roots
+
+    def _d05_stage_ancestor(node: AnyNode) -> "StageNode | None":
+        """Return the StageNode if node is a D-05 stage exit; otherwise None.
+
+        A stage exit has backward roots that cover ALL seeded branch heads of some
+        fully-dead Stage. Internal branch nodes trace to only ONE branch's head.
+        """
+        roots = _find_seeded_dead_roots(node)
+        for stage_node, branch_heads in fully_dead_stages:
+            if branch_heads.issubset(roots):
+                return stage_node
+        return None
+
+    stage_exits: list[tuple[AnyNode, AnyNode]] = []
+    stage_exit_ids: set[int] = set()  # avoid re-processing in subsequent while iterations
+
     changed = True
     while changed:
         changed = False
         for node in graph.nodes:
-            if id(node) in dead_ids or id(node) in optional_dead_ids:
+            if id(node) in dead_ids or id(node) in stage_exit_ids:
                 continue
             preds = predecessors[id(node)]
-            if preds and all(id(p) in dead_ids for p in preds):
+            if not preds or not all(id(p) in dead_ids for p in preds):
+                continue
+            if id(node) in optional_dead_ids:
+                # D-02b: fully-dead-branch optional node — cascade continues through it
                 dead_ids.add(id(node))
+                optional_dead_ids.discard(id(node))
                 changed = True
+            else:
+                # D-05: check if backward roots cover all branches of a fully-dead Stage
+                stage_anc = _d05_stage_ancestor(node)
+                if stage_anc is not None:
+                    stage_exits.append((stage_anc, node))
+                    stage_exit_ids.add(id(node))
+                else:
+                    dead_ids.add(id(node))
+                    changed = True
 
     # Phase 3: Bypass injection.
     # D-03: BFS is transitive — it traverses through chained optional-dead intermediaries
@@ -195,6 +282,13 @@ def _prune(graph: Graph, profile: ProfileSpec) -> Graph:
                 if key not in seen_bypass:
                     seen_bypass.add(key)
                     bypass_edges.append((pred, succ))
+
+    # D-05: inject stage-exit bypass edges (StageNode → exit_node) collected in Phase 2.
+    for stage_node, exit_node in stage_exits:
+        key = (id(stage_node), id(exit_node))
+        if key not in seen_bypass:
+            seen_bypass.add(key)
+            bypass_edges.append((stage_node, exit_node))
 
     surviving_ids: set[int] = {id(n) for n in graph.nodes} - all_dead_ids
     return Graph(

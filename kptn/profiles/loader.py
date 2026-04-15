@@ -9,13 +9,19 @@ from pydantic import ValidationError
 from kptn.exceptions import ProfileError
 from kptn.profiles.schema import KptnConfig, KptnSettings, ProfileSpec
 
-_KNOWN_PROFILE_KEYS = frozenset({"extends", "args", "start_from", "stop_after"})
+_KNOWN_PROFILE_KEYS = frozenset(
+    {"extends", "args", "start_from", "stop_after", "stage_selections", "optional_groups"}
+)
 
 
 def _parse_profile_spec(raw: dict[str, Any]) -> ProfileSpec:
     known = {k: v for k, v in raw.items() if k in _KNOWN_PROFILE_KEYS}
-    stage_selections: dict[str, list[str]] = {}
-    optional_groups: dict[str, bool] = {}
+    # Explicit nested-dict form: stage_selections: {stage: [branches]}
+    stage_selections: dict[str, list[str]] = dict(known.pop("stage_selections", {}))
+    # Explicit nested-dict form: optional_groups: {group: bool}
+    optional_groups: dict[str, bool] = dict(known.pop("optional_groups", {}))
+    # Also support implicit shorthand (backward-compat flat notation):
+    #   unknown list-values → stage_selections, unknown bool-values → optional_groups
     for k, v in raw.items():
         if k in _KNOWN_PROFILE_KEYS:
             continue
