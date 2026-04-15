@@ -19,7 +19,7 @@ from kptn.graph.nodes import (
 )
 from kptn.state_store.protocol import StateStoreBackend
 
-from kptn.change_detector.hasher import hash_duckdb_table, hash_file, hash_sqlite_table
+from kptn.change_detector.hasher import hash_duckdb_table, hash_file, hash_sqlite_table, hash_task_source
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,21 @@ def _hash_outputs(node: AnyNode, duckdb_conn: Any = None) -> str | None:
     return hashlib.sha256(composite_input.encode()).hexdigest()
 
 
+def _hash_code(node: AnyNode) -> str | None:
+    """Return a deterministic hash of the node's code, or None if not possible.
+
+    Used as a cache key fallback when a task declares no outputs.
+    """
+    try:
+        if isinstance(node, TaskNode):
+            return hash_task_source(node.fn)
+        if isinstance(node, (RTaskNode, SqlTaskNode)):
+            return hash_file(node.path)
+    except HashError:
+        pass
+    return None
+
+
 def is_stale(
     node: AnyNode,
     state_store: StateStoreBackend,
@@ -75,7 +90,15 @@ def is_stale(
 
     current = _hash_outputs(node, duckdb_conn=duckdb_conn)
     if current is None:
-        return (False, "no outputs")
+        code_hash = _hash_code(node)
+        if code_hash is None:
+            return (False, "no outputs")
+        stored = state_store.read_hash(storage_key, pipeline, task_name)
+        if stored is None:
+            return (True, "no cached code hash")
+        if code_hash == stored:
+            return (False, "cached")
+        return (True, f"code changed (stored={stored[:8]}… current={code_hash[:8]}…)")
 
     stored = state_store.read_hash(storage_key, pipeline, task_name)
     if stored is None:

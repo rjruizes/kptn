@@ -79,7 +79,35 @@ def _resolve(name: str, profiles: dict[str, ProfileSpec]) -> ProfileSpec:
     )
 
 
-def _prune(graph: Graph, profile: ProfileSpec) -> Graph:
+def _optional_group_enabled(
+    optional_groups: dict[str, bool],
+    opt: str,
+    pipeline_name: str | None = None,
+) -> bool:
+    """Return True if the optional group *opt* is enabled.
+
+    Key matching priority (last matching key wins, mirroring resolve merge order):
+    - Bare key: ``"validate"`` → matches opt unconditionally
+    - Wildcard-scoped: ``"*.validate"`` → matches opt in any pipeline
+    - Pipeline-scoped: ``"ci.validate"`` → matches opt only when pipeline_name == "ci"
+
+    This allows the YAML shorthand flat notation (``validate: true``) and the
+    explicit nested form (``optional_groups: {"*.validate": true}``) to both work.
+    """
+    result = False
+    for key, enabled in optional_groups.items():
+        if "." in key:
+            scope, group = key.split(".", 1)
+            if group != opt:
+                continue
+            if scope == "*" or scope == pipeline_name:
+                result = enabled
+        elif key == opt:
+            result = enabled
+    return result
+
+
+def _prune(graph: Graph, profile: ProfileSpec, pipeline_name: str | None = None) -> Graph:
     """Return a new Graph with inactive Stage branches and disabled optional nodes removed.
 
     Four phases:
@@ -133,7 +161,7 @@ def _prune(graph: Graph, profile: ProfileSpec) -> Graph:
     for node in graph.nodes:
         if isinstance(node, (TaskNode, SqlTaskNode, RTaskNode)):
             opt = node.spec.optional
-            if opt is not None and not profile.optional_groups.get(f"*.{opt}", False):
+            if opt is not None and not _optional_group_enabled(profile.optional_groups, opt, pipeline_name):
                 optional_dead_ids.add(id(node))
 
     # Phase 2: Forward cascade from dead_ids only.
@@ -454,7 +482,7 @@ class ProfileResolver:
         """
         profile = self.resolve(profile_name)
         _validate_stage_refs(pipeline, profile, profile_name)
-        pruned = _prune(pipeline, profile)
+        pruned = _prune(pipeline, profile, pipeline.name if isinstance(pipeline, Pipeline) else None)
         storage_key = self._settings.db_path or ".kptn/kptn.db"
         final_graph, bypassed_names = _apply_cursors(pruned, profile)
         return ResolvedGraph(

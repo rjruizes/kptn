@@ -113,6 +113,14 @@ def _compute_hash(node: AnyNode, duckdb_conn: "Any | None" = None) -> str | None
 
     outputs = node.spec.outputs
     if not outputs:
+        from kptn.change_detector.hasher import hash_task_source
+        try:
+            if isinstance(node, TaskNode):
+                return hash_task_source(node.fn)
+            if isinstance(node, (RTaskNode, SqlTaskNode)):
+                return hash_file(node.path)
+        except HashError:
+            pass
         return None
 
     hashes: list[str] = []
@@ -232,9 +240,22 @@ def execute(
     if extra_kwargs is not None:
         config_kwargs.update(extra_kwargs)
 
+    # Build predecessors map for cascade invalidation.
+    # dirty_names tracks nodes (exec and non-exec) that ran or inherited dirtiness
+    # so that downstream tasks are forced to run when any upstream task ran.
+    predecessors: dict[str, list[AnyNode]] = {n.name: [] for n in ordered}
+    for src, dst in resolved.graph.edges:
+        if dst.name in predecessors:
+            predecessors[dst.name].append(src)
+    dirty_names: set[str] = set()
+
     for node in ordered:
-        # Non-exec nodes — pass through silently
+        upstream_dirty = any(p.name in dirty_names for p in predecessors[node.name])
+
+        # Non-exec nodes — pass through silently, but propagate dirtiness
         if isinstance(node, _NON_EXEC_NODES):
+            if upstream_dirty:
+                dirty_names.add(node.name)
             continue
 
         # Bypassed nodes — read hash to keep fresh; no execution
@@ -263,9 +284,11 @@ def execute(
         if isinstance(node, MapNode):
             collection = _resolve_collection(node.over, runtime_ctx)
             emit_map(node.name, len(collection))
+            any_item_ran_stale = False
             for item in collection:
                 item_task_name = f"{node.name}[{item}]"
-                if not no_cache:
+                item_stale = upstream_dirty
+                if not no_cache and not upstream_dirty:
                     stored_hash = state_store.read_hash(
                         resolved.storage_key, resolved.pipeline, item_task_name
                     )
@@ -277,7 +300,10 @@ def execute(
                         if current_hash is not None and current_hash == stored_hash:
                             emit_skip(item_task_name)
                             continue
+                    item_stale = True
                 emit_run(item_task_name)
+                if item_stale:
+                    any_item_ran_stale = True
                 kwargs = _filter_kwargs(node.task, {
                     **config_kwargs,
                     **resolved.profile_args.get(node.name, {}),
@@ -306,11 +332,15 @@ def execute(
                         state_store.write_hash(
                             resolved.storage_key, resolved.pipeline, item_task_name, hash_
                         )
+            if any_item_ran_stale:
+                dirty_names.add(node.name)
             continue
 
         # TaskNode
         if isinstance(node, TaskNode):
-            if not no_cache:
+            force_run = upstream_dirty
+            actually_stale = False
+            if not no_cache and not force_run:
                 stale, reason = False, ""
                 try:
                     stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline, duckdb_conn=duckdb_factory() if duckdb_factory else None)
@@ -319,7 +349,10 @@ def execute(
                 if not stale and reason == "cached":
                     emit_skip(node.name)
                     continue
+                actually_stale = stale
             emit_run(node.name)
+            if force_run or actually_stale:
+                dirty_names.add(node.name)
             profile_kwargs = resolved.profile_args.get(node.name, {})
             try:
                 result = _dispatch_task(node, config_kwargs, profile_kwargs)
@@ -341,7 +374,9 @@ def execute(
 
         # RTaskNode
         if isinstance(node, RTaskNode):
-            if not no_cache:
+            force_run = upstream_dirty
+            actually_stale = False
+            if not no_cache and not force_run:
                 stale, reason = False, ""
                 try:
                     stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline, duckdb_conn=duckdb_factory() if duckdb_factory else None)
@@ -350,7 +385,10 @@ def execute(
                 if not stale and reason == "cached":
                     emit_skip(node.name)
                     continue
+                actually_stale = stale
             emit_run(node.name)
+            if force_run or actually_stale:
+                dirty_names.add(node.name)
             try:
                 _dispatch_r_task(node, cwd)
             except TaskError as exc:
@@ -378,7 +416,9 @@ def execute(
                 )
                 continue
             conn = duckdb_factory()  # acquire once; factory should return a cached singleton
-            if not no_cache:
+            force_run = upstream_dirty
+            actually_stale = False
+            if not no_cache and not force_run:
                 stale, reason = False, ""
                 try:
                     stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline, duckdb_conn=conn)
@@ -387,7 +427,10 @@ def execute(
                 if not stale and reason == "cached":
                     emit_skip(node.name)
                     continue
+                actually_stale = stale
             emit_run(node.name)
+            if force_run or actually_stale:
+                dirty_names.add(node.name)
             try:
                 _dispatch_sql_task(node, conn, cwd)
             except TaskError as exc:

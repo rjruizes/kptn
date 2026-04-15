@@ -350,6 +350,30 @@ def test_compile_optional_task_included_when_group_on():
     assert any(n.name == "validate_task" for n in result.graph.nodes)
 
 
+def test_compile_optional_task_included_bare_key():
+    """Bare key form (no scope prefix) enables the optional group."""
+    config = KptnConfig(profiles={"ci": ProfileSpec(optional_groups={"validate": True})})
+    pipeline = Pipeline("test", Graph._from_node(validate_task))
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    assert any(n.name == "validate_task" for n in result.graph.nodes)
+
+
+def test_compile_optional_task_included_pipeline_scoped_key():
+    """Pipeline-scoped key enables the group only for the matching pipeline."""
+    config = KptnConfig(profiles={"ci": ProfileSpec(optional_groups={"test.validate": True})})
+    pipeline = Pipeline("test", Graph._from_node(validate_task))
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    assert any(n.name == "validate_task" for n in result.graph.nodes)
+
+
+def test_compile_optional_task_excluded_mismatched_pipeline_scope():
+    """Pipeline-scoped key does NOT enable the group for a different pipeline."""
+    config = KptnConfig(profiles={"ci": ProfileSpec(optional_groups={"other.validate": True})})
+    pipeline = Pipeline("test", Graph._from_node(validate_task))
+    result = ProfileResolver(config).compile(pipeline, "ci")
+    assert all(n.name != "validate_task" for n in result.graph.nodes)
+
+
 def test_compile_parallel_branches_never_pruned():
     """AC-4: ParallelNode branches are always present regardless of profile."""
     par_g = kptn.parallel(task_a, task_b)

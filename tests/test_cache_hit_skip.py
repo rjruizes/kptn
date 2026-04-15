@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kptn.change_detector.hasher import hash_file
+from kptn.change_detector.hasher import hash_file, hash_task_source
 from kptn.graph.decorators import TaskSpec
 from kptn.graph.graph import Graph
-from kptn.graph.nodes import MapNode, TaskNode
+from kptn.graph.nodes import MapNode, StageNode, TaskNode
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.runner.executor import execute
 from tests.fakes import FakeStateStore
@@ -164,7 +164,7 @@ def test_emit_run_exact_format(capsys: pytest.CaptureFixture) -> None:
     """emit_run must produce exactly '[RUN] task_name\\n'."""
     task_fn = MagicMock(return_value=None)
     task_fn.__name__ = "my_task"
-    # No outputs → always stale (no hash to compare) → emit_run
+    # Uninspectable fn + no outputs → always runs (no code hash fallback)
     node = make_task_node("my_task", fn=task_fn, outputs=[])
 
     store = FakeStateStore()
@@ -173,6 +173,42 @@ def test_emit_run_exact_format(capsys: pytest.CaptureFixture) -> None:
 
     captured = capsys.readouterr()
     assert captured.out == "[RUN] my_task\n"
+
+
+# ─── Code-hash caching for tasks with outputs=[] ─────────────────────────────
+
+
+def _no_output_fn():
+    """Real function whose source is inspectable."""
+    return 42
+
+
+def test_no_output_task_skips_on_second_run(capsys: pytest.CaptureFixture) -> None:
+    """Task with outputs=[] must be skipped on second run when code hasn't changed."""
+    node = make_task_node("my_task", fn=_no_output_fn, outputs=[])
+    store = FakeStateStore()
+    resolved = make_resolved(make_graph(node))
+
+    execute(resolved, store)
+    capsys.readouterr()  # discard first-run output
+
+    execute(resolved, store)
+
+    captured = capsys.readouterr()
+    assert "[SKIP] my_task \u2014 cached" in captured.out
+
+
+def test_no_output_task_runs_when_code_hash_outdated(capsys: pytest.CaptureFixture) -> None:
+    """Task with outputs=[] must run when the stored hash is stale."""
+    node = make_task_node("my_task", fn=_no_output_fn, outputs=[])
+    store = FakeStateStore()
+    store.write_hash("kptn", "default", "my_task", "outdated_hash_value")
+    resolved = make_resolved(make_graph(node))
+
+    execute(resolved, store)
+
+    captured = capsys.readouterr()
+    assert "[RUN] my_task" in captured.out
 
 
 # ─── MapNode cache-hit tests ──────────────────────────────────────────────────
@@ -280,3 +316,101 @@ def test_map_node_state_store_key_format(tmp_path: Path) -> None:
         # Verify it is NOT using alternative separator formats
         assert f"process_state:{item}" not in written_tasks
         assert f"process_state.{item}" not in written_tasks
+
+
+# ─── Cascade invalidation tests ───────────────────────────────────────────────
+
+
+def _upstream_fn():
+    """Real inspectable function used as an upstream task."""
+    pass
+
+
+def test_downstream_task_forced_when_upstream_ran(tmp_path: Path) -> None:
+    """If task A runs, downstream task B must also run even when B's cache is valid."""
+    b_output = tmp_path / "b_out.txt"
+    b_output.write_bytes(b"data")
+
+    task_b_fn = MagicMock(return_value=None)
+    task_b_fn.__name__ = "task_b"
+
+    node_a = make_task_node("task_a", fn=_upstream_fn, outputs=[])
+    node_b = make_task_node("task_b", fn=task_b_fn, outputs=[str(b_output)])
+
+    store = FakeStateStore()
+    # A has no stored code hash → will run; B has a valid stored hash → would normally skip
+    store.write_hash("kptn", "default", "task_b", _composite_hash(str(b_output)))
+
+    graph = make_graph(node_a, node_b)
+    execute(make_resolved(graph), store)
+
+    task_b_fn.assert_called_once()
+
+
+def test_downstream_task_skips_when_upstream_also_skipped(tmp_path: Path) -> None:
+    """If task A is cached (skipped), task B downstream can also skip."""
+    b_output = tmp_path / "b_out.txt"
+    b_output.write_bytes(b"data")
+
+    task_b_fn = MagicMock(return_value=None)
+    task_b_fn.__name__ = "task_b"
+
+    node_a = make_task_node("task_a", fn=_upstream_fn, outputs=[])
+    node_b = make_task_node("task_b", fn=task_b_fn, outputs=[str(b_output)])
+
+    store = FakeStateStore()
+    store.write_hash("kptn", "default", "task_a", hash_task_source(_upstream_fn))
+    store.write_hash("kptn", "default", "task_b", _composite_hash(str(b_output)))
+
+    graph = make_graph(node_a, node_b)
+    execute(make_resolved(graph), store)
+
+    task_b_fn.assert_not_called()
+
+
+def test_cascade_propagates_through_stage_node(tmp_path: Path) -> None:
+    """Cascade must propagate through StageNode (non-exec) to reach downstream tasks."""
+    b_output = tmp_path / "b_out.txt"
+    b_output.write_bytes(b"data")
+
+    task_b_fn = MagicMock(return_value=None)
+    task_b_fn.__name__ = "task_b"
+
+    node_a = make_task_node("task_a", fn=_upstream_fn, outputs=[])
+    stage = StageNode(name="my_stage")
+    node_b = make_task_node("task_b", fn=task_b_fn, outputs=[str(b_output)])
+
+    store = FakeStateStore()
+    store.write_hash("kptn", "default", "task_b", _composite_hash(str(b_output)))
+
+    graph = Graph(
+        nodes=[node_a, stage, node_b],
+        edges=[(node_a, stage), (stage, node_b)],
+    )
+    execute(make_resolved(graph), store)
+
+    task_b_fn.assert_called_once()
+
+
+def test_cascade_is_transitive(tmp_path: Path) -> None:
+    """If A runs → B runs → C must also run (transitive cascade)."""
+    c_output = tmp_path / "c_out.txt"
+    c_output.write_bytes(b"data")
+
+    task_c_fn = MagicMock(return_value=None)
+    task_c_fn.__name__ = "task_c"
+
+    node_a = make_task_node("task_a", fn=_upstream_fn, outputs=[])
+    node_b = make_task_node("task_b", fn=_upstream_fn, outputs=[])
+    node_c = make_task_node("task_c", fn=task_c_fn, outputs=[str(c_output)])
+
+    store = FakeStateStore()
+    # B has a valid code hash → would skip; C has a valid output hash → would skip
+    store.write_hash("kptn", "default", "task_b", hash_task_source(_upstream_fn))
+    store.write_hash("kptn", "default", "task_c", _composite_hash(str(c_output)))
+
+    graph = make_graph(node_a, node_b, node_c)
+    execute(make_resolved(graph), store)
+
+    # A runs (no stored hash) → B must run (cascade) → C must run (cascade from B)
+    task_c_fn.assert_called_once()
