@@ -298,10 +298,10 @@ def execute(
                         except HashError:
                             current_hash = None  # treat as stale
                         if current_hash is not None and current_hash == stored_hash:
-                            emit_skip(item_task_name)
+                            emit_skip(item_task_name, timestamp=True)
                             continue
                     item_stale = True
-                emit_run(item_task_name)
+                emit_run(item_task_name, timestamp=True)
                 if item_stale:
                     any_item_ran_stale = True
                 kwargs = _filter_kwargs(node.task, {
@@ -311,13 +311,13 @@ def execute(
                 try:
                     result = node.task(item, **kwargs)
                 except TaskError as exc:
-                    emit_fail(item_task_name, str(exc))
+                    emit_fail(item_task_name, str(exc), timestamp=True)
                     raise
                 except Exception as exc:
                     task_err = TaskError(
                         f"MapNode item '{item_task_name}' raised an error: {exc}"
                     )
-                    emit_fail(item_task_name, str(task_err))
+                    emit_fail(item_task_name, str(task_err), timestamp=True)
                     raise task_err from exc
                 if not no_cache:
                     try:
@@ -347,24 +347,24 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    emit_skip(node.name)
+                    emit_skip(node.name, timestamp=True)
                     continue
                 actually_stale = stale
-            emit_run(node.name)
+            emit_run(node.name, timestamp=True)
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             profile_kwargs = resolved.profile_args.get(node.name, {})
             try:
                 result = _dispatch_task(node, config_kwargs, profile_kwargs)
             except TaskError as exc:
-                emit_fail(node.name, str(exc))
+                emit_fail(node.name, str(exc), timestamp=True)
                 raise
             runtime_ctx[node.name] = result
             if not no_cache:
                 try:
                     hash_ = _compute_hash(node, duckdb_factory() if duckdb_factory else None)
                 except HashError as exc:
-                    emit_fail(node.name, str(exc))
+                    emit_fail(node.name, str(exc), timestamp=True)
                     raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
                 if hash_ is not None:
                     state_store.write_hash(
@@ -383,22 +383,22 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    emit_skip(node.name)
+                    emit_skip(node.name, timestamp=True)
                     continue
                 actually_stale = stale
-            emit_run(node.name)
+            emit_run(node.name, timestamp=True)
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             try:
                 _dispatch_r_task(node, cwd)
             except TaskError as exc:
-                emit_fail(node.name, str(exc))
+                emit_fail(node.name, str(exc), timestamp=True)
                 raise
             if not no_cache:
                 try:
                     hash_ = _compute_hash(node, duckdb_factory() if duckdb_factory else None)
                 except HashError as exc:
-                    emit_fail(node.name, str(exc))
+                    emit_fail(node.name, str(exc), timestamp=True)
                     raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
                 if hash_ is not None:
                     state_store.write_hash(
@@ -425,22 +425,22 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    emit_skip(node.name)
+                    emit_skip(node.name, timestamp=True)
                     continue
                 actually_stale = stale
-            emit_run(node.name)
+            emit_run(node.name, timestamp=True)
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             try:
                 _dispatch_sql_task(node, conn, cwd)
             except TaskError as exc:
-                emit_fail(node.name, str(exc))
+                emit_fail(node.name, str(exc), timestamp=True)
                 raise
             if not no_cache:
                 try:
                     hash_ = _compute_hash(node, conn)
                 except HashError as exc:
-                    emit_fail(node.name, str(exc))
+                    emit_fail(node.name, str(exc), timestamp=True)
                     raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
                 if hash_ is not None:
                     state_store.write_hash(

@@ -146,11 +146,11 @@ class _SqlTaskHandle:
         from kptn.runner.plan import emit_fail, emit_run
 
         node = SqlTaskNode(path=self.__kptn__.path, spec=self.__kptn__, name=self.__name__)
-        emit_run(node.name)
+        emit_run(node.name, timestamp=True)
         try:
             _dispatch_sql_task(node, conn, cwd=Path.cwd())
         except Exception as exc:
-            emit_fail(node.name, str(exc))
+            emit_fail(node.name, str(exc), timestamp=True)
             raise
 
     def __repr__(self) -> str:

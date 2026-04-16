@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import hashlib
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -70,7 +71,7 @@ def test_task_skips_when_hash_matches(capsys: pytest.CaptureFixture, tmp_path: P
 
     task_fn.assert_not_called()
     captured = capsys.readouterr()
-    assert "[SKIP] my_task \u2014 cached" in captured.out
+    assert re.search(r'\[SKIP\] \d{2}:\d{2}:\d{2} my_task \u2014 cached', captured.out)
 
 
 def test_task_runs_when_no_stored_hash(capsys: pytest.CaptureFixture, tmp_path: Path) -> None:
@@ -88,7 +89,7 @@ def test_task_runs_when_no_stored_hash(capsys: pytest.CaptureFixture, tmp_path: 
 
     task_fn.assert_called_once()
     captured = capsys.readouterr()
-    assert "[RUN] my_task" in captured.out
+    assert re.search(r'\[RUN\] \d{2}:\d{2}:\d{2} my_task', captured.out)
 
 
 def test_task_runs_when_hash_differs(capsys: pytest.CaptureFixture, tmp_path: Path) -> None:
@@ -107,7 +108,7 @@ def test_task_runs_when_hash_differs(capsys: pytest.CaptureFixture, tmp_path: Pa
 
     task_fn.assert_called_once()
     captured = capsys.readouterr()
-    assert "[RUN] my_task" in captured.out
+    assert re.search(r'\[RUN\] \d{2}:\d{2}:\d{2} my_task', captured.out)
 
 
 def test_hash_error_during_staleness_check_treated_as_stale(
@@ -136,14 +137,14 @@ def test_hash_error_during_staleness_check_treated_as_stale(
 
     assert called == [True], "task function must be called when HashError treated as stale"
     captured = capsys.readouterr()
-    assert "[RUN] my_task" in captured.out
+    assert re.search(r'\[RUN\] \d{2}:\d{2}:\d{2} my_task', captured.out)
 
 
 # ─── Exact format tests ───────────────────────────────────────────────────────
 
 
 def test_emit_skip_exact_format(capsys: pytest.CaptureFixture, tmp_path: Path) -> None:
-    """emit_skip must produce exactly '[SKIP] task_name \u2014 cached\\n'."""
+    """emit_skip must produce '[SKIP] HH:MM:SS task_name \u2014 cached\\n'."""
     output_file = tmp_path / "out.txt"
     output_file.write_bytes(b"data")
 
@@ -157,11 +158,11 @@ def test_emit_skip_exact_format(capsys: pytest.CaptureFixture, tmp_path: Path) -
     execute(make_resolved(make_graph(node)), store)
 
     captured = capsys.readouterr()
-    assert captured.out == "[SKIP] my_task \u2014 cached\n"
+    assert re.fullmatch(r'\[SKIP\] \d{2}:\d{2}:\d{2} my_task \u2014 cached\n', captured.out)
 
 
 def test_emit_run_exact_format(capsys: pytest.CaptureFixture) -> None:
-    """emit_run must produce exactly '[RUN] task_name\\n'."""
+    """emit_run must produce '[RUN] HH:MM:SS task_name\\n'."""
     task_fn = MagicMock(return_value=None)
     task_fn.__name__ = "my_task"
     # Uninspectable fn + no outputs → always runs (no code hash fallback)
@@ -172,7 +173,7 @@ def test_emit_run_exact_format(capsys: pytest.CaptureFixture) -> None:
     execute(make_resolved(make_graph(node)), store)
 
     captured = capsys.readouterr()
-    assert captured.out == "[RUN] my_task\n"
+    assert re.fullmatch(r'\[RUN\] \d{2}:\d{2}:\d{2} my_task\n', captured.out)
 
 
 # ─── Code-hash caching for tasks with outputs=[] ─────────────────────────────
@@ -195,7 +196,7 @@ def test_no_output_task_skips_on_second_run(capsys: pytest.CaptureFixture) -> No
     execute(resolved, store)
 
     captured = capsys.readouterr()
-    assert "[SKIP] my_task \u2014 cached" in captured.out
+    assert re.search(r'\[SKIP\] \d{2}:\d{2}:\d{2} my_task \u2014 cached', captured.out)
 
 
 def test_no_output_task_runs_when_code_hash_outdated(capsys: pytest.CaptureFixture) -> None:
@@ -208,7 +209,7 @@ def test_no_output_task_runs_when_code_hash_outdated(capsys: pytest.CaptureFixtu
     execute(resolved, store)
 
     captured = capsys.readouterr()
-    assert "[RUN] my_task" in captured.out
+    assert re.search(r'\[RUN\] \d{2}:\d{2}:\d{2} my_task', captured.out)
 
 
 # ─── MapNode cache-hit tests ──────────────────────────────────────────────────
@@ -258,7 +259,7 @@ def test_map_node_all_items_skip_on_second_run(
     map_fn.assert_not_called()
     captured = capsys.readouterr()
     for item in items:
-        assert f"[SKIP] process_state[{item}] \u2014 cached" in captured.out
+        assert re.search(rf'\[SKIP\] \d{{2}}:\d{{2}}:\d{{2}} process_state\[{item}\] \u2014 cached', captured.out)
 
 
 def test_map_node_partial_skip(capsys: pytest.CaptureFixture, tmp_path: Path) -> None:
@@ -278,9 +279,9 @@ def test_map_node_partial_skip(capsys: pytest.CaptureFixture, tmp_path: Path) ->
     assert map_fn.call_count == 1
     assert map_fn.call_args[0][0] == "ny"
     captured = capsys.readouterr()
-    assert "[SKIP] process_state[ca] \u2014 cached" in captured.out
-    assert "[SKIP] process_state[tx] \u2014 cached" in captured.out
-    assert "[RUN] process_state[ny]" in captured.out
+    assert re.search(r'\[SKIP\] \d{2}:\d{2}:\d{2} process_state\[ca\] \u2014 cached', captured.out)
+    assert re.search(r'\[SKIP\] \d{2}:\d{2}:\d{2} process_state\[tx\] \u2014 cached', captured.out)
+    assert re.search(r'\[RUN\] \d{2}:\d{2}:\d{2} process_state\[ny\]', captured.out)
 
 
 def test_map_node_first_run_writes_per_item_hashes(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch, call
 
+import re
 import logging
 import pytest
 
@@ -595,7 +596,7 @@ def test_execute_sql_task_skips_if_cached(tmp_path: Path, capsys) -> None:
     with patch("kptn.runner.executor.is_stale", return_value=(False, "cached")):
         execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
     conn.execute.assert_not_called()
-    assert "[SKIP] query" in capsys.readouterr().out
+    assert re.search(r'\[SKIP\] \d{2}:\d{2}:\d{2} query', capsys.readouterr().out)
 
 
 def test_execute_sql_task_no_cache_bypasses_staleness_check(tmp_path: Path) -> None:
