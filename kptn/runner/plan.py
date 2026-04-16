@@ -47,6 +47,26 @@ def emit_run(task_name: str, timestamp: bool = False) -> None:
     print(f"[RUN]{ts} {task_name}", flush=True)
 
 
+def emit_backup_start(task_name: str, dest: str, timestamp: bool = False) -> None:
+    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
+    print(f"[BACKUP_START]{ts} {task_name} → {dest}", flush=True)
+
+
+def emit_backup_end(task_name: str, timestamp: bool = False) -> None:
+    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
+    print(f"[BACKUP_END]{ts} {task_name}", flush=True)
+
+
+def emit_restore_start(src: str, timestamp: bool = False) -> None:
+    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
+    print(f"[RESTORE_START]{ts} {src}", flush=True)
+
+
+def emit_restore_end(elapsed_s: float, timestamp: bool = False) -> None:
+    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
+    print(f"[RESTORE_END]{ts} — {elapsed_s:.1f}s", flush=True)
+
+
 def plan(resolved: ResolvedGraph, state_store: StateStoreBackend) -> None:
     ordered: list[AnyNode] = topo_sort(resolved.graph)
     for node in ordered:

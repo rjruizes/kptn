@@ -7,7 +7,7 @@ from pathlib import Path
 
 import typer
 
-from kptn.exceptions import ProfileError, TaskError
+from kptn.exceptions import ProfileError
 from kptn.graph.graph import Graph
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.loader import ProfileLoader
@@ -62,7 +62,7 @@ def run(
     except ProfileError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)
-    except TaskError:
+    except Exception:
         raise typer.Exit(code=1)
 
 

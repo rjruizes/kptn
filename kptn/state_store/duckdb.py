@@ -68,8 +68,9 @@ class DuckDbBackend:
 
     def _create_table(self) -> None:
         conn = self._conn()
+        conn.execute("CREATE SCHEMA IF NOT EXISTS _kptn")
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS task_state (
+            CREATE TABLE IF NOT EXISTS _kptn.task_state (
                 storage_key   TEXT NOT NULL,
                 pipeline_name TEXT NOT NULL,
                 task_name     TEXT NOT NULL,
@@ -83,25 +84,34 @@ class DuckDbBackend:
 
     def write_hash(self, storage_key: str, pipeline: str, task: str, hash: str) -> None:
         try:
-            conn = self._conn()
-            conn.execute(
-                "INSERT OR REPLACE INTO task_state "
-                "(storage_key, pipeline_name, task_name, output_hash, status, ran_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (storage_key, pipeline, task, hash, "success", datetime.now(UTC).isoformat()),
-            )
-            conn.commit()
+            self._write_hash(storage_key, pipeline, task, hash)
+        except duckdb.CatalogException:
+            self._create_table()
+            self._write_hash(storage_key, pipeline, task, hash)
         except duckdb.Error as exc:
             raise StateStoreError("write_hash failed") from exc
+
+    def _write_hash(self, storage_key: str, pipeline: str, task: str, hash: str) -> None:
+        conn = self._conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO _kptn.task_state "
+            "(storage_key, pipeline_name, task_name, output_hash, status, ran_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (storage_key, pipeline, task, hash, "success", datetime.now(UTC).isoformat()),
+        )
+        conn.commit()
+        conn.execute("CHECKPOINT")
 
     def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None:
         try:
             row = self._conn().execute(
-                "SELECT output_hash FROM task_state "
+                "SELECT output_hash FROM _kptn.task_state "
                 "WHERE storage_key=? AND pipeline_name=? AND task_name=?",
                 (storage_key, pipeline, task),
             ).fetchone()
             return row[0] if row else None
+        except duckdb.CatalogException:
+            return None
         except duckdb.Error as exc:
             raise StateStoreError("read_hash failed") from exc
 
@@ -109,21 +119,25 @@ class DuckDbBackend:
         try:
             conn = self._conn()
             conn.execute(
-                "DELETE FROM task_state "
+                "DELETE FROM _kptn.task_state "
                 "WHERE storage_key=? AND pipeline_name=? AND task_name=?",
                 (storage_key, pipeline, task),
             )
             conn.commit()
+        except duckdb.CatalogException:
+            pass
         except duckdb.Error as exc:
             raise StateStoreError("delete failed") from exc
 
     def list_tasks(self, storage_key: str, pipeline: str) -> list[str]:
         try:
             rows = self._conn().execute(
-                "SELECT task_name FROM task_state "
+                "SELECT task_name FROM _kptn.task_state "
                 "WHERE storage_key=? AND pipeline_name=?",
                 (storage_key, pipeline),
             ).fetchall()
             return [r[0] for r in rows]
+        except duckdb.CatalogException:
+            return []
         except duckdb.Error as exc:
             raise StateStoreError("list_tasks failed") from exc

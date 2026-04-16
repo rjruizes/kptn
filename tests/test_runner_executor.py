@@ -198,7 +198,7 @@ def test_execute_fails_fast_on_task_error() -> None:
     resolved = _make_resolved(graph)
     store = FakeStateStore()
 
-    with pytest.raises(TaskError):
+    with pytest.raises(ValueError):
         execute(resolved, store)
 
     assert not second_called
@@ -594,7 +594,8 @@ def test_execute_sql_task_skips_if_cached(tmp_path: Path, capsys) -> None:
     conn = MagicMock()
     factory = MagicMock(return_value=conn)
     with patch("kptn.runner.executor.is_stale", return_value=(False, "cached")):
-        execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
+        with patch("kptn.runner.executor._try_restore"):
+            execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
     conn.execute.assert_not_called()
     assert re.search(r'\[SKIP\] \d{2}:\d{2}:\d{2} query', capsys.readouterr().out)
 
@@ -641,7 +642,8 @@ def test_execute_sql_task_writes_hash_after_successful_run(tmp_path: Path) -> No
     factory = MagicMock(return_value=conn)
     with patch("kptn.runner.executor.is_stale", return_value=(True, "no cached hash")):
         with patch("kptn.runner.executor._compute_hash", return_value="abc123def456"):
-            execute(resolved, store, duckdb_factory=factory, no_cache=False)
+            with patch("kptn.runner.executor._try_restore"):
+                execute(resolved, store, duckdb_factory=factory, no_cache=False)
     conn.execute.assert_called_once_with("SELECT 1")
     assert store.read_hash("kptn", "default", "query") == "abc123def456"
 
@@ -657,8 +659,9 @@ def test_execute_sql_task_emit_fail_on_hash_error(tmp_path: Path, capsys) -> Non
     factory = MagicMock(return_value=conn)
     with patch("kptn.runner.executor.is_stale", return_value=(True, "no cached hash")):
         with patch("kptn.runner.executor._compute_hash", side_effect=HashError("table missing")):
-            with pytest.raises(TaskError, match="Hash computation failed"):
-                execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
+            with patch("kptn.runner.executor._try_restore"):
+                with pytest.raises(TaskError, match="Hash computation failed"):
+                    execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
     conn.execute.assert_called_once_with("SELECT 1")
     assert "[FAIL] query" in capsys.readouterr().err
 
@@ -673,5 +676,6 @@ def test_execute_sql_task_hash_error_in_staleness_forces_rerun(tmp_path: Path) -
     conn = MagicMock()
     factory = MagicMock(return_value=conn)
     with patch("kptn.runner.executor.is_stale", side_effect=HashError("missing")):
-        execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
+        with patch("kptn.runner.executor._try_restore"):
+            execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
     conn.execute.assert_called_once_with("SELECT 1")

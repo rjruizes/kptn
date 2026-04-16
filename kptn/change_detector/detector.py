@@ -2,7 +2,6 @@
 
 import hashlib
 import logging
-from typing import Any
 
 from kptn.exceptions import HashError
 from kptn.graph.nodes import (
@@ -19,14 +18,14 @@ from kptn.graph.nodes import (
 )
 from kptn.state_store.protocol import StateStoreBackend
 
-from kptn.change_detector.hasher import hash_duckdb_table, hash_file, hash_sqlite_table, hash_task_source
+from kptn.change_detector.hasher import hash_file, hash_sqlite_table, hash_task_source
 
 logger = logging.getLogger(__name__)
 
 _NON_TASK_NODES = (ParallelNode, StageNode, NoopNode, ConfigNode, PipelineNode, MapNode)
 
 
-def _hash_outputs(node: AnyNode, duckdb_conn: Any = None) -> str | None:
+def _hash_outputs(node: AnyNode) -> str | None:
     if isinstance(node, (ParallelNode, StageNode, NoopNode, ConfigNode, PipelineNode, MapNode)):
         return None
 
@@ -37,18 +36,15 @@ def _hash_outputs(node: AnyNode, duckdb_conn: Any = None) -> str | None:
     individual_hashes: list[str] = []
     for output in spec.outputs:
         if output.startswith("duckdb://"):
-            table_name = output[len("duckdb://"):]
-            if duckdb_conn is None:
-                raise HashError(
-                    f"Task declares 'duckdb://' output but no DuckDB connection is available. "
-                    f"Add kptn.config(duckdb=get_engine) to your pipeline."
-                )
-            individual_hashes.append(hash_duckdb_table(table_name, conn=duckdb_conn))
+            continue  # duckdb outputs are not hashed; rely on upstream-dirty propagation
         elif output.startswith("sqlite://"):
             table_uri = output[len("sqlite://"):]
             individual_hashes.append(hash_sqlite_table(table_uri))
         else:
             individual_hashes.append(hash_file(output))
+
+    if not individual_hashes:
+        return None
 
     sorted_hashes = sorted(individual_hashes)
     composite_input = ":".join(sorted_hashes)
@@ -75,8 +71,6 @@ def is_stale(
     state_store: StateStoreBackend,
     storage_key: str,
     pipeline: str,
-    *,
-    duckdb_conn: Any = None,
 ) -> tuple[bool, str]:
     """Return ``(stale, reason)`` for *node*.
 
@@ -88,7 +82,7 @@ def is_stale(
 
     task_name = node.name
 
-    current = _hash_outputs(node, duckdb_conn=duckdb_conn)
+    current = _hash_outputs(node)
     if current is None:
         code_hash = _hash_code(node)
         if code_hash is None:

@@ -32,10 +32,12 @@ def test_schema_exact_columns(tmp_path):
     db_path = str(tmp_path / "test.duckdb")
     DuckDbBackend(path=db_path)
     conn = duckdb.connect(db_path)
-    rows = conn.execute("PRAGMA table_info(task_state)").fetchall()
+    rows = conn.execute(
+        "SELECT column_name, data_type FROM duckdb_columns() WHERE schema_name='_kptn' AND table_name='task_state'"
+    ).fetchall()
     conn.close()
-    col_names = [r[1] for r in rows]
-    col_types = [r[2] for r in rows]
+    col_names = [r[0] for r in rows]
+    col_types = [r[1] for r in rows]
     assert col_names == ["storage_key", "pipeline_name", "task_name", "output_hash", "status", "ran_at"]
     # DuckDB normalizes TEXT → VARCHAR internally; both are equivalent string types
     assert all(t in ("TEXT", "VARCHAR") for t in col_types)
@@ -45,7 +47,9 @@ def test_schema_no_extra_columns(tmp_path):
     db_path = str(tmp_path / "test.duckdb")
     DuckDbBackend(path=db_path)
     conn = duckdb.connect(db_path)
-    rows = conn.execute("PRAGMA table_info(task_state)").fetchall()
+    rows = conn.execute(
+        "SELECT column_name FROM duckdb_columns() WHERE schema_name='_kptn' AND table_name='task_state'"
+    ).fetchall()
     conn.close()
     assert len(rows) == 6
 
@@ -54,11 +58,12 @@ def test_schema_composite_pk(tmp_path):
     db_path = str(tmp_path / "test.duckdb")
     DuckDbBackend(path=db_path)
     conn = duckdb.connect(db_path)
-    rows = conn.execute("PRAGMA table_info(task_state)").fetchall()
+    row = conn.execute(
+        "SELECT constraint_column_names FROM duckdb_constraints() WHERE schema_name='_kptn' AND table_name='task_state' AND constraint_type='PRIMARY KEY'"
+    ).fetchone()
     conn.close()
-    # pk index is column 5; non-zero means it's part of the PK
-    pk_cols = {r[1] for r in rows if r[5] != 0}
-    assert pk_cols == {"storage_key", "pipeline_name", "task_name"}
+    assert row is not None
+    assert set(row[0]) == {"storage_key", "pipeline_name", "task_name"}
 
 
 # ─── AC-5: DuckDB errors wrapped in StateStoreError ──────────────────────── #
@@ -133,7 +138,7 @@ def test_ran_at_is_set_on_write(tmp_path):
     b = DuckDbBackend(path=db_path)
     b.write_hash("sk", "pipe", "task", "hash")
     conn = duckdb.connect(db_path)
-    row = conn.execute("SELECT ran_at FROM task_state").fetchone()
+    row = conn.execute("SELECT ran_at FROM _kptn.task_state").fetchone()
     conn.close()
     assert row is not None
     parsed = datetime.fromisoformat(row[0])
@@ -145,7 +150,7 @@ def test_status_is_success_on_write(tmp_path):
     b = DuckDbBackend(path=db_path)
     b.write_hash("sk", "pipe", "task", "hash")
     conn = duckdb.connect(db_path)
-    row = conn.execute("SELECT status FROM task_state").fetchone()
+    row = conn.execute("SELECT status FROM _kptn.task_state").fetchone()
     conn.close()
     assert row[0] == "success"
 
