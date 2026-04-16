@@ -197,6 +197,7 @@ def execute(
     duckdb_alias: str | None = None,
     keep_db_open: bool = False,
     no_cache: bool = False,
+    force: bool = False,
     extra_kwargs: "dict[str, Any] | None" = None,
 ) -> "Any | None":
     """Execute the resolved pipeline graph.
@@ -288,7 +289,7 @@ def execute(
             for item in collection:
                 item_task_name = f"{node.name}[{item}]"
                 item_stale = upstream_dirty
-                if not no_cache and not upstream_dirty:
+                if not no_cache and not upstream_dirty and not force:
                     stored_hash = state_store.read_hash(
                         resolved.storage_key, resolved.pipeline, item_task_name
                     )
@@ -338,7 +339,7 @@ def execute(
 
         # TaskNode
         if isinstance(node, TaskNode):
-            force_run = upstream_dirty
+            force_run = upstream_dirty or force
             actually_stale = False
             if not no_cache and not force_run:
                 stale, reason = False, ""
@@ -374,7 +375,7 @@ def execute(
 
         # RTaskNode
         if isinstance(node, RTaskNode):
-            force_run = upstream_dirty
+            force_run = upstream_dirty or force
             actually_stale = False
             if not no_cache and not force_run:
                 stale, reason = False, ""
@@ -416,7 +417,7 @@ def execute(
                 )
                 continue
             conn = duckdb_factory()  # acquire once; factory should return a cached singleton
-            force_run = upstream_dirty
+            force_run = upstream_dirty or force
             actually_stale = False
             if not no_cache and not force_run:
                 stale, reason = False, ""

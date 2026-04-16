@@ -36,7 +36,7 @@ def _find_duckdb_factory(pipeline: Pipeline):
     return None, None
 
 
-_LEGACY_KWARGS = frozenset({"project_dir", "force", "task_names"})
+_LEGACY_KWARGS = frozenset({"project_dir", "task_names"})
 
 
 def run(
@@ -45,6 +45,7 @@ def run(
     profile: str | None = None,
     keep_db_open: bool = False,
     no_cache: bool = False,
+    force: bool = False,
     **kwargs: Any,
 ) -> "duckdb.DuckDBPyConnection | None":
     """Run a pipeline.
@@ -126,6 +127,7 @@ def run(
         duckdb_alias=duckdb_alias,
         keep_db_open=keep_db_open,
         no_cache=no_cache,
+        force=force,
         extra_kwargs=kwargs or None,
     )
 

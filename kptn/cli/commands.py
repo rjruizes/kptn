@@ -53,11 +53,12 @@ def _load_pipeline_from_pyproject(project_root: Path) -> Pipeline:
 @app.command()
 def run(
     profile: str | None = typer.Option(None, "--profile"),
+    force: bool = typer.Option(False, "--force"),
 ) -> None:
     project_root = Path.cwd()
     pipeline = _load_pipeline_from_pyproject(project_root)
     try:
-        _run_pipeline(pipeline, profile=profile)
+        _run_pipeline(pipeline, profile=profile, force=force)
     except ProfileError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)
