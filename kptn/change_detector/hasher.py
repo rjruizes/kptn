@@ -360,6 +360,7 @@ def hash_task_source(fn: Any) -> str:
     hashing the raw source of *fn* alone when AST-based collection fails
     (e.g. lambdas, dynamically-defined functions, or C extensions).
     """
+    fn = inspect.unwrap(fn)  # follow __wrapped__ chains (e.g. _KptnCallable)
     sources: list[str] = []
     try:
         file_path = Path(inspect.getfile(fn)).resolve()

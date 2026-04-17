@@ -67,6 +67,16 @@ def emit_restore_end(elapsed_s: float, timestamp: bool = False) -> None:
     print(f"[RESTORE_END]{ts} — {elapsed_s:.1f}s", flush=True)
 
 
+def emit_checkpoint_select(task_name: str, timestamp: bool = False) -> None:
+    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
+    print(f"[CHECKPOINT_SELECT]{ts} {task_name}", flush=True)
+
+
+def emit_checkpoint_stale(task_name: str, stale_task: str, timestamp: bool = False) -> None:
+    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
+    print(f"[CHECKPOINT_STALE]{ts} {task_name} — {stale_task} is stale, backup deleted", flush=True)
+
+
 def plan(resolved: ResolvedGraph, state_store: StateStoreBackend) -> None:
     ordered: list[AnyNode] = topo_sort(resolved.graph)
     for node in ordered:

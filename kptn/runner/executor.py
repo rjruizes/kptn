@@ -177,14 +177,13 @@ def _resolve_collection(over: str, runtime_ctx: dict[str, Any]) -> list[Any]:
 def _try_restore(
     ordered: "list[AnyNode]",
     resolved: "ResolvedGraph",
-    state_store: "StateStoreBackend",
     duckdb_factory: "Callable[[], Any]",
 ) -> None:
     conn = duckdb_factory()
     db_path = get_db_path(conn)
     if db_path is None:
         return
-    candidate = find_restore_candidate(ordered, state_store, resolved.storage_key, resolved.pipeline, db_path)
+    candidate = find_restore_candidate(ordered, resolved.storage_key, resolved.pipeline, db_path)
     if candidate is None:
         return
     restore_checkpoint(conn, candidate, db_path)
@@ -254,7 +253,7 @@ def execute(
     dirty_names: set[str] = set()
 
     if duckdb_factory is not None and not no_cache and not force:
-        _try_restore(ordered, resolved, state_store, duckdb_factory)
+        _try_restore(ordered, resolved, duckdb_factory)
 
     for node in ordered:
         upstream_dirty = any(p.name in dirty_names for p in predecessors[node.name])
