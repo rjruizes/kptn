@@ -183,6 +183,19 @@ def _try_restore(
     db_path = get_db_path(conn)
     if db_path is None:
         return
+    # Only restore if the database file was deleted (and recreated fresh by the factory).
+    # A pre-existing database will have rows in _kptn.task_state for this pipeline;
+    # a freshly created one will have an empty table (CREATE TABLE IF NOT EXISTS preserves
+    # existing rows, so a real database retains its prior state through factory re-init).
+    try:
+        row_count = conn.execute(
+            "SELECT count(*) FROM _kptn.task_state WHERE storage_key=? AND pipeline_name=?",
+            (resolved.storage_key, resolved.pipeline),
+        ).fetchone()[0]
+        if row_count > 0:
+            return
+    except Exception:
+        pass  # _kptn.task_state absent (separate state store); fall through to candidate check
     candidate = find_restore_candidate(ordered, resolved.storage_key, resolved.pipeline, db_path)
     if candidate is None:
         return

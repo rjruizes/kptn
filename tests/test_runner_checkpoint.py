@@ -1,10 +1,11 @@
-"""Tests for kptn.runner.checkpoint.find_restore_candidate."""
+"""Tests for kptn.runner.checkpoint.find_restore_candidate and _try_restore."""
 
 from __future__ import annotations
 
 import importlib.util
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -14,6 +15,7 @@ from kptn.change_detector.hasher import hash_task_source
 from kptn.graph.decorators import TaskSpec, _KptnCallable
 from kptn.graph.nodes import TaskNode
 from kptn.runner.checkpoint import checkpoint_path, find_restore_candidate
+from kptn.runner.executor import _try_restore
 
 
 # ---------------------------------------------------------------------------
@@ -283,3 +285,106 @@ def test_restore_candidate_none_when_callee_changes_through_kptn_wrapper(
     helpers_py.write_text("def helper():\n    return 99\n")
 
     assert find_restore_candidate(ordered, "kptn", "default", db_path) is None
+
+
+# ---------------------------------------------------------------------------
+# _try_restore: only restore when the database was deleted
+# ---------------------------------------------------------------------------
+
+
+def _make_resolved(storage_key: str = "kptn", pipeline: str = "default"):
+    """Minimal ResolvedGraph stand-in for _try_restore tests."""
+    from kptn.profiles.resolved import ResolvedGraph
+    from kptn.graph.graph import Graph
+
+    resolved = MagicMock(spec=ResolvedGraph)
+    resolved.storage_key = storage_key
+    resolved.pipeline = pipeline
+    return resolved
+
+
+def test_try_restore_skips_when_db_has_existing_state(tmp_path: Path) -> None:
+    """_try_restore must NOT restore when the database file exists with pipeline state.
+
+    Regression: a backup file's mere existence was enough to trigger an
+    unconditional restore, overwriting a live database.
+    """
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    tasks_py = pkg / "tasks.py"
+    tasks_py.write_text("def big_task():\n    pass\n")
+    big_task_fn = _load_fn(tasks_py, "big_task")
+
+    ordered = [_node("big_task", big_task_fn, duckdb_checkpoint=True)]
+
+    db_path = tmp_path / "pipeline.ddb"
+
+    # Seed the live database with pipeline state so it appears intact.
+    live_conn = duckdb.connect(str(db_path))
+    live_conn.execute("CREATE SCHEMA IF NOT EXISTS _kptn")
+    live_conn.execute("""
+        CREATE TABLE IF NOT EXISTS _kptn.task_state (
+            storage_key TEXT NOT NULL, pipeline_name TEXT NOT NULL,
+            task_name TEXT NOT NULL, output_hash TEXT, status TEXT, ran_at TEXT,
+            PRIMARY KEY (storage_key, pipeline_name, task_name)
+        )
+    """)
+    live_conn.execute(
+        "INSERT INTO _kptn.task_state VALUES (?, ?, ?, ?, ?, ?)",
+        ("kptn", "default", "big_task", "abc123", "success", "2024-01-01"),
+    )
+    live_conn.commit()
+    live_conn.execute("CHECKPOINT")
+    live_conn.close()
+
+    # Create a valid backup alongside the live database.
+    cp = checkpoint_path(db_path, "big_task")
+    _make_backup_db(cp, {"big_task": hash_task_source(big_task_fn)}, "kptn", "default")
+
+    original_size = db_path.stat().st_size
+
+    def factory():
+        return duckdb.connect(str(db_path))
+
+    resolved = _make_resolved()
+    _try_restore(ordered, resolved, factory)
+
+    # Live database must be untouched (backup was NOT restored).
+    assert db_path.stat().st_size == original_size
+    conn = duckdb.connect(str(db_path))
+    row = conn.execute("SELECT output_hash FROM _kptn.task_state").fetchone()
+    conn.close()
+    assert row is not None and row[0] == "abc123"
+
+
+def test_try_restore_restores_when_db_was_deleted(tmp_path: Path) -> None:
+    """_try_restore MUST restore when the database file was deleted and a backup exists."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    tasks_py = pkg / "tasks.py"
+    tasks_py.write_text("def big_task():\n    pass\n")
+    big_task_fn = _load_fn(tasks_py, "big_task")
+
+    ordered = [_node("big_task", big_task_fn, duckdb_checkpoint=True)]
+
+    db_path = tmp_path / "pipeline.ddb"
+
+    # Create a backup that would be valid for this task.
+    cp = checkpoint_path(db_path, "big_task")
+    _make_backup_db(cp, {"big_task": hash_task_source(big_task_fn)}, "kptn", "default")
+    backup_size = cp.stat().st_size
+
+    # db_path does NOT exist — simulates the user having deleted it.
+    assert not db_path.exists()
+
+    def factory():
+        return duckdb.connect(str(db_path))
+
+    resolved = _make_resolved()
+    _try_restore(ordered, resolved, factory)
+
+    # The database should now be the restored backup.
+    assert db_path.exists()
+    assert db_path.stat().st_size == backup_size
