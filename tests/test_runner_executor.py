@@ -627,7 +627,7 @@ def test_execute_sql_task_emit_fail_on_execution_error(tmp_path: Path, capsys) -
     factory = MagicMock(return_value=conn)
     with pytest.raises(TaskError, match="failed at statement"):
         execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=True)
-    assert "[FAIL] bad" in capsys.readouterr().err
+    assert re.search(r'\[FAIL\] \d{2}:\d{2}:\d{2} bad', capsys.readouterr().err)
 
 
 def test_execute_sql_task_writes_hash_after_successful_run(tmp_path: Path) -> None:
@@ -663,7 +663,7 @@ def test_execute_sql_task_emit_fail_on_hash_error(tmp_path: Path, capsys) -> Non
                 with pytest.raises(TaskError, match="Hash computation failed"):
                     execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
     conn.execute.assert_called_once_with("SELECT 1")
-    assert "[FAIL] query" in capsys.readouterr().err
+    assert re.search(r'\[FAIL\] \d{2}:\d{2}:\d{2} query', capsys.readouterr().err)
 
 
 def test_execute_sql_task_hash_error_in_staleness_forces_rerun(tmp_path: Path) -> None:
