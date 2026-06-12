@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Union
 
 if TYPE_CHECKING:
@@ -31,11 +31,16 @@ class RTaskNode:
 @dataclass
 class ParallelNode:
     name: str = "parallel"   # optional label; passed as first positional string to parallel()
+    # Names of every node inside this group's subgraph (excluding the sentinel).
+    # Captured at construction so cursor resolution can keep the group atomic even
+    # when branches are multi-node subgraphs. compare=False keeps node equality stable.
+    members: frozenset[str] = field(default_factory=frozenset, compare=False)
 
 
 @dataclass
 class StageNode:
     name: str                # required — stage name for profile selection (Epic 3)
+    members: frozenset[str] = field(default_factory=frozenset, compare=False)
 
 
 @dataclass
@@ -53,6 +58,7 @@ class MapNode:
 @dataclass
 class PipelineNode:
     name: str  # the pipeline name — used by topo_sort cycle error reporting
+    members: frozenset[str] = field(default_factory=frozenset, compare=False)
 
 
 @dataclass

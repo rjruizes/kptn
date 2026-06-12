@@ -56,6 +56,7 @@ def parallel(*args: Any) -> "Graph":
         for head in branch_graph._heads():
             all_edges.append((sentinel, head))
 
+    sentinel.members = frozenset(n.name for n in all_nodes if n is not sentinel)
     return Graph(nodes=all_nodes, edges=all_edges)
 
 
@@ -98,6 +99,7 @@ def Stage(name: str, *branches: Any) -> "Graph":
         for head in branch_graph._heads():
             all_edges.append((sentinel, head))
 
+    sentinel.members = frozenset(n.name for n in all_nodes if n is not sentinel)
     return Graph(nodes=all_nodes, edges=all_edges)
 
 

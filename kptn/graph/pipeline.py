@@ -21,7 +21,7 @@ class Pipeline(Graph):
         # This allows users to write kptn.Pipeline("foo", task_a) instead of kptn.Pipeline("foo", kptn.Graph.from_node(task_a)).
         if not isinstance(graph, Graph):
             graph = Graph._from_node(graph)
-        sentinel = PipelineNode(name=name)
+        sentinel = PipelineNode(name=name, members=frozenset(n.name for n in graph.nodes))
         all_nodes = [sentinel] + graph.nodes
         cross_edges = [(sentinel, h) for h in graph._heads()]
         all_edges = graph.edges + cross_edges

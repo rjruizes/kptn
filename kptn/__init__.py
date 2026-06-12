@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # kptn package
-__version__ = "0.1.0"
+__version__ = "0.2.5"
 
 # v0.2.0 public API
 from kptn.graph.decorators import task, sql_task, r_task, noop  # noqa: F401

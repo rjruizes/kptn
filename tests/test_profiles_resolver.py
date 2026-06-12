@@ -693,6 +693,114 @@ def test_compile_single_node_slice():
 
 
 # ---------------------------------------------------------------------------
+# Group atomicity: stop_after must retain the FULL body of a Stage/Pipeline/
+# Parallel group, including multi-node branches (e.g. a sub-Pipeline branch).
+# ---------------------------------------------------------------------------
+
+
+def test_compile_stop_after_stage_with_multinode_branch_retains_body():
+    """stop_after a Stage whose branch is a multi-node sub-Pipeline retains the body.
+
+    Graph: ... load_redcap >> Stage("ds", load_aim2, load_mcac) >> load_omop
+    where load_mcac = Pipeline(mcac_reports >> mcac_inventory).
+    stage_selections selects only load_mcac; stop_after: ds must keep load_mcac's
+    internal tasks (mcac_reports, mcac_inventory) and prune load_omop.
+    """
+    @kptn.task(outputs=[])
+    def load_redcap(): ...
+    @kptn.task(outputs=[])
+    def load_aim2(): ...
+    @kptn.task(outputs=[])
+    def mcac_reports(): ...
+    @kptn.task(outputs=[])
+    def mcac_inventory(): ...
+    @kptn.task(outputs=[])
+    def load_omop(): ...
+
+    load_mcac = Pipeline("load_mcac", mcac_reports >> mcac_inventory)
+    datasets = kptn.Stage("ds", load_aim2, load_mcac)
+    pipeline = Pipeline("p", load_redcap >> datasets >> load_omop)
+    config = KptnConfig(profiles={
+        "mcac": ProfileSpec(stage_selections={"ds": ["load_mcac"]}),
+        "mcac_test": ProfileSpec(extends="mcac", stop_after="ds"),
+    })
+    resolved = ProfileResolver(config).compile(pipeline, "mcac_test")
+    names = {n.name for n in resolved.graph.nodes}
+    assert "mcac_reports" in names      # branch body retained
+    assert "mcac_inventory" in names    # branch body retained
+    assert "load_omop" not in names     # downstream of stage pruned
+
+
+def test_compile_stop_after_stage_branch_head_retains_branch_body():
+    """stop_after a stage branch head that is a multi-node sub-Pipeline retains body."""
+    @kptn.task(outputs=[])
+    def load_redcap(): ...
+    @kptn.task(outputs=[])
+    def load_aim2(): ...
+    @kptn.task(outputs=[])
+    def mcac_reports(): ...
+    @kptn.task(outputs=[])
+    def mcac_inventory(): ...
+    @kptn.task(outputs=[])
+    def load_omop(): ...
+
+    load_mcac = Pipeline("load_mcac", mcac_reports >> mcac_inventory)
+    datasets = kptn.Stage("ds", load_aim2, load_mcac)
+    pipeline = Pipeline("p", load_redcap >> datasets >> load_omop)
+    config = KptnConfig(profiles={
+        "mcac": ProfileSpec(stage_selections={"ds": ["load_mcac"]}),
+        "mcac_load": ProfileSpec(extends="mcac", stop_after="load_mcac"),
+    })
+    resolved = ProfileResolver(config).compile(pipeline, "mcac_load")
+    names = {n.name for n in resolved.graph.nodes}
+    assert "mcac_reports" in names
+    assert "mcac_inventory" in names
+    assert "load_omop" not in names
+
+
+def test_compile_stop_after_standalone_pipeline_retains_body():
+    """stop_after a sub-Pipeline used directly in a chain retains its full body."""
+    @kptn.task(outputs=[])
+    def head(): ...
+    @kptn.task(outputs=[])
+    def inner_a(): ...
+    @kptn.task(outputs=[])
+    def inner_b(): ...
+    @kptn.task(outputs=[])
+    def tail(): ...
+
+    sub = Pipeline("sub", inner_a >> inner_b)
+    pipeline = Pipeline("p", head >> sub >> tail)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="sub")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    names = {n.name for n in resolved.graph.nodes}
+    assert "inner_a" in names
+    assert "inner_b" in names
+    assert "tail" not in names
+
+
+def test_compile_stop_after_parallel_retains_body():
+    """stop_after a parallel() group retains all branch bodies, prunes downstream."""
+    @kptn.task(outputs=[])
+    def head(): ...
+    @kptn.task(outputs=[])
+    def branch_a(): ...
+    @kptn.task(outputs=[])
+    def branch_b(): ...
+    @kptn.task(outputs=[])
+    def tail(): ...
+
+    group = kptn.parallel("etl", branch_a, branch_b)
+    pipeline = Pipeline("p", head >> group >> tail)
+    config = KptnConfig(profiles={"dev": ProfileSpec(stop_after="etl")})
+    resolved = ProfileResolver(config).compile(pipeline, "dev")
+    names = {n.name for n in resolved.graph.nodes}
+    assert "branch_a" in names
+    assert "branch_b" in names
+    assert "tail" not in names
+
+
+# ---------------------------------------------------------------------------
 # Story 3.5 — Stale reference detection with did-you-mean
 # ---------------------------------------------------------------------------
 

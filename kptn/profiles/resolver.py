@@ -5,7 +5,7 @@ from typing import Any
 
 from kptn.exceptions import ProfileError
 from kptn.graph.graph import Graph
-from kptn.graph.nodes import AnyNode, TaskNode, SqlTaskNode, RTaskNode, StageNode
+from kptn.graph.nodes import AnyNode, TaskNode, SqlTaskNode, RTaskNode, StageNode, ParallelNode, PipelineNode
 from kptn.graph.pipeline import Pipeline
 from kptn.graph.topo import topo_sort
 from kptn.profiles.resolved import ResolvedGraph
@@ -392,11 +392,22 @@ def _apply_cursors(graph: Graph, profile: ProfileSpec) -> tuple[Graph, frozenset
 
     # Map branch name → its direct StageNode parent
     stage_of: dict[str, StageNode] = {}
-    stage_branches: dict[str, list[AnyNode]] = {}
     for src, dst in graph.edges:
         if isinstance(src, StageNode):
             stage_of[dst.name] = src
-            stage_branches.setdefault(src.name, []).append(dst)
+
+    def _group_max_idx(sentinel: AnyNode) -> int:
+        """Largest topo index over a group's surviving members (plus the sentinel).
+
+        ``sentinel.members`` is captured at construction and names every node in
+        the group's subgraph — including the internal tasks of multi-node branches
+        (e.g. a sub-Pipeline branch). Intersecting with the post-prune graph keeps
+        only surviving members, so the cursor lands on the group's true tail rather
+        than its head.
+        """
+        present = [name_to_node[m] for m in sentinel.members if m in name_to_node]
+        present.append(sentinel)
+        return max(idx_of[id(n)] for n in present)
 
     def _did_you_mean(name: str) -> str:
         matches = difflib.get_close_matches(name, list(name_to_node), n=1, cutoff=0.6)
@@ -417,15 +428,18 @@ def _apply_cursors(graph: Graph, profile: ProfileSpec) -> tuple[Graph, frozenset
             raise ProfileError(
                 f"'stop_after' references unknown node '{cursor_name}'.{_did_you_mean(cursor_name)}"
             )
+        node = name_to_node[cursor_name]
+        # Stage atomicity: a branch cursor OR the StageNode sentinel retains the
+        # WHOLE stage — every surviving branch and its full body.
         if cursor_name in stage_of:
-            # Stage atomicity for branch cursor: stop after last branch in topo order
-            return max(idx_of[id(b)] for b in stage_branches[stage_of[cursor_name].name])
-        if isinstance(name_to_node[cursor_name], StageNode):
-            # Stage atomicity for StageNode-name cursor: stop after last branch
-            branches = stage_branches.get(cursor_name, [])
-            if branches:
-                return max(idx_of[id(b)] for b in branches)
-        return idx_of[id(name_to_node[cursor_name])]
+            return _group_max_idx(stage_of[cursor_name])
+        if isinstance(node, StageNode):
+            return _group_max_idx(node)
+        # Group atomicity: a Pipeline/Parallel sentinel retains the entire group
+        # body, pruning everything topologically after the group's exit.
+        if isinstance(node, (PipelineNode, ParallelNode)):
+            return _group_max_idx(node)
+        return idx_of[id(node)]
 
     start_idx: int | None = None
     stop_idx: int | None = None
