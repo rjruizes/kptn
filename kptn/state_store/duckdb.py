@@ -45,7 +45,7 @@ class DuckDbBackend:
             if self._factory is None:
                 self.__owned_conn.close()
             raise StateStoreError(
-                f"Failed to initialise state store"
+                "Failed to initialise state store"
                 + (f" at {path!r}" if path else "")
             ) from exc
 

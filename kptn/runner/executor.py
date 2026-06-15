@@ -4,7 +4,6 @@ import hashlib
 import inspect
 import logging
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Callable
 

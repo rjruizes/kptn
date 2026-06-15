@@ -396,7 +396,7 @@ def _apply_cursors(graph: Graph, profile: ProfileSpec) -> tuple[Graph, frozenset
         if isinstance(src, StageNode):
             stage_of[dst.name] = src
 
-    def _group_max_idx(sentinel: AnyNode) -> int:
+    def _group_max_idx(sentinel: StageNode | ParallelNode | PipelineNode) -> int:
         """Largest topo index over a group's surviving members (plus the sentinel).
 
         ``sentinel.members`` is captured at construction and names every node in

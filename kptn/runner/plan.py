@@ -12,10 +12,7 @@ from kptn.graph.nodes import (
     NoopNode,
     ParallelNode,
     PipelineNode,
-    RTaskNode,
-    SqlTaskNode,
     StageNode,
-    TaskNode,
 )
 from kptn.graph.topo import topo_sort
 from kptn.profiles.resolved import ResolvedGraph
