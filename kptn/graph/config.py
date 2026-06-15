@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from kptn.graph.graph import Graph
+    from kptn.graph.nodes import ConfigNode
 
 
 def config(**kwargs) -> "Graph":
@@ -45,8 +49,6 @@ def config(**kwargs) -> "Graph":
                 f"kptn.config() requires callable values; "
                 f"got {type(val).__name__!r} for key '{key}'."
             )
-    from kptn.graph.graph import Graph
-    from kptn.graph.nodes import ConfigNode
 
     return Graph(nodes=[ConfigNode(spec=dict(kwargs))], edges=[])
 
