@@ -796,9 +796,6 @@ dependencies = [
 aws = [
     { name = "boto3" },
 ]
-duckdb = [
-    { name = "duckdb" },
-]
 prefect = [
     { name = "prefect" },
 ]
@@ -819,7 +816,6 @@ dev = [
 requires-dist = [
     { name = "boto3", marker = "extra == 'aws'" },
     { name = "duckdb" },
-    { name = "duckdb", marker = "extra == 'duckdb'" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.116.2" },
     { name = "prefect", marker = "extra == 'prefect'" },
     { name = "pydantic" },
@@ -828,7 +824,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.35.0" },
     { name = "watchfiles", marker = "extra == 'web'" },
 ]
-provides-extras = ["aws", "prefect", "web", "duckdb"]
+provides-extras = ["aws", "prefect", "web"]
 
 [package.metadata.requires-dev]
 dev = [

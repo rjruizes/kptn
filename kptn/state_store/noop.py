@@ -1,6 +1,5 @@
 """No-op state store backend — used when caching is disabled."""
 
-from kptn.state_store.protocol import StateStoreBackend
 
 
 class NoOpBackend:
