@@ -126,8 +126,8 @@ def hash_file(path: str) -> str:
 class _StripDocstrings(ast.NodeTransformer):
     """Remove Expr(Constant(str)) nodes that represent docstrings."""
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
-        self.generic_visit(node)
+    def _strip_docstring(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """Helper to strip docstring from function body."""
         if (
             node.body
             and isinstance(node.body[0], ast.Expr)
@@ -137,9 +137,16 @@ class _StripDocstrings(ast.NodeTransformer):
             node.body = node.body[1:]
             if not node.body:
                 node.body = [ast.Pass()]
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+        self.generic_visit(node)
+        self._strip_docstring(node)
         return node
 
-    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
+        self.generic_visit(node)
+        self._strip_docstring(node)
+        return node
 
 
 def _normalize_fn_source(source: str) -> str:
