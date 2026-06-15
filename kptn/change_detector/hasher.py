@@ -50,10 +50,9 @@ def hash_duckdb_table(table_name: str, *, conn: "Any") -> str:
     prefix, e.g. ``schema.table`` or just ``table``.  The caller supplies the
     active connection; kptn never opens a separate file handle for hashing.
     """
-    try:
-        import duckdb
-    except ModuleNotFoundError as exc:
-        raise HashError("duckdb extra not installed: pip install kptn[duckdb]") from exc
+    import importlib.util
+    if importlib.util.find_spec("duckdb") is None:
+        raise HashError("duckdb extra not installed: pip install kptn[duckdb]")
 
     quoted_table = _quote_qualified_name(table_name)
     try:
