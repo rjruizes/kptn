@@ -18,7 +18,7 @@ jobs:
         run: uv sync --dev
 
       - name: Test
-        run: uv run pytest -k "not test_Hasher_r_glob and not test_Hasher_indicators"
+        run: uv run pytest
 
       - name: Lint
         run: uv run ruff check kptn/exceptions.py kptn/graph kptn/profiles kptn/runner kptn/change_detector kptn/state_store kptn/quality

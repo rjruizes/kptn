@@ -5,6 +5,14 @@ import pytest
 from kptn.caching.Hasher import Hasher
 from tests.fixture_constants import mock_dir, tasks_yaml_path
 
+# The nibrs example is a real-world pipeline kept local-only (gitignored), so
+# tests that depend on it run for developers who have the fixtures but are
+# skipped in CI and for anyone without them.
+requires_nibrs = pytest.mark.skipif(
+    not Path("example/nibrs/kptn.yaml").exists(),
+    reason="requires local-only example/nibrs fixtures (gitignored)",
+)
+
 @pytest.fixture
 def cleanup():
     yield
@@ -22,6 +30,7 @@ def test_Hasher_r():
     h = Hasher(tasks_config_paths=["example/mock_pipeline/kptn.yaml"])
     assert isinstance(h.hash_code_for_task("A"), list)
 
+@requires_nibrs
 def test_Hasher_r_glob():
     task_name = "srs_indicators_estimated_tables_part1_preprocessing"
     h = Hasher(tasks_config_paths=["example/nibrs/kptn.yaml"])
@@ -47,6 +56,7 @@ def test_Hasher_get_task_filelist():
     task = h.get_task("A")
     assert type(h.get_task_filelist("A", task)) == list
 
+@requires_nibrs
 def test_Hasher_indicators():
     task_name = "srs_indicators_estimated_tables_part1_preprocessing"
     h = Hasher(tasks_config_paths=["example/nibrs/kptn.yaml"])
