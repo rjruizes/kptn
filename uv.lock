@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -786,6 +786,7 @@ name = "kptn"
 version = "0.2.5"
 source = { editable = "." }
 dependencies = [
+    { name = "duckdb" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "typer" },
@@ -817,6 +818,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", marker = "extra == 'aws'" },
+    { name = "duckdb" },
     { name = "duckdb", marker = "extra == 'duckdb'" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.116.2" },
     { name = "prefect", marker = "extra == 'prefect'" },
