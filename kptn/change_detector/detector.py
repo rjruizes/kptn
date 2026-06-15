@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+from typing import Protocol
 
 from kptn.exceptions import HashError
 from kptn.graph.nodes import (
@@ -19,6 +20,10 @@ from kptn.graph.nodes import (
 from kptn.state_store.protocol import StateStoreBackend
 
 from kptn.change_detector.hasher import hash_file, hash_sqlite_table, hash_task_source
+
+
+class _ReadableStateStore(Protocol):
+    def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None: ...
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +73,7 @@ def _hash_code(node: AnyNode) -> str | None:
 
 def is_stale(
     node: AnyNode,
-    state_store: StateStoreBackend,
+    state_store: StateStoreBackend | _ReadableStateStore,
     storage_key: str,
     pipeline: str,
 ) -> tuple[bool, str]:
