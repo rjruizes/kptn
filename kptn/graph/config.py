@@ -49,6 +49,8 @@ def config(**kwargs) -> "Graph":
                 f"kptn.config() requires callable values; "
                 f"got {type(val).__name__!r} for key '{key}'."
             )
+    from kptn.graph.graph import Graph
+    from kptn.graph.nodes import ConfigNode
 
     return Graph(nodes=[ConfigNode(spec=dict(kwargs))], edges=[])
 
