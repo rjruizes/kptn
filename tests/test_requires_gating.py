@@ -3,7 +3,6 @@ from __future__ import annotations
 import kptn
 from kptn.graph.graph import Graph
 from kptn.graph.requires import expand_requires, gate_disjunctive
-from kptn.graph.topo import topo_sort
 
 
 @kptn.task(outputs=["A"])
