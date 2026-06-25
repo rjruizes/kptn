@@ -4,6 +4,7 @@ import pytest
 
 import kptn
 from kptn.graph.decorators import RTaskSpec, SqlTaskSpec, TaskSpec, r_task, sql_task, task
+from kptn.graph.graph import Graph
 from kptn.graph.requires import AnyOf, any_of
 
 
@@ -57,3 +58,13 @@ def test_any_of_rejects_non_handle() -> None:
 
 def test_any_of_exported_from_package() -> None:
     assert kptn.any_of is any_of
+
+
+def test_graph_requires_edges_defaults_empty() -> None:
+    g = Graph(nodes=[], edges=[])
+    assert g.requires_edges == set()
+
+
+def test_graph_requires_edges_settable() -> None:
+    g = Graph(nodes=[], edges=[], requires_edges={(1, 2)})
+    assert g.requires_edges == {(1, 2)}

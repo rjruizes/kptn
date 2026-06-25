@@ -33,6 +33,7 @@ def _to_task_node(obj: Any) -> AnyNode:
 class Graph:
     nodes: list[AnyNode] = field(default_factory=list)
     edges: list[tuple[AnyNode, AnyNode]] = field(default_factory=list)
+    requires_edges: set[tuple[int, int]] = field(default_factory=set, compare=False)
 
     @classmethod
     def _from_node(cls, obj: Any) -> "Graph":
