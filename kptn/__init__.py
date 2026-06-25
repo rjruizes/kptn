@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # kptn package
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 
 # v0.2.0 public API
 from kptn.graph.composition import Stage, map, parallel  # noqa: F401
