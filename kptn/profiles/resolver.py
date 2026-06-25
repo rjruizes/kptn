@@ -325,6 +325,10 @@ def _prune(graph: Graph, profile: ProfileSpec, pipeline_name: str | None = None)
             (s, d) for s, d in graph.edges
             if id(s) in surviving_ids and id(d) in surviving_ids
         ] + bypass_edges,
+        requires_edges={
+            (s, d) for (s, d) in graph.requires_edges
+            if s in surviving_ids and d in surviving_ids
+        },
     )
 
 
@@ -466,7 +470,14 @@ def _apply_cursors(graph: Graph, profile: ProfileSpec) -> tuple[Graph, frozenset
         keep_ids = {id(ordered[i]) for i in range(stop_idx + 1)}
         pruned_nodes = [n for n in graph.nodes if id(n) in keep_ids]
         pruned_edges = [(s, d) for s, d in graph.edges if id(s) in keep_ids and id(d) in keep_ids]
-        graph = Graph(nodes=pruned_nodes, edges=pruned_edges)
+        graph = Graph(
+            nodes=pruned_nodes,
+            edges=pruned_edges,
+            requires_edges={
+                (s, d) for (s, d) in graph.requires_edges
+                if s in keep_ids and d in keep_ids
+            },
+        )
 
     return graph, bypassed_names
 

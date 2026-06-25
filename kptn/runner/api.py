@@ -36,6 +36,18 @@ def _find_duckdb_factory(pipeline: Pipeline):
     return None, None
 
 
+def _gate(resolved: ResolvedGraph) -> ResolvedGraph:
+    """Apply disjunctive requires gating to a resolved graph."""
+    from kptn.graph.requires import gate_disjunctive
+    return ResolvedGraph(
+        graph=gate_disjunctive(resolved.graph),
+        pipeline=resolved.pipeline,
+        storage_key=resolved.storage_key,
+        bypassed_names=resolved.bypassed_names,
+        profile_args=resolved.profile_args,
+    )
+
+
 _LEGACY_KWARGS = frozenset({"project_dir", "task_names"})
 
 
@@ -107,6 +119,8 @@ def run(
             storage_key=config.settings.db_path or ".kptn/kptn.db",
         )
 
+    resolved = _gate(resolved)
+
     duckdb_factory, duckdb_alias = _find_duckdb_factory(pipeline)
 
     # no_cache without a profile: skip the state store entirely.
@@ -157,6 +171,8 @@ def plan(
             pipeline=pipeline.name,
             storage_key=config.settings.db_path or ".kptn/kptn.db",
         )
+
+    resolved = _gate(resolved)
 
     duckdb_factory, _ = _find_duckdb_factory(pipeline)
     state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
