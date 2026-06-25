@@ -124,6 +124,40 @@ Use `kptn.map()` to fan out dynamically over a runtime collection:
 graph = list_items >> kptn.map(process_item, over="items")
 ```
 
+### Demand-Driven Dependencies
+
+Declare prerequisites with `requires=[...]` instead of chaining them with `>>`. A required task is pulled into the run **only when a consumer needs it**, runs **once** even if several consumers require it, and is ordered before every requirer. This is ideal for expensive shared prerequisites:
+
+```python
+@kptn.task(outputs=["duckdb://index"])
+def build_index(engine) -> None:
+    ...  # expensive; only worth running when something needs the index
+
+
+@kptn.task(outputs=["output/report.txt"], requires=[build_index])
+def report(engine) -> None:
+    ...
+
+
+# build_index is never chained with >> — `report` pulls it in:
+pipeline = kptn.Pipeline("analysis", report)
+```
+
+`requires` is transitive: a required task's own `requires` are pulled in too. If you already place a task in the graph yourself (via `>>`), `requires` for that task is a no-op — your explicit wiring governs ordering. Note that conjunctive `requires` only injects and orders prerequisites — it never *drops* a consumer. If a user-placed prerequisite is later pruned by a profile, its consumer still runs; use `kptn.any_of(...)` when you need a missing prerequisite to skip the consumer.
+
+Use `kptn.any_of(...)` for a disjunctive requirement — a *gate* that pulls nothing and is satisfied only if one of its members is already in the run. If none is present, the consumer is skipped:
+
+```python
+@kptn.task(
+    outputs=["output/combined.txt"],
+    requires=[kptn.any_of(load_full, load_subset)],
+)
+def summarize(engine) -> None:
+    ...
+```
+
+This pairs naturally with `kptn.Stage()`: whichever branch the active profile selects satisfies the `any_of` gate, and `summarize` runs against it.
+
 ### Profiles
 
 Profiles are defined in `kptn.yaml` at your project root. They let you parameterize runs without changing code.
@@ -232,9 +266,9 @@ kptn plan
 
 | Symbol | Description |
 |--------|-------------|
-| `@kptn.task(outputs, optional=None, compute=None, duckdb_checkpoint=False)` | Decorate a Python function as a kptn task |
-| `kptn.sql_task(path, outputs, optional=None, duckdb_checkpoint=False)` | Register a SQL file as a task |
-| `kptn.r_task(path, outputs, compute=None, optional=None, duckdb_checkpoint=False)` | Register an R script as a task |
+| `@kptn.task(outputs, optional=None, compute=None, duckdb_checkpoint=False, requires=None)` | Decorate a Python function as a kptn task |
+| `kptn.sql_task(path, outputs, optional=None, duckdb_checkpoint=False, requires=None)` | Register a SQL file as a task |
+| `kptn.r_task(path, outputs, compute=None, optional=None, duckdb_checkpoint=False, requires=None)` | Register an R script as a task |
 | `kptn.noop()` | Placeholder / synchronization node |
 
 ### Graph Composition
@@ -245,6 +279,7 @@ kptn plan
 | `kptn.parallel(*branches)` | Fan out to parallel branches. Accepts an optional name as the first argument: `kptn.parallel("name", a, b)` |
 | `kptn.Stage(name, *branches)` | Profile-selectable branches grouped under a named stage |
 | `kptn.map(task_fn, over="key")` | Dynamic fanout over a runtime collection |
+| `kptn.any_of(*tasks)` | Disjunctive requirement group for `requires=` — satisfied if any member task is present in the run (otherwise the consumer is skipped) |
 
 ### Pipeline & Execution
 

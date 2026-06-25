@@ -14,6 +14,7 @@ class TaskSpec:
     optional: str | None = None
     compute: str | None = None
     duckdb_checkpoint: bool = False
+    requires: list[Any] | None = None
 
     def __post_init__(self) -> None:
         self.outputs = list(self.outputs)
@@ -64,12 +65,13 @@ def task(
     optional: str | None = None,
     compute: str | None = None,
     duckdb_checkpoint: bool = False,
+    requires: list[Any] | None = None,
 ) -> Callable[[Callable[..., Any]], _KptnCallable]:
     """Attach kptn metadata to a function and enable >> chaining."""
 
     def decorator(fn: Callable[..., Any]) -> _KptnCallable:
         spec = TaskSpec(outputs=outputs, optional=optional, compute=compute,
-                        duckdb_checkpoint=duckdb_checkpoint)
+                        duckdb_checkpoint=duckdb_checkpoint, requires=requires)
         return _KptnCallable(fn, spec)
 
     return decorator  # type: ignore[return-value]
@@ -86,6 +88,7 @@ class SqlTaskSpec:
     outputs: list[str]
     optional: str | None = None
     duckdb_checkpoint: bool = False
+    requires: list[Any] | None = None
 
     def __post_init__(self) -> None:
         self.outputs = list(self.outputs)          # copy-on-init defensive guard
@@ -166,10 +169,11 @@ def sql_task(
     outputs: list[str],
     optional: str | None = None,
     duckdb_checkpoint: bool = False,
+    requires: list[Any] | None = None,
 ) -> _SqlTaskHandle:
     """Return a composable handle for a SQL task file."""
     spec = SqlTaskSpec(path=path, outputs=outputs, optional=optional,
-                       duckdb_checkpoint=duckdb_checkpoint)
+                       duckdb_checkpoint=duckdb_checkpoint, requires=requires)
     return _SqlTaskHandle(spec)
 
 
@@ -185,6 +189,7 @@ class RTaskSpec:
     compute: str | None = None
     optional: str | None = None
     duckdb_checkpoint: bool = False
+    requires: list[Any] | None = None
 
     def __post_init__(self) -> None:
         self.outputs = list(self.outputs)          # copy-on-init defensive guard
@@ -215,10 +220,11 @@ def r_task(
     compute: str | None = None,
     optional: str | None = None,
     duckdb_checkpoint: bool = False,
+    requires: list[Any] | None = None,
 ) -> _RTaskHandle:
     """Return a composable handle for an R script task."""
     spec = RTaskSpec(path=path, outputs=outputs, compute=compute, optional=optional,
-                     duckdb_checkpoint=duckdb_checkpoint)
+                     duckdb_checkpoint=duckdb_checkpoint, requires=requires)
     return _RTaskHandle(spec)
 
 
