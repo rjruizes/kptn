@@ -3,9 +3,11 @@ from __future__ import annotations
 import pytest
 
 import kptn
+from kptn.exceptions import GraphError
 from kptn.graph.decorators import RTaskSpec, SqlTaskSpec, TaskSpec, r_task, sql_task, task
 from kptn.graph.graph import Graph
 from kptn.graph.requires import AnyOf, any_of
+from kptn.graph.topo import topo_sort
 
 
 @task(outputs=["duckdb://a"])
@@ -73,10 +75,6 @@ def test_graph_requires_edges_settable() -> None:
 # ---------------------------------------------------------------------------
 # Task 3: expand_requires + Pipeline wiring
 # ---------------------------------------------------------------------------
-
-from kptn.graph.nodes import PipelineNode, TaskNode
-from kptn.graph.topo import topo_sort
-from kptn.exceptions import GraphError
 
 
 @task(outputs=["duckdb://idx"])
