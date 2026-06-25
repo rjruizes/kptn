@@ -20,8 +20,11 @@ class Pipeline(Graph):
         # Auto-wrap a single node into a Graph for convenience.
         if not isinstance(graph, Graph):
             graph = Graph._from_node(graph)
-        from kptn.graph.requires import expand_requires
+        from kptn.graph.requires import coalesce_requires, expand_requires
         graph = expand_requires(graph)
+        # Collapse requires-injected duplicates of a shared prerequisite that
+        # arise when requirers in separate Pipelines are composed with >>.
+        graph = coalesce_requires(graph)
         sentinel = PipelineNode(name=name, members=frozenset(n.name for n in graph.nodes))
         all_nodes = [sentinel] + graph.nodes
         cross_edges = [(sentinel, h) for h in graph._heads()]

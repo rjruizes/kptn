@@ -40,6 +40,7 @@ def parallel(*args: Any) -> "Graph":
 
     all_nodes: list[AnyNode] = [sentinel]
     all_edges: list[tuple[AnyNode, AnyNode]] = []
+    all_requires_edges: set[tuple[int, int]] = set()
     seen_ids: set[int] = {id(sentinel)}
 
     for branch in branch_args:
@@ -51,13 +52,14 @@ def parallel(*args: Any) -> "Graph":
                 all_nodes.append(n)
 
         all_edges.extend(branch_graph.edges)
+        all_requires_edges |= branch_graph.requires_edges
 
         # Fan-out: sentinel → each head of the branch sub-graph
         for head in branch_graph._heads():
             all_edges.append((sentinel, head))
 
     sentinel.members = frozenset(n.name for n in all_nodes if n is not sentinel)
-    return Graph(nodes=all_nodes, edges=all_edges)
+    return Graph(nodes=all_nodes, edges=all_edges, requires_edges=all_requires_edges)
 
 
 def Stage(name: str, *branches: Any) -> "Graph":
@@ -84,6 +86,7 @@ def Stage(name: str, *branches: Any) -> "Graph":
 
     all_nodes: list[AnyNode] = [sentinel]
     all_edges: list[tuple[AnyNode, AnyNode]] = []
+    all_requires_edges: set[tuple[int, int]] = set()
     seen_ids: set[int] = {id(sentinel)}
 
     for branch in branches:
@@ -95,12 +98,13 @@ def Stage(name: str, *branches: Any) -> "Graph":
                 all_nodes.append(n)
 
         all_edges.extend(branch_graph.edges)
+        all_requires_edges |= branch_graph.requires_edges
 
         for head in branch_graph._heads():
             all_edges.append((sentinel, head))
 
     sentinel.members = frozenset(n.name for n in all_nodes if n is not sentinel)
-    return Graph(nodes=all_nodes, edges=all_edges)
+    return Graph(nodes=all_nodes, edges=all_edges, requires_edges=all_requires_edges)
 
 
 def map(task_fn: Any, *, over: str) -> "Graph":  # noqa: A001 — shadows builtin intentionally

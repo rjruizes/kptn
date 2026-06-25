@@ -79,7 +79,11 @@ class Graph:
 
         merged_edges = self.edges + other_graph.edges + cross_edges
 
-        return Graph(nodes=merged_nodes, edges=merged_edges)
+        # Carry requires-edge tags from both operands. Node identities are
+        # preserved through the merge, so the id-keyed tags stay valid.
+        merged_requires_edges = self.requires_edges | other_graph.requires_edges
+
+        return Graph(nodes=merged_nodes, edges=merged_edges, requires_edges=merged_requires_edges)
 
     def __rrshift__(self, other: Any) -> "Graph":
         """Support `fn >> Graph(...)` when fn is not a Graph."""

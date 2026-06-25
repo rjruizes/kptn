@@ -191,3 +191,110 @@ def any_of(*handles: Any) -> AnyOf:
                 f"got {type(h).__name__!r}."
             )
     return AnyOf(members=tuple(handles))
+
+
+def _introduces_cycle(graph: Graph, remap: dict[int, AnyNode]) -> bool:
+    """Return True if applying ``remap`` (removed id -> survivor) cycles the graph.
+
+    Resolves every edge endpoint through ``remap`` and runs Kahn's algorithm over
+    the surviving node ids.
+    """
+    removed = set(remap)
+    surviving = [n for n in graph.nodes if id(n) not in removed]
+    in_degree: dict[int, int] = {id(n): 0 for n in surviving}
+    succ: dict[int, list[int]] = {id(n): [] for n in surviving}
+    seen: set[tuple[int, int]] = set()
+    for src, dst in graph.edges:
+        sid = id(remap[id(src)]) if id(src) in remap else id(src)
+        did = id(remap[id(dst)]) if id(dst) in remap else id(dst)
+        if sid == did or (sid, did) in seen:
+            continue
+        seen.add((sid, did))
+        succ[sid].append(did)
+        in_degree[did] += 1
+    queue: deque[int] = deque(nid for nid, deg in in_degree.items() if deg == 0)
+    visited = 0
+    while queue:
+        nid = queue.popleft()
+        visited += 1
+        for d in succ[nid]:
+            in_degree[d] -= 1
+            if in_degree[d] == 0:
+                queue.append(d)
+    return visited < len(surviving)
+
+
+def coalesce_requires(graph: Graph) -> Graph:
+    """Merge duplicate same-named nodes that were injected by ``requires``.
+
+    When requirers of one shared prerequisite live in different sub-graphs that
+    are later composed (``>>``, ``parallel``, ``Stage``), each sub-graph's
+    ``expand_requires`` injects its own copy of the prerequisite. Composition
+    dedups nodes by identity, not by name, so the copies survive — leaving the
+    prerequisite listed (and run) more than once.
+
+    This pass collapses such requires-injected duplicates (grouped by name) into
+    a single node, rewiring every edge — structural and requires — onto the
+    survivor. When a user-placed node shares the name, it is preferred as the
+    survivor (demand-driven ``requires`` is a no-op when the task is already
+    placed). Duplicate names that were *not* injected by ``requires`` are left
+    untouched.
+
+    A merge is applied only when it keeps the graph acyclic. Merging across a
+    *sequential* (``a >> b``) composition can be contradictory — one shared node
+    would have to run both before and after the same task — so such a merge is
+    skipped, leaving those duplicates in place rather than producing a cycle.
+
+    Returns a new Graph; never mutates the input. Returns the input unchanged
+    when there is nothing to coalesce.
+    """
+    # A node is requires-injected iff it is the source of a requires-edge.
+    injected_ids = {src for src, _dst in graph.requires_edges}
+
+    by_name: dict[str, list[AnyNode]] = {}
+    for node in graph.nodes:
+        by_name.setdefault(node.name, []).append(node)
+
+    # Accept merges one name at a time, guarding acyclicity cumulatively so a
+    # contradictory (sequential) merge never blocks an independent one.
+    remap: dict[int, AnyNode] = {}  # removed node id -> survivor node
+    for group in by_name.values():
+        if len(group) < 2:
+            continue
+        injected = [n for n in group if id(n) in injected_ids]
+        if not injected:
+            continue  # no requires-injected duplicate — out of scope
+        others = [n for n in group if id(n) not in injected_ids]
+        survivor = others[0] if others else injected[0]
+        trial = dict(remap)
+        for node in injected:
+            if node is not survivor:
+                trial[id(node)] = survivor
+        if trial != remap and not _introduces_cycle(graph, trial):
+            remap = trial
+
+    if not remap:
+        return graph
+
+    new_nodes = [n for n in graph.nodes if id(n) not in remap]
+
+    new_edges: list[tuple[AnyNode, AnyNode]] = []
+    seen: set[tuple[int, int]] = set()
+    for src, dst in graph.edges:
+        nsrc = remap.get(id(src), src)
+        ndst = remap.get(id(dst), dst)
+        if nsrc is ndst:
+            continue  # self-loop created by the merge
+        key = (id(nsrc), id(ndst))
+        if key not in seen:
+            seen.add(key)
+            new_edges.append((nsrc, ndst))
+
+    new_requires_edges: set[tuple[int, int]] = set()
+    for src, dst in graph.requires_edges:
+        nsrc = id(remap[src]) if src in remap else src
+        ndst = id(remap[dst]) if dst in remap else dst
+        if nsrc != ndst:
+            new_requires_edges.add((nsrc, ndst))
+
+    return Graph(nodes=new_nodes, edges=new_edges, requires_edges=new_requires_edges)
