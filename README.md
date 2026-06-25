@@ -143,7 +143,7 @@ def report(engine) -> None:
 pipeline = kptn.Pipeline("analysis", report)
 ```
 
-`requires` is transitive: a required task's own `requires` are pulled in too. If you already place a task in the graph yourself (via `>>`), `requires` for that task is a no-op — your explicit wiring governs ordering.
+`requires` is transitive: a required task's own `requires` are pulled in too. If you already place a task in the graph yourself (via `>>`), `requires` for that task is a no-op — your explicit wiring governs ordering. Note that conjunctive `requires` only injects and orders prerequisites — it never *drops* a consumer. If a user-placed prerequisite is later pruned by a profile, its consumer still runs; use `kptn.any_of(...)` when you need a missing prerequisite to skip the consumer.
 
 Use `kptn.any_of(...)` for a disjunctive requirement — a *gate* that pulls nothing and is satisfied only if one of its members is already in the run. If none is present, the consumer is skipped:
 

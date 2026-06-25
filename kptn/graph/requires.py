@@ -137,9 +137,9 @@ def gate_disjunctive(graph: Graph) -> Graph:
     def _surviving(start: AnyNode, adj: dict[int, list[AnyNode]]) -> list[AnyNode]:
         out: list[AnyNode] = []
         seen: set[int] = {id(start)}
-        queue: list[AnyNode] = list(adj[id(start)])
+        queue: deque[AnyNode] = deque(adj[id(start)])
         while queue:
-            n = queue.pop(0)
+            n = queue.popleft()
             if id(n) in seen:
                 continue
             seen.add(id(n))

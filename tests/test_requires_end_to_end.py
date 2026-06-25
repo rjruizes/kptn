@@ -90,5 +90,6 @@ def test_disjunctive_satisfied_by_selected_stage_branch(tmp_path, monkeypatch) -
 
     # Profile selects branch_a → consume's any_of is satisfied → consume runs.
     pipe.run(profile="use_a")
+    assert "branch_a" in calls
     assert "consume" in calls
     assert "branch_b" not in calls
