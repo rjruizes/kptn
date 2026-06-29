@@ -42,8 +42,18 @@ class Graph:
         return cls(nodes=[node], edges=[])
 
     def _heads(self) -> list[AnyNode]:
-        """Nodes with no incoming edges in this graph."""
-        has_incoming = {id(dst) for _, dst in self.edges}
+        """Nodes with no incoming *structural* edge in this graph.
+
+        Requires-edges are demand-driven ordering, not structural lineage, so they
+        are ignored here. This keeps a requirer a structural head even when a
+        requires-injected prerequisite sits in front of it — so the enclosing
+        pipeline's sentinel still wires to the requirer (it does not get stranded
+        downstream of a shared prereq once that prereq is coalesced).
+        """
+        has_incoming = {
+            id(dst) for src, dst in self.edges
+            if (id(src), id(dst)) not in self.requires_edges
+        }
         return [n for n in self.nodes if id(n) not in has_incoming]
 
     def _tails(self) -> list[AnyNode]:

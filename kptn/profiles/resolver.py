@@ -136,9 +136,18 @@ def _prune(graph: Graph, profile: ProfileSpec, pipeline_name: str | None = None)
     Nodes with zero predecessors (source nodes) can only be dead if explicitly seeded.
     StageNode and ParallelNode sentinels are never seeded — they are always retained.
     """
+    # Cascade reasons over STRUCTURAL lineage only. Requires-edges are
+    # demand-driven ordering, not membership: a surviving prerequisite's
+    # requires-edge into a requirer must not keep that requirer alive when its
+    # own stage branch is pruned (nor must a pruned prereq cascade-kill a
+    # requirer that survives structurally — demand keeps the prereq alive via
+    # the requirer's structural sentinel edge instead).
+    requires_edge_set: set[tuple[int, int]] = set(graph.requires_edges)
     predecessors: dict[int, list[AnyNode]] = {id(n): [] for n in graph.nodes}
     successors: dict[int, list[AnyNode]] = {id(n): [] for n in graph.nodes}
     for src, dst in graph.edges:
+        if (id(src), id(dst)) in requires_edge_set:
+            continue
         predecessors[id(dst)].append(src)
         successors[id(src)].append(dst)
 

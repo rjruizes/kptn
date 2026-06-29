@@ -51,6 +51,57 @@ def test_disjunctive_consumer_dropped_end_to_end(tmp_path, monkeypatch) -> None:
     assert "gated" not in CALLS
 
 
+def test_conjunctive_prereq_does_not_revive_pruned_branch(tmp_path, monkeypatch) -> None:
+    """A pruned stage branch must stay pruned even when its tasks conjunctively
+    require a shared prerequisite that survives (demand-driven by a selected branch).
+
+    Regression: ``requires=[shared]`` on tasks in two sibling Pipelines caused the
+    shared prereq to be injected into each Pipeline (stealing its structural head)
+    and then coalesced into one node. The surviving prereq's requires-edge then
+    kept the *unselected* branch's tasks alive through profile pruning.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "kptn.yaml").write_text(
+        textwrap.dedent(
+            """
+            settings:
+              db_path: .kptn/kptn.db
+            profiles:
+              only_a:
+                stage_selections:
+                  datasets: [load_a]
+            """
+        ).strip()
+    )
+
+    calls: list[str] = []
+
+    @kptn.task(outputs=[])
+    def shared() -> None:
+        calls.append("shared")
+
+    @kptn.task(outputs=[], requires=[shared])
+    def a_reports() -> None:
+        calls.append("a_reports")
+
+    @kptn.task(outputs=[], requires=[shared])
+    def b_reports() -> None:
+        calls.append("b_reports")
+
+    load_a = kptn.Pipeline("load_a", a_reports)
+    load_b = kptn.Pipeline("load_b", b_reports)
+    load_shared = kptn.Pipeline("load_shared", shared)
+
+    pipe = kptn.Pipeline("p", kptn.Stage("datasets", load_a, load_b, load_shared))
+
+    # Profile selects only load_a. a_reports pulls in shared (demand-driven), but
+    # the unselected load_b branch must NOT run.
+    pipe.run(profile="only_a")
+    assert "a_reports" in calls
+    assert "shared" in calls
+    assert "b_reports" not in calls
+
+
 def test_disjunctive_satisfied_by_selected_stage_branch(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "kptn.yaml").write_text(
