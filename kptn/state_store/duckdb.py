@@ -100,7 +100,10 @@ class DuckDbBackend:
             (storage_key, pipeline, task, hash, "success", datetime.now(UTC).isoformat()),
         )
         conn.commit()
-        conn.execute("CHECKPOINT")
+        # No CHECKPOINT here: the commit is already WAL-durable (replayed on
+        # next open), and in factory mode a checkpoint blocks indefinitely on
+        # duckdb 1.4.x whenever task code holds a partially-fetched result on
+        # another connection to the same file.
 
     def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None:
         try:
