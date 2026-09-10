@@ -16,6 +16,7 @@ from kptn_server.run_store import (
     RunStateError,
     RunStore,
     STATUS_FAILED,
+    STATUS_INTERRUPTED,
     STATUS_RUNNING,
     STATUS_STOPPED,
     STATUS_SUCCEEDED,
@@ -294,6 +295,41 @@ def test_list_runs_filters_by_project_and_orders_newest_first(tmp_path: Path) ->
 
     all_runs = store.list_runs()
     assert len(all_runs) == 3
+
+
+def test_unfinished_runs_filters_terminal_statuses_in_sql(tmp_path: Path) -> None:
+    """A supervisor polls this every few seconds, so it must not hydrate
+    every run ever recorded."""
+    project_a = tmp_path / "a"
+    project_b = tmp_path / "b"
+    project_a.mkdir()
+    project_b.mkdir()
+    store = RunStore(tmp_path / "ui.db")
+
+    finished = store.create_run(request(project_a))
+    store.append_event(finished.run_id, "run_started")
+    store.finish_run(finished.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    queued = store.create_run(request(project_a))
+    running = store.create_run(request(project_b))
+    store.append_event(running.run_id, "run_started")
+
+    assert [r.run_id for r in store.unfinished_runs()] == [
+        queued.run_id,
+        running.run_id,
+    ]
+    assert [r.run_id for r in store.unfinished_runs(project_b)] == [running.run_id]
+
+    store.finish_run(running.run_id, STATUS_FAILED, exit_code=1)
+    assert [r.run_id for r in store.unfinished_runs()] == [queued.run_id]
+
+
+def test_unfinished_runs_excludes_interrupted(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "ui.db")
+    run = store.create_run(request(tmp_path))
+    store.append_event(run.run_id, "run_started")
+    store.finish_run(run.run_id, STATUS_INTERRUPTED)
+    assert store.unfinished_runs() == []
 
 
 # --- PRAGMA settings ------------------------------------------------------ #

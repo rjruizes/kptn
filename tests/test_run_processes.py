@@ -40,9 +40,11 @@ from kptn_server.run_store import (
     STATUS_INTERRUPTED,
     STATUS_RUNNING,
     STATUS_STOP_REQUESTED,
+    STATUS_STOPPED,
     STATUS_SUCCEEDED,
     RunRecord,
     RunRequest,
+    RunStateError,
     RunStore,
 )
 
@@ -306,6 +308,42 @@ def test_start_uses_an_argv_list_never_a_shell_string(
     assert kwargs["start_new_session"] is (os.name != "nt")
 
 
+def workers_for_run(run_id: str) -> list[psutil.Process]:
+    """Every child process whose argv names *run_id*."""
+    found = []
+    for child in psutil.Process().children(recursive=True):
+        try:
+            argv = child.cmdline()
+        except psutil.Error:  # pragma: no cover - defensive
+            continue
+        if run_id in argv:
+            found.append(child)
+    return found
+
+
+def test_start_refuses_to_launch_a_second_worker_for_the_same_run(
+    store: RunStore, slow_run: RunRecord
+) -> None:
+    """A double POST must not produce two workers for one run.
+
+    The second launch would overwrite the store's record of the first one's
+    identity, orphaning a live process that stop() can no longer signal and
+    reconcile() can no longer see.
+    """
+    manager = RunProcessManager(store)
+    identity = manager.start(slow_run.run_id)
+    wait_until(
+        lambda: store.get_run(slow_run.run_id).status == STATUS_RUNNING,
+        message="the first worker to reach running",
+    )
+
+    with pytest.raises(RunStateError):
+        manager.start(slow_run.run_id)
+
+    assert store.get_run(slow_run.run_id).worker_pid == identity.pid
+    assert [p.pid for p in workers_for_run(slow_run.run_id)] == [identity.pid]
+
+
 # -- identity-safe stop ----------------------------------------------------
 
 
@@ -331,7 +369,9 @@ def test_stop_terminates_the_matching_worker(
         ),
         message="the stopped run to be finished durably",
     )
-    assert record.status in {"stopped", STATUS_INTERRUPTED}
+    # `interrupted` is only ever written by reconcile(), which this test never
+    # calls -- accepting it here would let a real regression slip through.
+    assert record.status == STATUS_STOPPED
 
 
 def test_stop_refuses_to_signal_a_reused_pid(store: RunStore, ui_project: Path) -> None:
@@ -361,6 +401,33 @@ def test_stop_records_the_stop_request_even_without_a_worker(
 
     assert RunProcessManager(store).stop(run.run_id) is False
     assert store.get_run(run.run_id).status == STATUS_STOP_REQUESTED
+
+
+def test_stop_tolerates_the_worker_finishing_first(
+    store: RunStore, ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clicking Stop as the pipeline finishes is routine, not a 500.
+
+    ``stop()`` reads the status and requests the stop in two separate
+    transactions, so the worker can legitimately finish in between.
+    """
+    run = fake_running_run(
+        store,
+        ui_project,
+        pid=999999,
+        worker_started_at=1.0,
+        heartbeat_at=datetime.now(timezone.utc),
+    )
+    real_request_stop = RunStore.request_stop
+
+    def worker_wins_the_race(self: RunStore, run_id: str):
+        self.finish_run(run_id, STATUS_SUCCEEDED, exit_code=0)
+        return real_request_stop(self, run_id)
+
+    monkeypatch.setattr(RunStore, "request_stop", worker_wins_the_race)
+
+    assert RunProcessManager(store).stop(run.run_id) is False
+    assert store.get_run(run.run_id).status == STATUS_SUCCEEDED
 
 
 # -- reconciliation --------------------------------------------------------
@@ -447,6 +514,60 @@ def test_reconcile_applies_the_fifteen_second_grace(
     assert (reconciled == [run.run_id]) is expect_interrupted
     expected = STATUS_INTERRUPTED if expect_interrupted else STATUS_RUNNING
     assert store.get_run(run.run_id).status == expected
+
+
+def test_reconcile_keeps_a_run_whose_process_it_cannot_inspect(
+    store: RunStore, ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``AccessDenied`` means "unknown", never "dead".
+
+    Burying a run on an inconclusive answer releases the project's active-run
+    lock while the worker keeps writing, which then permits a second
+    concurrent run on the same project.
+    """
+    inspectable = spawn_unrelated_process()
+    now = datetime.now(timezone.utc)
+    run = fake_running_run(
+        store,
+        ui_project,
+        pid=inspectable.pid,
+        worker_started_at=inspectable.create_time(),
+        # Well past the grace window, so the ONLY thing that can keep this run
+        # alive is refusing to call an un-inspectable process dead.
+        heartbeat_at=now - timedelta(seconds=STALE_WORKER_GRACE_SECONDS + 600),
+    )
+
+    def denied(self: psutil.Process) -> float:
+        raise psutil.AccessDenied(self.pid)
+
+    monkeypatch.setattr(psutil.Process, "create_time", denied)
+
+    assert _manager_at(store, now).reconcile() == []
+    assert store.get_run(run.run_id).status == STATUS_RUNNING
+    assert store.active_run(ui_project).run_id == run.run_id
+
+
+def test_stop_refuses_to_signal_a_process_it_cannot_identify(
+    store: RunStore, ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of "unknown": never signal on an inconclusive answer."""
+    victim = spawn_unrelated_process()
+    run = fake_running_run(
+        store,
+        ui_project,
+        pid=victim.pid,
+        worker_started_at=victim.create_time(),
+        heartbeat_at=datetime.now(timezone.utc),
+    )
+
+    def denied(self: psutil.Process) -> float:
+        raise psutil.AccessDenied(self.pid)
+
+    monkeypatch.setattr(psutil.Process, "create_time", denied)
+
+    assert RunProcessManager(store).stop(run.run_id) is False
+    monkeypatch.undo()
+    assert victim.is_running(), "stop() signalled an unidentifiable process"
 
 
 def test_reconcile_releases_the_active_project_lock(

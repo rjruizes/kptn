@@ -34,6 +34,7 @@ manager being garbage-collected.
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import subprocess
@@ -53,6 +54,8 @@ from kptn_server.run_store import (
     RunStore,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 #: How often the caller should invoke :meth:`RunProcessManager.reconcile`.
 RECONCILE_INTERVAL_SECONDS = 5.0
 
@@ -60,11 +63,6 @@ RECONCILE_INTERVAL_SECONDS = 5.0
 #: treated as gone. Comfortably more than the worker's two-second heartbeat, so
 #: a busy machine cannot make a healthy worker look dead.
 STALE_WORKER_GRACE_SECONDS = 15.0
-
-#: Tolerance when comparing a stored ``worker_started_at`` against a live
-#: process's ``create_time()``. Both come from the same clock via psutil, so
-#: this only absorbs float round-tripping through SQLite's REAL column.
-_CREATE_TIME_TOLERANCE_SECONDS = 0.001
 
 
 @dataclass(frozen=True)
@@ -74,7 +72,10 @@ class ProcessIdentity:
     ``started_at`` is the OS process-creation timestamp
     (``psutil.Process(pid).create_time()``), not the moment the run was
     registered. The pair is what makes a recycled PID distinguishable from the
-    worker that originally claimed it.
+    worker that originally claimed it. It is compared exactly: the worker reads
+    the value from the same source the supervisor does and it round-trips
+    unchanged through SQLite's ``REAL`` column, so any tolerance would only
+    widen the identity window this exists to narrow.
     """
 
     pid: int
@@ -134,6 +135,17 @@ class RunProcessManager:
         if record.status in TERMINAL_STATUSES:
             raise RunStateError(f"run {run_id} is already finished ({record.status!r})")
 
+        # A double POST, or a retry after a slow response, must not produce a
+        # second worker: the second launch would overwrite the store's record
+        # of the first one's identity, leaving a live process that stop() can
+        # no longer signal and reconcile() can no longer see.
+        existing = self._recorded_identity(record)
+        if existing is not None and self._is_live(existing):
+            raise RunStateError(
+                f"run {run_id} already has a live worker "
+                f"(pid {existing.pid}); refusing to launch a second one"
+            )
+
         proc = subprocess.Popen(
             self.worker_argv(run_id),
             cwd=record.project_root,
@@ -185,7 +197,16 @@ class RunProcessManager:
         if record.status in TERMINAL_STATUSES:
             return False
 
-        record = self._store.request_stop(run_id)
+        try:
+            record = self._store.request_stop(run_id)
+        except (RunStateError, RunNotFoundError) as exc:
+            # Clicking Stop as the pipeline finishes is the normal case, not an
+            # error: the read above and the write here are separate
+            # transactions, so the worker can legitimately win the race.
+            _LOGGER.debug(
+                "stop for run %s lost the race to the worker: %s", run_id, exc
+            )
+            return False
 
         identity = self._recorded_identity(record)
         if identity is None:
@@ -204,7 +225,8 @@ class RunProcessManager:
                 # worker and anything it spawned (an R or SQL subprocess),
                 # without ever touching the launcher's own group.
                 os.killpg(os.getpgid(identity.pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            _LOGGER.warning("could not signal worker pid %s: %s", identity.pid, exc)
             return False
         return True
 
@@ -217,9 +239,7 @@ class RunProcessManager:
         the run ids that were marked, in the order they were processed.
         """
         interrupted: list[str] = []
-        for record in self._store.list_runs():
-            if record.status in TERMINAL_STATUSES:
-                continue
+        for record in self._store.unfinished_runs():
             if self._looks_alive(record):
                 continue
             if self._finish_quietly(record.run_id, STATUS_INTERRUPTED):
@@ -231,13 +251,16 @@ class RunProcessManager:
         """Is *record*'s worker plausibly still running?
 
         A live process whose PID *and* creation time match what the worker
-        registered is alive, full stop. Otherwise the run gets the benefit of
-        the doubt only while it is inside the grace window, because a false
-        "it is dead" verdict is destructive: it releases the project lock and
-        marks a run terminal while its worker may still be writing.
+        registered is alive, full stop. So is a process we were not permitted
+        to inspect: "cannot determine" must never read as "dead", because a
+        false-dead verdict marks the run terminal and releases the project's
+        active-run lock while the worker keeps writing -- which would then let
+        a second concurrent run start on the same project.
+
+        Only a definitely-gone process falls through to the grace window.
         """
         identity = self._recorded_identity(record)
-        if identity is not None and self._is_live(identity):
+        if identity is not None and self._liveness(identity) is not False:
             return True
         return self._within_grace(record, has_identity=identity is not None)
 
@@ -267,20 +290,37 @@ class RunProcessManager:
         )
 
     @staticmethod
-    def _is_live(identity: ProcessIdentity) -> bool:
-        """Does a running process with exactly this identity exist?
+    def _liveness(identity: ProcessIdentity) -> bool | None:
+        """Tri-state answer to "is this exact process still running?".
 
-        A zombie counts as dead: the worker has exited and only its exit status
-        is still around, so signalling it would be pointless.
+        ``True`` alive, ``False`` definitely gone, ``None`` unknown. The
+        distinction matters because the two callers want opposite defaults:
+        :meth:`stop` may only signal a definite ``True``, while
+        :meth:`reconcile` must not bury a run on anything short of a definite
+        ``False``.
+
+        A zombie is gone: the worker has exited and only its exit status is
+        still in the table, so signalling it would be pointless. A PID that
+        exists with a different creation time is likewise gone -- that is a
+        recycled PID, not our worker. Everything else psutil refuses to tell
+        us (``AccessDenied``, ``TimeoutExpired``) is unknown, not dead.
         """
         try:
             proc = psutil.Process(identity.pid)
             if proc.status() == psutil.STATUS_ZOMBIE:
                 return False
             created_at = proc.create_time()
-        except psutil.Error:
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
             return False
-        return abs(created_at - identity.started_at) <= _CREATE_TIME_TOLERANCE_SECONDS
+        except psutil.Error as exc:
+            _LOGGER.debug("cannot determine liveness of pid %s: %s", identity.pid, exc)
+            return None
+        return created_at == identity.started_at
+
+    @classmethod
+    def _is_live(cls, identity: ProcessIdentity) -> bool:
+        """Strict liveness, for the paths that are about to send a signal."""
+        return cls._liveness(identity) is True
 
     # -- store plumbing ----------------------------------------------------
 
@@ -301,7 +341,13 @@ class RunProcessManager:
         """
         try:
             self._store.finish_run(run_id, status, exit_code=exit_code)
-        except (RunStateError, RunNotFoundError):
+        except (RunStateError, RunNotFoundError) as exc:
+            _LOGGER.debug(
+                "run %s was already finished by its worker, not recording %s: %s",
+                run_id,
+                status,
+                exc,
+            )
             return False
         return True
 

@@ -448,8 +448,8 @@ class RunStore:
         ``psutil.Process(pid).create_time()``); together with ``pid`` it lets a
         supervisor tell a live worker from a recycled PID. Callers must not
         pass "when I got here" instead -- the supervisor compares this value
-        against the live process's creation time. Also seeds ``heartbeat_at`` so a freshly spawned worker
-        is never mistaken for a stale one.
+        against the live process's creation time. Also seeds ``heartbeat_at``
+        so a freshly spawned worker is never mistaken for a stale one.
         """
         beat = timestamp or datetime.now(timezone.utc)
         conn = self._connect()
@@ -661,6 +661,30 @@ class RunStore:
             if limit is not None:
                 query += " LIMIT ?"
                 params.append(limit)
+            rows = conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
+        return [self._row_to_run(row) for row in rows]
+
+    def unfinished_runs(
+        self, project_root: Path | str | None = None
+    ) -> list[RunRecord]:
+        """Runs that have not reached a terminal status, oldest first.
+
+        A supervisor polls this on a fixed cadence, so it is filtered in SQL
+        rather than by hydrating every run ever recorded and discarding almost
+        all of them. Read-only: no transaction to hold.
+        """
+        terminal = tuple(sorted(TERMINAL_STATUSES))
+        placeholders = ", ".join("?" for _ in terminal)
+        query = f"SELECT * FROM runs WHERE status NOT IN ({placeholders})"
+        params: list[object] = [*terminal]
+        if project_root is not None:
+            query += " AND project_root = ?"
+            params.append(str(Path(project_root).resolve()))
+        query += " ORDER BY created_at ASC, run_id ASC"
+        conn = self._connect()
+        try:
             rows = conn.execute(query, params).fetchall()
         finally:
             conn.close()
