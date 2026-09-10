@@ -1,13 +1,16 @@
 """Durable, SQLite-backed store for pipeline run history.
 
 A detached worker process appends run lifecycle events here; the FastAPI UI
-(and the VS Code JSON-RPC surface) read the same database. All UI state lives
-on disk under ``<project_root>/.kptn/ui.db`` and ``<project_root>/.kptn/runs/``
-so a run survives a browser, VS Code, or FastAPI restart -- nothing is kept in
-process memory.
+reads the same database. All UI state lives on disk under
+``<project_root>/.kptn/ui.db`` and ``<project_root>/.kptn/runs/`` so a run
+survives a browser, VS Code, or FastAPI restart -- nothing is kept in process
+memory.
 
-Only one run may be active per canonical project path at a time. Creating a
-second run for a project that already has one raises :class:`ActiveRunError`.
+Only one run may be active per canonical project path at a time, *among the
+runs this store knows about*. Creating a second run for a project that
+already has one raises :class:`ActiveRunError`. ``kptn run`` in a terminal
+never reaches this store and is therefore neither blocked by the lock nor
+counted by it.
 Invalid run state transitions (e.g. finishing an already-terminal run) raise
 :class:`RunStateError` rather than being silently coerced.
 """
@@ -136,6 +139,22 @@ class WarningGroup:
     occurrence_sequences: tuple[int, ...] = field(default_factory=tuple)
 
 
+@dataclass
+class _WarningTally:
+    """One warning group while it is still being counted.
+
+    A mutable dataclass rather than a ``dict[str, object]``: the counters are
+    read back out as ints and the sequences as a list, and a bag of ``object``
+    made every one of those reads a cast.
+    """
+
+    sample_message: str
+    first_sequence: int
+    last_sequence: int
+    count: int = 0
+    occurrence_sequences: list[int] = field(default_factory=list)
+
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _TIMESTAMP_RE = re.compile(
     r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
@@ -165,6 +184,18 @@ def _dt_to_text(value: datetime | None) -> str | None:
 def _text_to_dt(value: str | None) -> datetime | None:
     if value is None:
         return None
+    return datetime.fromisoformat(value)
+
+
+def _required_dt(value: str | None) -> datetime:
+    """Read a column the schema declares ``NOT NULL``.
+
+    ``created_at`` and an event's ``timestamp`` cannot be null, and the
+    dataclasses that hold them say so. Asserting it here keeps that promise
+    checkable instead of quietly widening every reader to ``| None``.
+    """
+    if value is None:
+        raise RunStoreError("a NOT NULL timestamp column was NULL")
     return datetime.fromisoformat(value)
 
 
@@ -236,7 +267,7 @@ class RunStore:
             profile=row["profile"],
             force=bool(row["force"]),
             status=row["status"],
-            created_at=_text_to_dt(row["created_at"]),
+            created_at=_required_dt(row["created_at"]),
             started_at=_text_to_dt(row["started_at"]),
             finished_at=_text_to_dt(row["finished_at"]),
             worker_pid=row["worker_pid"],
@@ -252,7 +283,7 @@ class RunStore:
         return StoredEvent(
             run_id=row["run_id"],
             sequence=row["sequence"],
-            timestamp=_text_to_dt(row["timestamp"]),
+            timestamp=_required_dt(row["timestamp"]),
             kind=row["kind"],
             task_name=row["task_name"],
             payload=json.loads(row["payload_json"]),
@@ -781,7 +812,7 @@ class RunStore:
         finally:
             conn.close()
 
-        groups: dict[tuple[str | None, str, str], dict[str, object]] = {}
+        groups: dict[tuple[str | None, str, str], _WarningTally] = {}
         order: list[tuple[str | None, str, str]] = []
         for row in rows:
             payload = json.loads(row["payload_json"])
@@ -789,21 +820,20 @@ class RunStore:
             category = str(payload.get("category") or "general")
             fingerprint = _normalize_warning_text(message)
             key = (row["task_name"], category, fingerprint)
-            sequence = row["sequence"]
-            if key not in groups:
-                groups[key] = {
-                    "sample_message": message,
-                    "count": 0,
-                    "first_sequence": sequence,
-                    "last_sequence": sequence,
-                    "occurrence_sequences": [],
-                }
+            sequence = int(row["sequence"])
+            entry = groups.get(key)
+            if entry is None:
+                entry = _WarningTally(
+                    sample_message=message,
+                    first_sequence=sequence,
+                    last_sequence=sequence,
+                )
+                groups[key] = entry
                 order.append(key)
-            entry = groups[key]
-            entry["count"] = entry["count"] + 1
-            entry["first_sequence"] = min(entry["first_sequence"], sequence)
-            entry["last_sequence"] = max(entry["last_sequence"], sequence)
-            entry["occurrence_sequences"].append(sequence)
+            entry.count += 1
+            entry.first_sequence = min(entry.first_sequence, sequence)
+            entry.last_sequence = max(entry.last_sequence, sequence)
+            entry.occurrence_sequences.append(sequence)
 
         result: list[WarningGroup] = []
         for key in order:
@@ -815,11 +845,11 @@ class RunStore:
                     task_name=task_name,
                     category=category,
                     fingerprint=fingerprint,
-                    sample_message=str(entry["sample_message"]),
-                    count=int(entry["count"]),
-                    first_sequence=int(entry["first_sequence"]),
-                    last_sequence=int(entry["last_sequence"]),
-                    occurrence_sequences=tuple(entry["occurrence_sequences"]),
+                    sample_message=entry.sample_message,
+                    count=entry.count,
+                    first_sequence=entry.first_sequence,
+                    last_sequence=entry.last_sequence,
+                    occurrence_sequences=tuple(entry.occurrence_sequences),
                 )
             )
         return result

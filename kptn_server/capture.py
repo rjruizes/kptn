@@ -41,9 +41,12 @@ import threading
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator, TextIO
+from typing import TYPE_CHECKING, Callable, Iterator, TextIO
 
 from contextlib import contextmanager
+
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
 
 from kptn.runner.events import EventKind, JSONValue, RunEvent, current_task_name
 from kptn_server.run_store import RunStore, RunStoreError
@@ -265,7 +268,11 @@ class LogWriteState:
 
     def lock_is_held(self) -> bool:
         """Whether the calling thread currently owns the critical section."""
-        return bool(self._lock._is_owned())
+        # ``_is_owned`` is the only way to ask an ``RLock`` this question and
+        # it is not in typeshed's public surface. It has existed on CPython's
+        # RLock since the module was written; the reentrancy guard this
+        # answers for is not something a wrapper flag could track correctly.
+        return bool(self._lock._is_owned())  # ty: ignore[unresolved-attribute]
 
     def _commit_span(
         self,
@@ -422,7 +429,9 @@ class StructuredWarningHandler(logging.Handler):
     displace ``logging.lastResort`` and the text would vanish.
     """
 
-    def __init__(self, sink: RunStoreSink, mirror: TextIO | None = None) -> None:
+    def __init__(
+        self, sink: RunStoreSink, mirror: SupportsWrite[str] | None = None
+    ) -> None:
         super().__init__(level=logging.WARNING)
         self._sink = sink
         self._mirror = mirror
@@ -494,7 +503,7 @@ def capture_worker_output(
     handler = StructuredWarningHandler(sink, mirror=captured_stderr)
     root_logger = logging.getLogger()
 
-    def showwarning(
+    def _showwarning(
         message: Warning | str,
         category: type[Warning],
         filename: str,
@@ -533,7 +542,10 @@ def capture_worker_output(
         # fallback, which is what makes every otherwise-shown occurrence -- not
         # just the first per location -- reach the store.
         warnings.filterwarnings("always", append=True)
-        warnings.showwarning = showwarning
+        # Replacing ``warnings.showwarning`` is the documented way to
+        # intercept warnings; ty reads any assignment to a module-level
+        # function as an implicit shadow and there is nowhere to annotate it.
+        warnings.showwarning = _showwarning  # ty: ignore[invalid-assignment]
         sys.stdout = captured_stdout
         sys.stderr = captured_stderr
         root_logger.addHandler(handler)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -85,16 +85,18 @@ class EventEmitter:
         resolved_task_name = task_name if task_name is not None else current_task_name()
         with self._lock:
             self._sequence += 1
-            self._pending.append(RunEvent(
-                run_id=self._run_id,
-                sequence=self._sequence,
-                timestamp=datetime.now(timezone.utc),
-                kind=kind,
-                pipeline=self._pipeline,
-                profile=self._profile,
-                task_name=resolved_task_name,
-                payload=MappingProxyType(dict(payload)),
-            ))
+            self._pending.append(
+                RunEvent(
+                    run_id=self._run_id,
+                    sequence=self._sequence,
+                    timestamp=datetime.now(timezone.utc),
+                    kind=kind,
+                    pipeline=self._pipeline,
+                    profile=self._profile,
+                    task_name=resolved_task_name,
+                    payload=MappingProxyType(dict(payload)),
+                )
+            )
             if self._dispatching:
                 return
             self._dispatching = True
@@ -115,7 +117,9 @@ class EventEmitter:
                     self._dispatching = False
                 raise
 
-    def task_scope(self, task_name: str) -> Iterator[None]:
+    def task_scope(self, task_name: str) -> AbstractContextManager[None]:
+        # ``contextmanager`` returns a context manager, not the iterator its
+        # annotation would suggest -- and every caller uses it in a ``with``.
         return task_scope(task_name)
 
 

@@ -10,9 +10,9 @@ That cadence lives here rather than in the supervisor on purpose.
 :class:`~kptn_server.processes.RunProcessManager` owns no threads and no
 timers, which is precisely why a worker it launched survives the manager being
 garbage-collected, the browser closing, VS Code quitting, and this server
-restarting on a file save. Something still has to notice a run whose worker a
-reboot or an OOM kill took out, though, or that project stays wedged behind its
-active-run lock forever. So the FastAPI lifespan runs one reconciliation pass
+being stopped and started again. Something still has to notice a run whose
+worker a reboot or an OOM kill took out, though, or that project stays wedged
+behind its active-run lock forever. So the FastAPI lifespan runs one reconciliation pass
 at startup and another every
 :data:`~kptn_server.processes.RECONCILE_INTERVAL_SECONDS`, and cancels the loop
 cleanly on shutdown.

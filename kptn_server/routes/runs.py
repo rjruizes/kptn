@@ -286,7 +286,9 @@ def render_event(
     but text.
     """
     prepared = console_event(event, log_path)
-    macro = templates.get_template("_event.html").module.event_row
+    # Jinja macros are attributes of a template's module at runtime; a
+    # ``TemplateModule`` has no static surface for them.
+    macro = templates.get_template("_event.html").module.event_row  # ty: ignore[unresolved-attribute]
     return {
         "sequence": prepared["sequence"],
         "kind": prepared["kind"],

@@ -25,7 +25,58 @@ jobs:
         run: uv run --extra web pytest
 
       - name: Lint
-        run: uv run ruff check kptn/exceptions.py kptn/graph kptn/profiles kptn/runner kptn/change_detector kptn/state_store kptn/quality
+        # `kptn_server`, `kptn/inspection.py` and `kptn/project.py` are the
+        # pipeline UI's modules and are linted in full. The rest of `kptn/`
+        # is still opted in file by file: a repo-wide `ruff check` reports
+        # ~100 findings in legacy modules that predate this list, and
+        # enabling them wholesale is its own piece of work.
+        run: >
+          uv run ruff check
+          kptn/exceptions.py kptn/graph kptn/profiles kptn/runner
+          kptn/change_detector kptn/state_store kptn/quality
+          kptn/inspection.py kptn/project.py
+          kptn_server
 
       - name: Type check
-        run: uv run ty check kptn/exceptions.py kptn/graph kptn/profiles kptn/runner kptn/change_detector kptn/state_store kptn/quality
+        # `kptn_server` is enumerated module by module rather than passed as
+        # a package for one reason: `kptn_server/service.py` is retained
+        # pre-UI code (the lineage analyzer and DuckDB table preview) and
+        # carries 6 diagnostics that predate this branch -- an optional
+        # `duckdb` import assigned `None`, and a connection typed `object`
+        # that is then called. Fixing them means retyping that module's
+        # DuckDB surface, which is not this feature's work. Every other
+        # module here, new and old, is checked and clean; adding a new file
+        # to `kptn_server` means adding it to this list.
+        run: >
+          uv run --extra web ty check
+          kptn/exceptions.py kptn/graph kptn/profiles kptn/runner
+          kptn/change_detector kptn/state_store kptn/quality
+          kptn/inspection.py kptn/project.py
+          kptn_server/__init__.py kptn_server/app.py kptn_server/capture.py
+          kptn_server/markdown.py kptn_server/origin.py
+          kptn_server/processes.py kptn_server/project.py
+          kptn_server/run_store.py kptn_server/worker.py
+          kptn_server/routes
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: kptn-vscode/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci
+        working-directory: kptn-vscode
+
+      # `npm test` is the host-free mocha suite: it runs against compiled
+      # output and needs no VS Code and no display. The `test:vscode`
+      # harness downloads and launches a real VS Code and is deliberately
+      # not run here.
+      - name: Lint, compile and test the extension
+        run: npm run lint && npm run compile && npm test
+        working-directory: kptn-vscode

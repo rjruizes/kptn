@@ -337,6 +337,12 @@ ssh -N -L 8000:127.0.0.1:8000 you@build-host
 `--host` exists for containers and similar, and nothing about a wider bind is
 made safe by it. Treat it as your own responsibility.
 
+Loopback alone does not stop a *page you visit* from posting at the server:
+`POST /runs` is form-encoded, so a browser sends it cross-origin with no
+preflight. Every state-changing request is therefore refused when its
+`Sec-Fetch-Site` header says another origin initiated it. Requests with no
+such header — `curl`, the VS Code extension — are unaffected.
+
 ### Where the UI keeps its state
 
 Two paths inside the project, and nothing else:
@@ -353,10 +359,14 @@ invalidates the cache, and `kptn run --force` never erases history.
 
 ### One active run per project
 
-A project has at most one active run. Starting a second one is refused with a
-409 that names the run holding the lock, so two runs can never write the same
-task state at the same time — including a run started from the terminal while
-the UI is open, since both take the same project lock.
+A project has at most one active run **through the UI**. Starting a second one
+from the UI is refused with a 409 that names the run holding the lock.
+
+The lock is the UI's, not kptn's: it lives in `.kptn/ui.db` and only
+`kptn ui` and its workers take it. `kptn run` in a terminal knows nothing
+about it — it neither takes the lock nor is blocked by one — so a terminal run
+and a UI run can overlap and write the same task state. If you use both, stop
+the UI run first.
 
 ### The run survives the server
 
@@ -366,7 +376,7 @@ the run keeps going when you:
 
 - close the browser tab, or navigate away, or lose the SSE connection
 - quit VS Code
-- stop and restart `kptn ui` — including the automatic restart on a file save
+- stop and restart `kptn ui`
 
 Reopening the run page picks the console back up where it left off. The stream
 is resumable: the page asks for events after the last sequence number it has,
@@ -401,9 +411,12 @@ without opening it.
 
 `/plan` renders the same entries `kptn plan` prints, from the same
 `build_plan` — the page cannot develop its own opinion about what is stale.
-Opening it never writes to the project: on a project that has never run, a
-read-only stand-in answers "nothing cached" instead of creating a state
-database as a side effect of a page view.
+Opening it does not create a state database as a side effect: on a project
+that has never run, a read-only stand-in answers "nothing cached". The one
+exception is a pipeline that declares `kptn.config(duckdb=...)`, where task
+state lives in the pipeline's own DuckDB database and the page reads it
+through that same factory — exactly as `kptn plan` does, which is the point:
+the two must not disagree about what is cached.
 
 `/walkthrough` lists every node of the profile-resolved graph in the runner's
 order, with bypassed tasks shown and marked rather than hidden. Task metadata
@@ -422,8 +435,10 @@ def build_widgets(): ...
 ```
 
 A `docs` reference is **project-relative and read-only**. It is resolved
-against the project root and refused if it escapes it, the Markdown is rendered
-with raw HTML disabled, and no page in this UI edits a documentation file.
+against the project root and refused if it escapes it — per reference, so one
+bad path costs that task its documentation panel and marks its row, rather
+than costing the whole walkthrough. The Markdown is rendered with raw HTML
+disabled, and no page in this UI edits a documentation file.
 Where a declared output can be resolved to a file through `kptn.yaml`, the task
 panel also links to its lineage graph and a preview of its rows.
 
