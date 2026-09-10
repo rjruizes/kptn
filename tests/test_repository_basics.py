@@ -58,24 +58,44 @@ DOCUMENTATION_FILES = (
 #: a path a reader would then go looking for, or tell them to run a script
 #: that is gone.
 #:
-#: The directory names are derived from :data:`REMOVED_SURFACES` rather than
-#: retyped, so a surface added there is covered here without anyone having to
-#: remember to do it twice.
+#: **Every** entry of :data:`REMOVED_SURFACES` contributes a name here, rather
+#: than being retyped: a directory contributes ``<name>/`` and a file
+#: contributes its basename, so adding a surface to the removal list covers it
+#: in the documentation scan too.
+#:
+#: What that derivation cannot supply is the *module* spelling of a deleted
+#: Python file -- ``api_http`` as it appears in
+#: ``uvicorn kptn_server.api_http:app``, with no ``.py``. Deriving bare stems
+#: would also yield ``backend`` from ``kptn-vscode/backend.py``, and "backend"
+#: is an ordinary English word this very repository's ``AGENTS.md`` opens a
+#: sentence with. So the two module names are listed explicitly below and the
+#: derivation stops at basenames, which are unambiguous.
 FORBIDDEN_IN_DOCUMENTATION = tuple(
     sorted(
-        # `ui/` and `cypress/`, from the removal list itself.
+        # `ui/`, `cypress/` -- the deleted directories.
         {f"{path}/" for path, _ in REMOVED_SURFACES if "." not in path}
+        # `api_http.py`, `api_jsonrpc.py`, `backend.py`, `cypress.config.ts`,
+        # `package.json`, `package-lock.json` -- the deleted files.
         | {
-            # Deleted modules.
+            path.rsplit("/", 1)[-1]
+            for path, _ in REMOVED_SURFACES
+            if "." in path
+            and not path.endswith("package.json")
+            and not path.endswith("package-lock.json")
+        }
+        | {
+            # Module spellings the basename derivation cannot reach.
             "api_http",
             "api_jsonrpc",
             # Deleted directories, spelled the ways documentation spells them.
             "cd ui",
             "ui/src",
             "ui/public",
-            # npm scripts that no longer exist in any package.json in the repo.
-            "npm run dev",
-            "npm run build",
+            # npm scripts no package.json in the repo still defines. Note
+            # what is *absent*: `npm run dev` and `npm run build` are not
+            # forbidden, because `doc-site/` (Astro) really does define both,
+            # and a guard that fires on a true statement is a bug. The React
+            # UI's invocation is caught by `cd ui` and the `ui/` paths instead.
             "cypress:run",
             "cypress:open",
             "npx cypress",
@@ -147,5 +167,20 @@ def test_every_documentation_file_scanned_above_exists() -> None:
     for relative in DOCUMENTATION_FILES:
         assert (PROJECT_ROOT / relative).is_file(), f"missing {relative}"
     assert len(FORBIDDEN_IN_DOCUMENTATION) >= 12
+
+    # Every removed surface contributes a name: directories as `<name>/`,
+    # files as their basename. `package.json` and `package-lock.json` are the
+    # documented exception -- those basenames still exist under `kptn-vscode/`
+    # and `doc-site/`, so banning them outright would forbid documenting the
+    # Node projects the repository still has.
+    for path, _ in REMOVED_SURFACES:
+        basename = path.rsplit("/", 1)[-1]
+        if basename in {"package.json", "package-lock.json"}:
+            assert basename not in FORBIDDEN_IN_DOCUMENTATION
+            continue
+        expected = f"{path}/" if "." not in path else basename
+        assert expected in FORBIDDEN_IN_DOCUMENTATION, f"{path} contributes nothing"
+
     assert "ui/" in FORBIDDEN_IN_DOCUMENTATION
     assert "cypress/" in FORBIDDEN_IN_DOCUMENTATION
+    assert "backend.py" in FORBIDDEN_IN_DOCUMENTATION
