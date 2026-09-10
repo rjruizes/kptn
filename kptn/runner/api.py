@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _find_duckdb_factory(pipeline: Pipeline):
+def find_duckdb_factory(pipeline: Pipeline):
     """Return ``(factory, alias)`` if the pipeline declares ``kptn.config(duckdb=...)``.
 
     *factory* is the callable; *alias* is the kwarg name tasks use (e.g. ``"engine"``).
@@ -43,6 +43,7 @@ def _find_duckdb_factory(pipeline: Pipeline):
 def _gate(resolved: ResolvedGraph) -> ResolvedGraph:
     """Apply disjunctive requires gating to a resolved graph."""
     from kptn.graph.requires import gate_disjunctive
+
     return ResolvedGraph(
         graph=gate_disjunctive(resolved.graph),
         pipeline=resolved.pipeline,
@@ -73,7 +74,7 @@ def resolve_pipeline(
 
     resolved = _gate(resolved)
 
-    duckdb_factory, _ = _find_duckdb_factory(pipeline)
+    duckdb_factory, _ = find_duckdb_factory(pipeline)
     state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
     return resolved, state_store
 
@@ -155,7 +156,7 @@ def run(
 
     resolved = _gate(resolved)
 
-    duckdb_factory, duckdb_alias = _find_duckdb_factory(pipeline)
+    duckdb_factory, duckdb_alias = find_duckdb_factory(pipeline)
 
     # no_cache without a profile: skip the state store entirely.
     # When a profile IS specified the config system is needed, so the
@@ -163,6 +164,7 @@ def run(
     # reads/writes inside execute(), not state-store creation).
     if no_cache and profile is None:
         from kptn.state_store.noop import NoOpBackend
+
         state_store = NoOpBackend()
     else:
         state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)

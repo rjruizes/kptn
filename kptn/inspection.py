@@ -29,6 +29,7 @@ from kptn.graph.nodes import (
     TaskNode,
 )
 from kptn.graph.pipeline import Pipeline
+from kptn.graph.requires import gate_disjunctive
 from kptn.graph.topo import topo_sort
 from kptn.profiles.resolver import ProfileResolver
 from kptn.profiles.schema import KptnConfig
@@ -203,7 +204,12 @@ def inspect_pipeline(
     ``profile`` is given, the pipeline is compiled through
     :class:`~kptn.profiles.resolver.ProfileResolver` (pruning inactive Stage
     branches and applying ``start_from``/``stop_after`` cursors); when
-    ``profile`` is ``None``, the raw pipeline graph is inspected unmodified.
+    ``profile`` is ``None``, the raw pipeline graph is taken as-is. Either
+    way the graph then passes through
+    :func:`kptn.graph.requires.gate_disjunctive`, exactly as
+    ``resolve_pipeline`` does — a task whose ``any_of`` requirement no
+    surviving node satisfies will not execute, and a walkthrough that
+    numbered it as a step would be describing a run that cannot happen.
 
     Node order follows ``kptn.graph.topo.topo_sort`` over the resolved graph —
     the same ordering the runner and ``kptn plan`` use. This function only
@@ -217,6 +223,8 @@ def inspect_pipeline(
     else:
         graph = pipeline
         bypassed_names = frozenset()
+
+    graph = gate_disjunctive(graph)
 
     ordered = topo_sort(graph)
 

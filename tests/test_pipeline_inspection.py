@@ -12,7 +12,9 @@ from kptn.inspection import (
     inspect_pipeline,
     resolve_docs_path,
 )
+from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.schema import KptnConfig, ProfileSpec
+from kptn.runner.api import _gate
 
 
 def _build_dexcom_like_pipeline() -> kptn.Pipeline:
@@ -217,3 +219,51 @@ def test_inspection_reads_sql_task_and_r_task_declared_metadata(tmp_path: Path) 
     assert r_item.docs_anchor == "r-analyze"
     assert r_item.inputs == ("duckdb://main.cleaned",)
     assert r_item.outputs == ("duckdb://main.analyzed",)
+
+
+def _build_any_of_pipeline() -> tuple[kptn.Pipeline, KptnConfig]:
+    """A pipeline whose ``any_of`` member is never present in the graph.
+
+    ``any_of`` never *pulls* a task in (see ``kptn/graph/requires.py``), so
+    ``E``'s requirement is unsatisfiable here and the runner drops it. ``F``
+    only follows ``E`` structurally, so it survives by bypass reconnection.
+    """
+
+    @kptn.task(outputs=["duckdb://absent"])
+    def absent_provider() -> None: ...
+
+    @kptn.task(outputs=["duckdb://e"], requires=[kptn.any_of(absent_provider)])
+    def E() -> None: ...
+
+    @kptn.task(outputs=["duckdb://f"])
+    def F() -> None: ...
+
+    @kptn.task(outputs=["duckdb://demo"])
+    def demo() -> None: ...
+
+    pipeline = kptn.Pipeline("gated_pipeline", demo >> E >> F)
+    return pipeline, KptnConfig(profiles={"all": ProfileSpec()})
+
+
+def test_inspection_gates_unsatisfied_any_of_like_the_runner(tmp_path: Path) -> None:
+    """The walkthrough's active steps are exactly the runner's gated graph.
+
+    Before this was fixed, ``inspect_pipeline`` skipped ``gate_disjunctive``
+    and numbered ``E`` as an active step on a page whose stated contract is
+    the effective execution order — while ``kptn run`` never executed it.
+    """
+    pipeline, config = _build_any_of_pipeline()
+
+    resolved = _gate(
+        ResolvedGraph(
+            graph=pipeline, pipeline=pipeline.name, storage_key=".kptn/kptn.db"
+        )
+    )
+    runner_names = {node.name for node in resolved.graph.nodes}
+    assert "E" not in runner_names  # the premise: the runner drops it
+
+    for profile in (None, "all"):
+        inspection = inspect_pipeline(pipeline, config, profile, tmp_path)
+        active = {item.name for item in inspection.items if item.executable}
+        assert active == {name for name in runner_names if name in {"demo", "E", "F"}}
+        assert all(item.name != "E" for item in inspection.items)
