@@ -35,6 +35,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import sqlite3
 import sys
 import threading
 import warnings
@@ -45,7 +46,7 @@ from typing import Callable, Iterator, TextIO
 from contextlib import contextmanager
 
 from kptn.runner.events import EventKind, JSONValue, RunEvent, current_task_name
-from kptn_server.run_store import RunStore
+from kptn_server.run_store import RunStore, RunStoreError
 
 STREAM_STDOUT = "stdout"
 STREAM_STDERR = "stderr"
@@ -57,24 +58,69 @@ SEVERITY_OUTPUT = "output"
 #: warning or an error.
 SEVERITY_STDERR = "stderr"
 
-_write_reentry = threading.local()
-_logging_reentry = threading.local()
+#: Set while this thread is inside a store-touching capture path. Every such
+#: path -- captured writes, ``showwarning``, and the logging handler -- shares
+#: this one flag, because the recursion we are defending against is "the act of
+#: persisting produced more output/warnings/log records", and that can cross
+#: from any one of those paths into any other.
+_store_write_reentry = threading.local()
 
 
 class _Reentry:
-    """Thread-local guard that makes a code path non-re-entrant."""
+    """Thread-local guard that makes a code path non-re-entrant.
+
+    ``__enter__`` returns whether *this* instance took the flag, and
+    ``__exit__`` clears it only in that case. Clearing unconditionally would
+    disarm the guard: the first nested attempt would be blocked but would then
+    release the flag on its way out, admitting the second one.
+    """
 
     def __init__(self, storage: threading.local) -> None:
         self._storage = storage
+        self._acquired = False
 
     def __enter__(self) -> bool:
         if getattr(self._storage, "active", False):
+            self._acquired = False
             return False
         self._storage.active = True
+        self._acquired = True
         return True
 
     def __exit__(self, *exc_info: object) -> None:
-        self._storage.active = False
+        if self._acquired:
+            self._acquired = False
+            self._storage.active = False
+
+
+class DurableWriteFailed(RunStoreError):
+    """The run store rejected or could not accept a durable write.
+
+    Raised at the exact seam that persists events, so the worker can tell "the
+    durable store is broken" from "pipeline code raised a database error". The
+    two are indistinguishable by exception type -- a pipeline may use SQLite
+    itself, and kptn's own default state store does -- so the distinction has
+    to be drawn by *which call failed*, not by what it raised.
+    """
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+#: Errors a store write can fail with. ``DurableWriteFailed`` subclasses
+#: ``RunStoreError``, so it is excluded explicitly to avoid re-wrapping.
+_STORE_ERRORS = (RunStoreError, sqlite3.Error, OSError)
+
+
+def durable(action):
+    """Run *action*, tagging any store failure as :class:`DurableWriteFailed`."""
+    try:
+        return action()
+    except DurableWriteFailed:
+        raise
+    except _STORE_ERRORS as exc:
+        raise DurableWriteFailed(exc) from exc
 
 
 # -- durable sink ---------------------------------------------------------
@@ -95,6 +141,9 @@ class RunStoreSink:
     def run_id(self) -> str:
         return self._run_id
 
+    def _append(self, kind: str, **kwargs) -> None:
+        durable(lambda: self._store.append_event(self._run_id, kind, **kwargs))
+
     def emit(self, event: RunEvent) -> None:
         """Translate one runner event into a durable row.
 
@@ -102,8 +151,7 @@ class RunStoreSink:
         that is what lets captured log and warning events interleave with
         runner events in the order they actually happened.
         """
-        self._store.append_event(
-            self._run_id,
+        self._append(
             str(event.kind),
             timestamp=event.timestamp,
             task_name=event.task_name,
@@ -121,8 +169,7 @@ class RunStoreSink:
     ) -> None:
         """Record a span of captured output by its byte offsets in the log."""
         payload: dict[str, JSONValue] = {"stream": stream, "severity": severity}
-        self._store.append_event(
-            self._run_id,
+        self._append(
             EventKind.LOG.value,
             task_name=task_name,
             payload=payload,
@@ -150,8 +197,7 @@ class RunStoreSink:
             "filename": filename,
             "lineno": lineno,
         }
-        self._store.append_event(
-            self._run_id,
+        self._append(
             EventKind.WARNING.value,
             task_name=task_name,
             payload=payload,
@@ -213,21 +259,45 @@ class LogWriteState:
         with self._lock:
             if self._closed:
                 return None
-            start = self._offset
-            self._handle.write(data)
-            end = start + len(data)
-            self._offset = end
-            hook, self._critical_section_hook = self._critical_section_hook, None
-            if hook is not None:
-                hook()
-            self._sink.emit_log(
-                stream=stream,
-                severity=severity,
-                log_start=start,
-                log_end=end,
-                task_name=task_name,
+            return self._commit_span(
+                data, stream=stream, severity=severity, task_name=task_name
             )
-            return start, end
+
+    def lock_is_held(self) -> bool:
+        """Whether the calling thread currently owns the critical section."""
+        return bool(self._lock._is_owned())
+
+    def _commit_span(
+        self,
+        data: bytes,
+        *,
+        stream: str,
+        severity: str,
+        task_name: str | None,
+    ) -> tuple[int, int]:
+        """Write *data* and append its durable event as one indivisible step.
+
+        The two halves live in this method precisely so they cannot drift
+        apart: the caller holds the lock across the whole of it, and the test
+        seam fires *between* them, so moving either half out of the critical
+        section requires editing this method rather than merely re-indenting a
+        line elsewhere.
+        """
+        start = self._offset
+        self._handle.write(data)
+        end = start + len(data)
+        self._offset = end
+        hook, self._critical_section_hook = self._critical_section_hook, None
+        if hook is not None:
+            hook()
+        self._sink.emit_log(
+            stream=stream,
+            severity=severity,
+            log_start=start,
+            log_end=end,
+            task_name=task_name,
+        )
+        return start, end
 
     def close(self) -> None:
         with self._lock:
@@ -326,7 +396,7 @@ class CapturedTextIO(io.TextIOBase):
             self._persist(chunk)
 
     def _persist(self, chunk: str) -> None:
-        with _Reentry(_write_reentry) as entered:
+        with _Reentry(_store_write_reentry) as entered:
             if not entered:
                 # Something in the persistence path wrote to the captured
                 # stream. Dropping the nested write is the only safe answer.
@@ -360,11 +430,14 @@ class StructuredWarningHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if record.levelno < logging.WARNING:
             return
-        with _Reentry(_logging_reentry) as entered:
+        # The mirror write takes the shared guard itself, inside _persist, so
+        # it is not wrapped here -- wrapping the whole method would block the
+        # mirror write and the text would never reach the log.
+        if self._mirror is not None:
+            self._mirror.write(self.format(record) + "\n")
+        with _Reentry(_store_write_reentry) as entered:
             if not entered:
                 return
-            if self._mirror is not None:
-                self._mirror.write(self.format(record) + "\n")
             # A durable write failure must stop the run, so this deliberately
             # does not funnel through Handler.handleError().
             self._sink.emit_warning(
@@ -430,22 +503,36 @@ def capture_worker_output(
         line: str | None = None,
     ) -> None:
         # The human-readable form goes to the captured stderr so the console
-        # transcript is unchanged; the structured form goes to the store.
+        # transcript is unchanged; the structured form goes to the store. The
+        # mirror write takes the shared guard inside _persist; the store write
+        # takes it here, symmetrically with StructuredWarningHandler.emit --
+        # stdlib code (sqlite3 adapters among it) does warn from inside the
+        # persistence path, and the appended "always" filter suppresses none
+        # of it.
         captured_stderr.write(
             warnings.formatwarning(message, category, filename, lineno, line)
         )
-        sink.emit_warning(
-            task_name=current_task_name(),
-            category=getattr(category, "__name__", str(category)),
-            message=str(message),
-            filename=str(filename),
-            lineno=int(lineno),
-        )
+        with _Reentry(_store_write_reentry) as entered:
+            if not entered:
+                return
+            sink.emit_warning(
+                task_name=current_task_name(),
+                category=getattr(category, "__name__", str(category)),
+                message=str(message),
+                filename=str(filename),
+                lineno=int(lineno),
+            )
 
     # catch_warnings() saves and restores both the filter list and
     # showwarning, so the "always" filter below cannot leak out of the run.
     with warnings.catch_warnings():
-        warnings.simplefilter("always")  # every occurrence is recorded
+        # Append rather than reset: simplefilter() would discard the project's
+        # own filters, so a pipeline relying on `filterwarnings = error` would
+        # behave differently under the worker than under `kptn run`. Appending
+        # leaves earlier filters in charge and only supplies "always" as the
+        # fallback, which is what makes every otherwise-shown occurrence -- not
+        # just the first per location -- reach the store.
+        warnings.filterwarnings("always", append=True)
         warnings.showwarning = showwarning
         sys.stdout = captured_stdout
         sys.stderr = captured_stderr
@@ -472,6 +559,7 @@ def capture_worker_output(
 
 __all__ = [
     "CapturedTextIO",
+    "DurableWriteFailed",
     "LogWriteState",
     "RunStoreSink",
     "SEVERITY_OUTPUT",
@@ -481,4 +569,5 @@ __all__ = [
     "StructuredWarningHandler",
     "WorkerCapture",
     "capture_worker_output",
+    "durable",
 ]

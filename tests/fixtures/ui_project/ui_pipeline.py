@@ -7,6 +7,9 @@ The pipeline has a single task whose behaviour is selected by profile:
                  create the sentinel to release the task, so no test ever has
                  to sleep for a fixed duration.
 * ``failure`` -- emit output and warnings, then raise.
+* ``db_error`` -- raise ``sqlite3.Error`` from task code. kptn's own default
+                  state store is SQLite, so this is the case that must not be
+                  mistaken for the durable run store failing.
 
 Two extra behaviours are gated behind environment variables so that the
 default (``success``) run stays byte-for-byte predictable:
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import sys
 import time
 import warnings
@@ -60,6 +64,8 @@ def noisy_task(mode: str = "success") -> None:
         _wait_for_sentinel()
     elif mode == "failure":
         raise RuntimeError("fixture failure")
+    elif mode == "db_error":
+        raise sqlite3.OperationalError("no such table: fixture_user_query")
 
 
 pipeline = kptn.Pipeline("fixture", noisy_task)

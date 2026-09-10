@@ -15,3 +15,7 @@ profiles:
     args:
       noisy_task:
         mode: failure
+  db_error:
+    args:
+      noisy_task:
+        mode: db_error

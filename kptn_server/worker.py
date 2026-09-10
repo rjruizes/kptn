@@ -22,6 +22,7 @@ Exit codes:
 1     the pipeline raised -- the run is recorded as ``failed``
 2     usage problem (unopenable store, unknown or finished run)
 3     a durable write failed -- the run is recorded as ``errored``
+4     the run could not be started at all -- also ``errored``
 130   the worker was interrupted or terminated -- ``stopped``
 ===== ==========================================================
 """
@@ -40,7 +41,12 @@ from pathlib import Path
 
 import kptn
 from kptn.project import load_pipeline
-from kptn_server.capture import RunStoreSink, capture_worker_output
+from kptn_server.capture import (
+    DurableWriteFailed,
+    RunStoreSink,
+    capture_worker_output,
+    durable,
+)
 from kptn_server.run_store import (
     STATUS_ERRORED,
     STATUS_FAILED,
@@ -60,11 +66,19 @@ EXIT_SUCCESS = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_DURABLE_WRITE_FAILURE = 3
+EXIT_SETUP_FAILURE = 4
 EXIT_STOPPED = 130
 
-#: Failures of the durable store itself. These are fatal: a run whose events
-#: are not being recorded is worse than no run at all, so the worker stops.
-_DURABLE_ERRORS = (RunStoreError, sqlite3.Error)
+#: Store errors, for the direct store calls the worker itself makes -- opening
+#: the database, reading the run, recording the final status. Pipeline code is
+#: never on those paths, so matching by type is unambiguous there.
+#:
+#: It is NOT safe around the pipeline: kptn's own default state store is
+#: SQLite, so a failing task query raises ``sqlite3.Error`` too. Failures of
+#: the *durable event stream* are identified by the ``DurableWriteFailed``
+#: marker that ``kptn_server.capture.durable()`` raises at the persistence
+#: seam, never by exception type.
+_STORE_ERRORS = (RunStoreError, sqlite3.Error, OSError)
 
 _TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
@@ -93,14 +107,15 @@ class _Heartbeat:
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=self._interval * 2)
+        if self._thread.is_alive() or self._thread.ident is not None:
+            self._thread.join(timeout=self._interval * 2)
 
     def _loop(self) -> None:
         while not self._stop.wait(self._interval):
             try:
                 if not self._store.heartbeat(self._run_id):
                     return  # run already finished; nothing left to report
-            except _DURABLE_ERRORS:
+            except _STORE_ERRORS:
                 # The main thread's own store writes will surface the problem
                 # with a proper status and exit code; a heartbeat is not the
                 # place to tear the process down.
@@ -175,18 +190,30 @@ def execute_run(
 ) -> int:
     """Run one pipeline to completion and record its outcome durably."""
     run_id = record.run_id
-    os.chdir(record.project_root)
-    store.record_worker_start(run_id, pid=os.getpid(), started_at=time.time())
-
-    heartbeat = _Heartbeat(store, run_id, heartbeat_interval)
-    previous_handlers = _install_termination_handlers()
-    heartbeat.start()
-
     status = STATUS_SUCCEEDED
     exit_code = EXIT_SUCCESS
-    durable_failure: BaseException | None = None
+    aborted_by: BaseException | None = None
+    abort_reason = ""
+
+    # Everything that can fail -- including the chdir, the worker-identity
+    # write, the signal install, and starting the heartbeat thread -- runs
+    # inside the try, so a setup failure is recorded and given a documented
+    # exit code instead of escaping main() as a traceback with the signal
+    # disposition still rewritten.
+    heartbeat: _Heartbeat | None = None
+    previous_handlers = None
 
     try:
+        os.chdir(record.project_root)
+        durable(
+            lambda: store.record_worker_start(
+                run_id, pid=os.getpid(), started_at=time.time()
+            )
+        )
+        previous_handlers = _install_termination_handlers()
+        heartbeat = _Heartbeat(store, run_id, heartbeat_interval)
+        heartbeat.start()
+
         with capture_worker_output(store, run_id, record.log_path):
             try:
                 pipeline = load_pipeline(record.project_root)
@@ -197,34 +224,47 @@ def execute_run(
                     event_sink=RunStoreSink(store, run_id),
                     run_id=run_id,
                 )
-            except _DURABLE_ERRORS:
+            except DurableWriteFailed:
+                # The durable event stream itself broke. Nothing else can be
+                # trusted, so stop rather than press on with a partial record.
                 raise
             except KeyboardInterrupt:
                 status, exit_code = STATUS_STOPPED, EXIT_STOPPED
                 print("run stopped", file=sys.stderr, flush=True)
             except BaseException:
+                # Any other exception is the pipeline's -- including a
+                # sqlite3.Error from a task's own query, which must NOT be
+                # mistaken for the run store failing.
                 status, exit_code = STATUS_FAILED, EXIT_FAILED
                 # Into the captured stderr, so the failure is in the run log
                 # and not only in the worker's own (unwatched) stderr.
                 traceback.print_exc(file=sys.stderr)
-    except _DURABLE_ERRORS as exc:
+    except DurableWriteFailed as exc:
         status = STATUS_ERRORED
         exit_code = EXIT_DURABLE_WRITE_FAILURE
-        durable_failure = exc
+        aborted_by, abort_reason = exc, "durable event write failed"
+    except KeyboardInterrupt:
+        status, exit_code = STATUS_STOPPED, EXIT_STOPPED
+    except BaseException as exc:
+        status = STATUS_ERRORED
+        exit_code = EXIT_SETUP_FAILURE
+        aborted_by, abort_reason = exc, "could not start the run"
     finally:
-        heartbeat.stop()
-        _restore_termination_handlers(previous_handlers)
+        if heartbeat is not None:
+            heartbeat.stop()
+        if previous_handlers is not None:
+            _restore_termination_handlers(previous_handlers)
 
-    if durable_failure is not None:
+    if aborted_by is not None:
         print(
-            f"kptn worker: durable event write failed: {durable_failure}",
+            f"kptn worker: {abort_reason}: {aborted_by}",
             file=sys.stderr,
             flush=True,
         )
 
     try:
         store.finish_run(run_id, status, exit_code=exit_code)
-    except _DURABLE_ERRORS as exc:
+    except _STORE_ERRORS as exc:
         print(
             f"kptn worker: could not record final status {status!r}: {exc}",
             file=sys.stderr,
@@ -245,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         record = store.get_run(args.run_id)
-    except _DURABLE_ERRORS as exc:
+    except _STORE_ERRORS as exc:
         return _fail_usage(f"cannot read run {args.run_id}: {exc}")
 
     if record is None:

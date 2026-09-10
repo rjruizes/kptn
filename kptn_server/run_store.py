@@ -477,24 +477,42 @@ class RunStore:
         Returns ``True`` when the heartbeat landed and ``False`` when the run
         has already reached a terminal status -- a race a shutting-down worker
         can lose harmlessly, so it is not an error.
+
+        The terminal-status test is part of the UPDATE and the whole thing runs
+        in one ``BEGIN IMMEDIATE`` transaction: a separate check-then-write
+        could see a running run, lose the race to ``finish_run``, and then
+        stamp ``heartbeat_at`` onto a finished run while reporting success.
         """
         beat = timestamp or datetime.now(timezone.utc)
+        terminal = tuple(sorted(TERMINAL_STATUSES))
+        placeholders = ", ".join("?" for _ in terminal)
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT status FROM runs WHERE run_id = ?", (run_id,)
             ).fetchone()
             if row is None:
+                conn.execute("ROLLBACK")
                 raise RunNotFoundError(f"no such run: {run_id}")
-            if row["status"] in TERMINAL_STATUSES:
-                return False
-            conn.execute(
-                "UPDATE runs SET heartbeat_at = ? WHERE run_id = ?",
-                (_dt_to_text(beat), run_id),
+            cursor = conn.execute(
+                f"""
+                UPDATE runs SET heartbeat_at = ?
+                WHERE run_id = ? AND status NOT IN ({placeholders})
+                """,
+                (_dt_to_text(beat), run_id, *terminal),
             )
+            updated = cursor.rowcount > 0
+            conn.execute("COMMIT")
+        except BaseException:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
         finally:
             conn.close()
-        return True
+        return updated
 
     def request_stop(self, run_id: str) -> RunRecord:
         conn = self._connect()

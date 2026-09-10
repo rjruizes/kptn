@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -33,15 +35,20 @@ from kptn_server.capture import (
     SEVERITY_STDERR,
     STREAM_STDERR,
     STREAM_STDOUT,
+    DurableWriteFailed,
     RunStoreSink,
     StructuredWarningHandler,
+    _Reentry,
+    _store_write_reentry,
     capture_worker_output,
+    durable,
 )
 from kptn_server.run_store import (
     STATUS_ERRORED,
     STATUS_FAILED,
     STATUS_STOPPED,
     STATUS_SUCCEEDED,
+    RunNotFoundError,
     RunRequest,
     RunStore,
     RunStoreError,
@@ -223,6 +230,9 @@ def test_worker_persists_output_and_structured_warnings(ui_project: Path) -> Non
     assert record.worker_pid is not None
 
     assert "ordinary output" in Path(run.log_path).read_text()
+    # Captured output goes to the log file and the store, never back out
+    # through the replaced Python stream.
+    assert "ordinary output" not in result.stdout
 
     groups = reopened.warning_groups(run.run_id)
     assert {(g.category, g.count) for g in groups} == {
@@ -576,8 +586,15 @@ def test_capture_serializes_concurrent_writes_under_one_lock(
     second_finished = threading.Event()
 
     with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+        lock_held: list[bool] = []
 
         def hook() -> None:
+            # Structural, not adjacency-based: the hook fires from inside
+            # _commit_span, between the byte write and the event append, and
+            # this asserts the lock really is held at that point. If a future
+            # change moved either half out of the critical section, this fails
+            # even though the hook itself did not move.
+            lock_held.append(capture.state.lock_is_held())
             inside.set()
             assert release.wait(10), "critical-section hook was never released"
 
@@ -611,6 +628,8 @@ def test_capture_serializes_concurrent_writes_under_one_lock(
         thread_one.join(timeout=10)
         assert second_finished.wait(10)
         thread_two.join(timeout=10)
+
+    assert lock_held == [True], "the seam between the two halves was unlocked"
 
     events = log_events(run)
     assert len(events) == 2
@@ -667,3 +686,323 @@ def test_structured_warning_handler_ignores_records_below_warning(
     handler.emit(record)
 
     assert [str(e.payload["category"]) for e in warning_events(run)] == ["direct"]
+
+
+# -- re-entrancy guard (fix round 1, finding 1) ---------------------------
+
+
+def test_reentry_guard_blocks_every_nested_attempt_not_just_the_first() -> None:
+    """A blocked attempt must not release a flag it never took.
+
+    Clearing unconditionally in __exit__ disarms the guard: the first nested
+    attempt is refused but hands the flag back on its way out, admitting the
+    second.
+    """
+    assert not getattr(_store_write_reentry, "active", False)
+
+    with _Reentry(_store_write_reentry) as outer:
+        assert outer is True
+        observed = []
+        for _ in range(3):
+            with _Reentry(_store_write_reentry) as nested:
+                observed.append(nested)
+        assert observed == [False, False, False]
+
+    # The outer guard released it, so the path is usable again.
+    with _Reentry(_store_write_reentry) as again:
+        assert again is True
+    assert not getattr(_store_write_reentry, "active", False)
+
+
+def test_capture_blocks_every_nested_write_not_just_the_first(
+    ui_project: Path,
+) -> None:
+    """Nested writes from inside the persistence path are all dropped.
+
+    Admitting the second one would re-enter LogWriteState.write and open a
+    second store transaction while the outer one still holds SQLite's write
+    lock -- a self-inflicted busy_timeout stall that the worker would then
+    misreport as a durable failure.
+    """
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+    attempts: list[int] = []
+
+    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+
+        def hook() -> None:
+            for index in range(3):
+                attempts.append(capture.stdout.write(f"nested {index}\n"))
+
+        capture.state._critical_section_hook = hook
+        capture.stdout.write("outer\n")
+
+    # write() still reports the characters it accepted; what must not happen
+    # is any of them reaching the file or the store.
+    assert len(attempts) == 3
+    assert run.log_bytes() == b"outer\n"
+    assert [run.slice_log(e) for e in log_events(run)] == ["outer\n"]
+
+
+def test_capture_guards_the_warnings_path_symmetrically(
+    ui_project: Path,
+) -> None:
+    """A warning raised inside the persistence path must not re-enter it."""
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+
+    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+
+        def hook() -> None:
+            warnings.warn("warned from inside the write path", UserWarning)
+            logging.getLogger("inside").warning("logged from inside the write path")
+
+        capture.state._critical_section_hook = hook
+        capture.stdout.write("outer\n")
+
+    assert warning_events(run) == []
+    assert run.log_bytes() == b"outer\n"
+
+
+# -- durable-failure classification (fix round 1, finding 2) --------------
+
+
+def test_worker_reports_a_task_database_error_as_failed_not_errored(
+    ui_project: Path,
+) -> None:
+    """sqlite3.Error from pipeline code is the pipeline failing, not the store.
+
+    kptn's own default state store is SQLite (the fixture sets db: sqlite), so
+    classifying durable failures by exception type would turn an ordinary task
+    query error into `errored` while the event stream said `failed`.
+    """
+    run = create_fixture_run(ui_project, profile="db_error")
+
+    result = run_worker(run)
+
+    assert result.returncode == worker.EXIT_FAILED
+    record = run.store.get_run(run.run_id)
+    assert record.status == STATUS_FAILED
+    assert record.exit_code == worker.EXIT_FAILED
+
+    finished = [e for e in run.events() if e.kind == EventKind.RUN_FINISHED.value]
+    assert len(finished) == 1
+    # The run row and its own event stream must agree.
+    assert finished[0].payload["status"] == "failed"
+    assert record.status == finished[0].payload["status"]
+    assert "fixture_user_query" in str(finished[0].payload["error"])
+
+
+def test_durable_marks_store_failures_and_passes_others_through() -> None:
+    def store_failure():
+        raise RunStoreError("store is gone")
+
+    def task_failure():
+        raise sqlite3.OperationalError("no such table: user_table")
+
+    with pytest.raises(DurableWriteFailed) as exc_info:
+        durable(store_failure)
+    assert isinstance(exc_info.value.cause, RunStoreError)
+    assert isinstance(exc_info.value, RunStoreError)
+
+    # durable() only marks what fails *inside it*; it is applied at the
+    # persistence seam, so a task's own database error never reaches it.
+    with pytest.raises(DurableWriteFailed):
+        durable(task_failure)
+
+    # An already-marked failure is not double-wrapped.
+    original = DurableWriteFailed(RunStoreError("first"))
+
+    def already_marked():
+        raise original
+
+    with pytest.raises(DurableWriteFailed) as exc_info:
+        durable(already_marked)
+    assert exc_info.value is original
+
+
+# -- store heartbeat (fix round 1, finding 3) -----------------------------
+
+
+def test_heartbeat_refuses_to_stamp_a_finished_run(ui_project: Path) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+
+    assert run.store.heartbeat(run.run_id) is True
+    beat = run.store.get_run(run.run_id).heartbeat_at
+    assert beat is not None
+
+    run.store.finish_run(run.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    assert run.store.heartbeat(run.run_id) is False
+    assert run.store.get_run(run.run_id).heartbeat_at == beat
+
+
+def test_heartbeat_raises_for_an_unknown_run(ui_project: Path) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+
+    with pytest.raises(RunNotFoundError):
+        run.store.heartbeat("no-such-run")
+
+
+# -- worker setup failures (fix round 1, elevated minor) ------------------
+
+
+def test_worker_records_a_setup_failure_instead_of_crashing(
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure before the pipeline starts still gets a documented outcome.
+
+    It must not escape main() as a traceback with exit 1, and it must not
+    leave the signal disposition rewritten.
+    """
+    run = create_fixture_run(ui_project, profile="success")
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("heartbeat thread would not start")
+
+    monkeypatch.setattr(worker._Heartbeat, "start", boom)
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    exit_code = worker.main(["--db", str(run.db_path), "--run-id", run.run_id])
+
+    assert exit_code == worker.EXIT_SETUP_FAILURE
+    assert signal.getsignal(signal.SIGTERM) is original_sigterm
+    assert signal.getsignal(signal.SIGINT) is original_sigint
+    record = run.store.get_run(run.run_id)
+    assert record.status == STATUS_ERRORED
+    assert record.exit_code == worker.EXIT_SETUP_FAILURE
+    # The identity write happened before the failure, so it is still recorded.
+    assert record.worker_pid == os.getpid()
+
+
+def test_worker_records_a_failed_worker_identity_write_as_errored(
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+
+    def boom(self, *args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(RunStore, "record_worker_start", boom)
+
+    exit_code = worker.main(["--db", str(run.db_path), "--run-id", run.run_id])
+
+    assert exit_code == worker.EXIT_DURABLE_WRITE_FAILURE
+    monkeypatch.undo()
+    record = RunStore(run.db_path).get_run(run.run_id)
+    assert record.status == STATUS_ERRORED
+
+
+# -- store heartbeat atomicity (fix round 1, finding 3) -------------------
+
+
+class _RacingConnection:
+    """Wraps a sqlite connection and fires a callback after one statement."""
+
+    def __init__(self, inner, marker: str, on_seen) -> None:
+        self._inner = inner
+        self._marker = marker
+        self._on_seen = on_seen
+
+    def execute(self, sql, *args, **kwargs):
+        result = self._inner.execute(sql, *args, **kwargs)
+        if self._on_seen is not None and self._marker in sql:
+            callback, self._on_seen = self._on_seen, None
+            callback()
+        return result
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_heartbeat_holds_a_write_transaction_across_its_status_check(
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The status check and the heartbeat write must be one transaction.
+
+    Proven by racing a real ``finish_run`` against the window between them: if
+    ``heartbeat()`` holds ``BEGIN IMMEDIATE``, the competing writer cannot get
+    in, so the run cannot become terminal underneath the check. Without the
+    transaction the competing writer commits immediately and ``heartbeat()``
+    stamps ``heartbeat_at`` onto a finished run while reporting success.
+    """
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+
+    competitor = RunStore(run.db_path)
+    finished = threading.Event()
+    started = threading.Event()
+    blocked_as_expected: list[bool] = []
+
+    def finish_in_background() -> None:
+        started.set()
+        try:
+            competitor.finish_run(run.run_id, STATUS_SUCCEEDED, exit_code=0)
+        finally:
+            finished.set()
+
+    def race() -> None:
+        thread = threading.Thread(target=finish_in_background, daemon=True)
+        thread.start()
+        assert started.wait(10)
+        # Must still be blocked on the write lock heartbeat() is holding.
+        blocked_as_expected.append(not finished.wait(0.25))
+
+    original_connect = RunStore._connect
+
+    def racing_connect(self):
+        conn = original_connect(self)
+        if self is heartbeat_store:
+            return _RacingConnection(conn, "SELECT status FROM runs", race)
+        return conn
+
+    heartbeat_store = RunStore(run.db_path)
+    monkeypatch.setattr(RunStore, "_connect", racing_connect)
+
+    result = heartbeat_store.heartbeat(run.run_id)
+    monkeypatch.undo()
+    assert finished.wait(10)
+
+    assert blocked_as_expected == [True], (
+        "finish_run committed inside heartbeat's status-check window"
+    )
+    record = RunStore(run.db_path).get_run(run.run_id)
+    # heartbeat() won the race, so it reported success; the run only became
+    # terminal afterwards. What must never happen is True on a terminal run.
+    assert result is True
+    assert record.status == STATUS_SUCCEEDED
+
+
+# -- warning filters (fix round 1, spec deviation) ------------------------
+
+
+def test_capture_preserves_project_configured_warning_filters(
+    ui_project: Path,
+) -> None:
+    """A project's warnings-as-errors setting must survive the worker.
+
+    simplefilter() resets the whole filter list, so a pipeline relying on
+    `filterwarnings = error` would behave differently under the worker than
+    under `kptn run`. Appending leaves it in charge.
+    """
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+
+    with warnings.catch_warnings():
+        warnings.resetwarnings()
+        warnings.filterwarnings("error", category=UserWarning)
+
+        with capture_worker_output(run.store, run.run_id, run.log_path):
+            with pytest.raises(UserWarning):
+                warnings.warn("escalated by the project", UserWarning)
+            # Categories the project said nothing about still fall through to
+            # the appended "always" entry, so every occurrence is recorded.
+            warnings.warn("not escalated", RuntimeWarning)
+            warnings.warn("not escalated", RuntimeWarning)
+
+    assert [str(e.payload["category"]) for e in warning_events(run)] == [
+        "RuntimeWarning",
+        "RuntimeWarning",
+    ]
