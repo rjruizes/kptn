@@ -492,7 +492,9 @@ def test_base_page_offers_the_shared_navigation(ui_project: Path) -> None:
 
     for label in ("Run", "Runs", "Plan", "How it works"):
         assert label in body, f"the base page is missing the {label!r} link"
-    for href in ("/runs", "/plan", "/how-it-works"):
+    # ``/walkthrough`` is the route the walkthrough router actually serves;
+    # the nav's label for it is still "How it works".
+    for href in ("/runs", "/plan", "/walkthrough"):
         assert href in body, f"the base page is missing a link to {href}"
 
 

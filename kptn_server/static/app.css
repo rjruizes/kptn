@@ -571,3 +571,104 @@ button:disabled {
   margin-left: auto;
   color: var(--ink-muted);
 }
+
+/* -- plan and walkthrough ------------------------------------------------ */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: baseline;
+}
+
+.data-table thead th {
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.action {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.action--skip {
+  color: var(--ink-muted);
+}
+
+.walkthrough__step {
+  width: 3em;
+  color: var(--ink-muted);
+}
+
+.walkthrough__heading {
+  padding-top: 16px;
+}
+
+.walkthrough__heading-name {
+  margin-right: 10px;
+}
+
+.walkthrough__row--bypassed code {
+  color: var(--ink-muted);
+}
+
+.badge {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 8px;
+  color: var(--ink-muted);
+  font-size: 0.85em;
+}
+
+/* -- one task's detail --------------------------------------------------- */
+
+.task-detail__name {
+  margin: 0;
+}
+
+.declared-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.declared-list__link {
+  margin-left: 10px;
+  color: var(--accent);
+}
+
+.task-detail__docs {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+/* Rendered project Markdown. Kept deliberately plain: the content is the
+   project's documentation, not a design surface. */
+.markdown {
+  max-width: 78ch;
+  line-height: 1.55;
+}
+
+.markdown pre {
+  overflow-x: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+}

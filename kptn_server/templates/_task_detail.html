@@ -1,0 +1,83 @@
+{#
+  One task's detail, as a fragment.
+
+  Everything here is project-authored text -- a task name, a description, a
+  declared table, a source path -- and every one of them is autoescaped.
+  ``docs_html`` is the single exception, and it is the output of
+  ``kptn_server.markdown``, built with ``{"html": False}`` so raw HTML in the
+  Markdown source arrived as text before it ever got here.
+
+  A broken ``docs`` reference is rendered as a visible error rather than an
+  empty panel: a blank docs section is indistinguishable from a task that
+  documented nothing, so the author would never learn the path is wrong.
+#}
+<article class="task-detail" data-task="{{ item.name }}" data-kind="{{ item.kind }}">
+  <header class="task-detail__header">
+    <h2 class="task-detail__name"><code>{{ item.name }}</code></h2>
+    <p class="muted">
+      {{ item.kind }}
+      {%- if item.sequence is not none %} &middot; step {{ item.sequence }}{% endif %}
+      {%- if item.bypassed %} &middot; <span class="badge">bypassed by this profile</span>{% endif %}
+    </p>
+  </header>
+
+  <dl class="project-facts">
+    <dt>Description</dt>
+    <dd>{{ item.description or not_documented }}</dd>
+
+    <dt>Inputs</dt>
+    <dd>
+      {% if item.inputs %}
+      <ul class="declared-list">
+        {% for input in item.inputs %}<li><code>{{ input }}</code></li>{% endfor %}
+      </ul>
+      {% else %}{{ not_documented }}{% endif %}
+    </dd>
+
+    <dt>Outputs</dt>
+    <dd>
+      {% if item.outputs %}
+      <ul class="declared-list">
+        {% for output in item.outputs %}
+        <li>
+          <code>{{ output }}</code>
+          {%- for link in output_links.get(output, []) %}
+          <a class="declared-list__link" href="{{ link.href }}">{{ link.label }}</a>
+          {%- endfor %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}{{ not_documented }}{% endif %}
+    </dd>
+
+    <dt>Source</dt>
+    <dd>{% if source_reference %}<code>{{ source_reference }}</code>{% else %}{{ not_documented }}{% endif %}</dd>
+
+    <dt>Runs after</dt>
+    <dd>
+      {% if item.predecessors %}
+      {% for name in item.predecessors %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+      {% else %}<span class="muted">nothing</span>{% endif %}
+    </dd>
+
+    <dt>Runs before</dt>
+    <dd>
+      {% if item.successors %}
+      {% for name in item.successors %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+      {% else %}<span class="muted">nothing</span>{% endif %}
+    </dd>
+  </dl>
+
+  <section class="task-detail__docs">
+    <h3>Documentation</h3>
+    {% if docs_error %}
+    <div class="notice notice--error" role="alert">
+      <p class="notice__detail">{{ docs_error }}</p>
+    </div>
+    {% elif docs_html %}
+    <div class="markdown">{{ docs_html }}</div>
+    {% else %}
+    <p class="muted">{{ not_documented }}</p>
+    {% endif %}
+  </section>
+</article>

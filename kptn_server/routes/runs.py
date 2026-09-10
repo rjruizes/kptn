@@ -90,6 +90,7 @@ from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
+from kptn_server.routes.support import error_response, is_fragment_request
 from kptn_server.run_store import (
     STATUS_FAILED,
     STATUS_INTERRUPTED,
@@ -382,7 +383,8 @@ async def start_run(request: Request):
             )
         # Through _error_response like every other error, so a plain form
         # post -- which is what every form in this UI is -- gets the page
-        # shell rather than an orphan <div>. Nothing here is wired to htmx.
+        # shell rather than an orphan <div>. No form on this page is wired to
+        # htmx; the walkthrough's task panel is the only htmx surface.
         return _error_response(
             request,
             status_code=409,
@@ -464,46 +466,12 @@ def _finish_quietly(store: RunStore, run_id: str) -> None:
         _LOGGER.exception("could not finish run %s after a failed launch", run_id)
 
 
-def _error_response(
-    request: Request,
-    *,
-    status_code: int,
-    title: str,
-    detail: str,
-    run_id: str | None = None,
-    run: RunRecord | None = None,
-) -> HTMLResponse:
-    """Render an error as a page, or as a fragment for an htmx request.
-
-    *run_id* names a run to link to; *run* embeds that run's status fragment,
-    which is what the conflict response needs -- the run holding the lock is
-    the thing the reader has to act on.
-
-    The page shell is the default and the fragment is the exception, because
-    every form in this UI is a plain ``<form method="post">``: there is no
-    ``hx-`` attribute anywhere in ``templates/``. A fragment served to a
-    browser navigation is a page with no stylesheet and no nav.
-    """
-    template = "_error.html" if _is_fragment_request(request) else "error.html"
-    return request.app.state.templates.TemplateResponse(
-        request,
-        template,
-        {
-            "nav_active": "run",
-            "error_title": title,
-            "error_detail": detail,
-            "error_run_id": run_id,
-            "run": run,
-            "is_terminal": (
-                run.status in TERMINAL_STATUSES if run is not None else False
-            ),
-        },
-        status_code=status_code,
-    )
-
-
-def _is_fragment_request(request: Request) -> bool:
-    return request.headers.get("HX-Request", "").lower() == "true"
+#: Rendering an error is shared with every other router in this package --
+#: see :mod:`kptn_server.routes.support` for why the page shell is the default
+#: and the htmx fragment is the exception. Aliased rather than re-implemented,
+#: so these routes and the walkthrough's cannot drift apart.
+_error_response = error_response
+_is_fragment_request = is_fragment_request
 
 
 # -- GET /runs/{run_id} ----------------------------------------------------

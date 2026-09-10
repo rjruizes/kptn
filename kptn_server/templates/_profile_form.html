@@ -1,0 +1,21 @@
+{#
+  The profile switcher for the read-only pages.
+
+  base.html's own selector carries ``form="run-form"``, which only the run
+  console owns; on a page with no such form it would render, accept input, and
+  drive nothing. This is a plain GET form instead, so changing profile is an
+  ordinary navigation -- no JavaScript, and the resulting URL is shareable.
+
+  ``profile_action`` is supplied by the route so the form posts back to the
+  page the reader is on.
+#}
+<form class="app-bar__profile" method="get" action="{{ profile_action }}">
+  <label for="profile-select">Profile</label>
+  <select id="profile-select" name="profile">
+    <option value=""{% if not selected_profile %} selected{% endif %}>(no profile)</option>
+    {% for profile in project.profiles %}
+    <option value="{{ profile }}"{% if profile == selected_profile %} selected{% endif %}>{{ profile }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="button">Show</button>
+</form>

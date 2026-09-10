@@ -1,6 +1,17 @@
-"""Deterministic fixture pipeline for durable-worker tests.
+"""Deterministic fixture pipeline for durable-worker and walkthrough tests.
 
-The pipeline has a single task whose behaviour is selected by profile:
+The pipeline is ``setup_task >> noisy_task``. ``setup_task`` exists so the
+resolved order has something *before* the noisy one -- the plan and
+walkthrough views are about order -- and it is deliberately silent: it prints
+nothing, warns about nothing, and declares no outputs, so every assertion the
+worker tests make about captured output and warning attribution still names
+``noisy_task`` alone.
+
+Both tasks carry documentation metadata (``description``, ``inputs``,
+``docs``) pointing at ``docs/*.md`` in this project. Metadata is a pure read
+model: it does not affect scheduling or execution.
+
+``noisy_task``'s behaviour is selected by profile:
 
 * ``success`` -- emit output and warnings, then return.
 * ``slow``    -- emit output, then block until a sentinel file appears. Tests
@@ -53,7 +64,23 @@ def _wait_for_sentinel() -> None:
         time.sleep(0.01)
 
 
-@kptn.task(outputs=[], description="Emit output and warnings.")
+@kptn.task(
+    outputs=[],
+    inputs=["fixture_seed"],
+    description="Prepare the fixture, quietly.",
+    docs="docs/setup_task.md#overview",
+)
+def setup_task() -> None:
+    """Deliberately silent: no output, no warnings, no outputs declared."""
+    return None
+
+
+@kptn.task(
+    outputs=[],
+    inputs=["fixture_source"],
+    description="Emit output and warnings.",
+    docs="docs/noisy_task.md",
+)
 def noisy_task(mode: str = "success") -> None:
     print("ordinary output")
     print("raw stderr output", file=sys.stderr)
@@ -68,4 +95,4 @@ def noisy_task(mode: str = "success") -> None:
         raise sqlite3.OperationalError("no such table: fixture_user_query")
 
 
-pipeline = kptn.Pipeline("fixture", noisy_task)
+pipeline = kptn.Pipeline("fixture", setup_task >> noisy_task)

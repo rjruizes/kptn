@@ -1,14 +1,18 @@
 """Test kptn_server table-preview API with duckdb_example."""
 
-import pytest
-pytest.skip("kptn_server requires jinja2 [web] dep not installed in CI", allow_module_level=True)
-
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from kptn_server.service import get_duckdb_preview
+# ``kptn_server.service`` imports the lineage analyzer at module scope, which
+# needs ``sqlglot``. Jinja2 now arrives with the ``web`` extra, so the old
+# blanket module skip is gone -- but nothing in this project declares
+# ``sqlglot`` in any extra, so the import can still be unavailable. Skip on
+# what is actually missing rather than on a dependency that is now present.
+pytest.importorskip("sqlglot", reason="kptn.lineage requires sqlglot")
+
+from kptn_server.service import get_duckdb_preview  # noqa: E402 - after the skip
 
 
 @pytest.fixture(scope="module")
@@ -75,7 +79,13 @@ def test_table_preview_fruit_summary(duckdb_example_dir, run_pipeline):
     assert "row" in preview
     assert "rows" in preview
     assert preview["resolvedTable"] == "main.fruit_summary"
-    expected_columns = ["fruit_count", "total_score", "avg_score", "max_score", "min_score"]
+    expected_columns = [
+        "fruit_count",
+        "total_score",
+        "avg_score",
+        "max_score",
+        "min_score",
+    ]
     for col in expected_columns:
         assert col in preview["columns"]
     assert len(preview["row"]) == len(preview["columns"])
@@ -123,7 +133,9 @@ def test_table_preview_client_sql_with_limit_injected(duckdb_example_dir, run_pi
     assert "score" in preview["columns"]
 
 
-def test_table_preview_client_sql_rejects_multi_statement(duckdb_example_dir, run_pipeline):
+def test_table_preview_client_sql_rejects_multi_statement(
+    duckdb_example_dir, run_pipeline
+):
     """Multiple statements should be rejected to avoid batch execution."""
     config_path = duckdb_example_dir / "kptn.yaml"
 

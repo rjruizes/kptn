@@ -1,0 +1,52 @@
+{#
+  The plan, as a page.
+
+  Every row here came out of ``kptn.runner.plan.build_plan`` -- the same
+  function ``kptn plan`` prints -- and this template must not re-order,
+  re-group, or re-decide any of it. The actions are shown as the terminal
+  shows them (RUN / SKIP / MAP) so a developer reading both sees one
+  vocabulary, and the reason is the builder's own words.
+
+  Task names and reasons are pipeline-authored text and reach the page through
+  Jinja's autoescaping, like everything else in this UI.
+#}
+{% extends "base.html" %}
+
+{% block title %}Plan - {{ project.pipeline_name }} - kptn{% endblock %}
+
+{% block profile_selector %}{% include "_profile_form.html" %}{% endblock %}
+
+{% block content %}
+<section class="panel" id="plan">
+  <header class="console__bar">
+    <h2>Plan</h2>
+    <span class="muted">
+      {% if selected_profile %}profile <code>{{ selected_profile }}</code>{% else %}no profile{% endif %}
+      &middot; {{ rows | length }} task{{ '' if rows | length == 1 else 's' }}
+    </span>
+  </header>
+
+  <p class="muted">
+    What <code>kptn run</code> would do next. Nothing on this page runs anything.
+  </p>
+
+  {% if rows %}
+  <table class="data-table" id="plan-table">
+    <thead>
+      <tr><th scope="col">Action</th><th scope="col">Task</th><th scope="col">Why</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr data-task="{{ row.task_name }}" data-action="{{ row.action }}">
+        <td><span class="action action--{{ row.action | lower }}">{{ row.action }}</span></td>
+        <td><a href="/walkthrough/task/{{ row.task_name | urlencode }}{% if selected_profile %}?profile={{ selected_profile | urlencode }}{% endif %}"><code>{{ row.task_name }}</code></a></td>
+        <td class="muted">{{ row.reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">This profile resolves to no executable tasks.</p>
+  {% endif %}
+</section>
+{% endblock %}
