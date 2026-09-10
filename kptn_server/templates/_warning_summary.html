@@ -1,0 +1,68 @@
+{#
+  A run's warnings, grouped.
+
+  Macros only, so the same rendering serves the run page's completion summary
+  and the history list's per-run badge -- one place decides how a warning is
+  worded, and neither surface can drift from the other.
+
+  ``summary`` is the dict built by ``runs.warning_summary()``. It is already
+  shaped for display (headline, per-group occurrence label, anchors), because
+  a template is the wrong place to pluralize or to build a fragment href.
+
+  Grouping is *presentation*. The store keeps every warning occurrence, and
+  every one of them is linked here: ``occurrences`` is the group's stored
+  sequence list, and each anchor points at the console row that event
+  rendered. Nothing is collapsed away, so a repeat is always reachable.
+
+  Every value below is pipeline-authored text -- a warning message, a task
+  name, a warning category -- and reaches the page through Jinja's
+  autoescaping. Do not add ``| safe`` to any of it.
+#}
+
+{% macro warning_summary(summary) -%}
+{% if summary.total %}
+<div class="warnings" data-warning-total="{{ summary.total }}"
+     data-warning-tasks="{{ summary.task_count }}">
+  <p class="warnings__headline">{{ summary.headline }}</p>
+  <ul class="warnings__groups">
+    {% for group in summary.groups %}
+    <li class="warning-group" data-warning-count="{{ group.count }}">
+      <span class="warning-group__where">
+        {% if group.task %}<code>{{ group.task }}</code>
+        {% else %}<span class="muted">outside any task</span>{% endif %}
+      </span>
+      <span class="warning-group__category">{{ group.category }}</span>
+      <span class="warning-group__count">{{ group.occurrence_label }}</span>
+      <p class="warning-group__message">{{ group.sample_message }}</p>
+      <span class="warning-group__occurrences">
+        {%- for occurrence in group.occurrences %}
+        <a class="warning-group__occurrence" href="{{ occurrence.anchor }}">#{{ occurrence.sequence }}</a>
+        {%- endfor %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% else %}
+<p class="warnings warnings--none muted" data-warning-total="0">No warnings.</p>
+{% endif %}
+{%- endmacro %}
+
+
+{% macro warning_badge(summary) -%}
+{#
+  The compact form for a history row: the same headline, plus one sample so
+  the reader can tell whether it is worth opening the run. The full group
+  list, with its per-occurrence anchors, lives on the run page -- the anchors
+  only mean anything next to the console they point into.
+#}
+{% if summary.total %}
+<span class="warnings warnings--badge" data-warning-total="{{ summary.total }}"
+      data-warning-tasks="{{ summary.task_count }}">
+  <b class="warnings__headline">{{ summary.headline }}</b>
+  {% if summary.groups %}<span class="warnings__sample">{{ summary.groups[0].sample_message }}</span>{% endif %}
+</span>
+{% else %}
+<span class="warnings warnings--badge muted" data-warning-total="0">no warnings</span>
+{% endif %}
+{%- endmacro %}

@@ -1,6 +1,9 @@
-"""Starting runs, the run page, and the resumable event stream.
+"""Starting, watching, summarizing, and stopping pipeline runs.
 
-Three endpoints, one idea: **nothing about a run lives in this process.**
+Every endpoint here rests on one idea: **nothing about a run lives in this
+process.** The run row, its event log, its captured output, and its stop
+intent are all on disk, so the browser, VS Code, and this server can each
+restart mid-run without losing a thing.
 
 ``POST /runs``
     Validates the profile, creates the run row and the project lock, and only
@@ -41,6 +44,28 @@ inline text (see :mod:`kptn_server.capture`). The text is therefore sliced out
 of the log file here and rendered through Jinja, whose autoescaping is on. The
 browser only ever appends the fragment it is given; pipeline output is
 untrusted text and must never reach the DOM as live markup.
+
+Four more endpoints complete the surface.
+
+``GET /runs``
+    The project's run history, newest first, straight out of the store.
+
+``GET /runs/{run_id}/log``
+    The raw captured log. **The path comes from the run row and from nowhere
+    else** -- no query parameter, header, or path segment can choose a file.
+    That is the whole security posture of this endpoint: it hands a file back
+    to a UI with no authentication, so the set of files it can hand back is
+    exactly one per recorded run.
+
+``POST /runs/{run_id}/stop`` and ``POST /runs/{run_id}/force-finish``
+    Stop records intent and signals; it never writes an outcome, because only
+    the worker knows whether cleanup finished. Force-finish is the escape
+    hatch for the one run reconciliation cannot settle -- see
+    :data:`FORCE_FINISH_CONFIRMATION`.
+
+**Counts are computed from lifecycle events, never from console text.** A task
+that prints the words ``task_started`` is output, not a task; see
+:func:`counters`.
 """
 
 from __future__ import annotations
@@ -52,21 +77,30 @@ import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping
+from typing import Any, AsyncIterator, Mapping, Sequence
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
 from kptn_server.run_store import (
     STATUS_FAILED,
+    STATUS_INTERRUPTED,
     TERMINAL_STATUSES,
     ActiveRunError,
+    RunNotFoundError,
     RunRecord,
     RunRequest,
+    RunStateError,
     RunStore,
     StoredEvent,
+    WarningGroup,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -96,6 +130,35 @@ _TRUNCATION_NOTE = "\n[... truncated by the console ...]"
 #: anything). Sent with no ``id:`` field, so it never becomes the client's
 #: resume cursor.
 STATUS_EVENT_NAME = "run_status"
+
+#: How many runs ``GET /runs`` renders. The history is unbounded on disk and
+#: deliberately not paginated in the UI: a developer wants the last few runs,
+#: and a bounded page keeps the per-run summary queries bounded with it.
+HISTORY_LIMIT = 50
+
+#: The word a developer must type to force-finish a run.
+#:
+#: Force-finish exists because of one gap the supervisor cannot close. A
+#: worker whose liveness the OS will not let us determine is deliberately
+#: treated as *possibly alive* (see
+#: :meth:`~kptn_server.processes.RunProcessManager._liveness`) -- burying it
+#: would release the project's active-run lock while a process might still be
+#: writing. But a permanently un-inspectable PID is then never reconcilable:
+#: the run stays ``running``/``stop_requested`` forever, the project's lock is
+#: never released, no new run can start, and ``stop()`` can only record
+#: intent it has no way to deliver.
+#:
+#: So force-finish abandons that worker: it writes ``interrupted``, which is
+#: exactly the status meaning "this run's real fate is unknown", and releases
+#: the lock in the same transaction. It does not signal anything -- the PID
+#: may have been recycled onto an innocent process, and a live-but-unreachable
+#: worker would not receive it anyway.
+#:
+#: That makes it categorically different from Stop, which is why it is a
+#: separate route behind a typed confirmation rather than a second button. A
+#: checkbox or a bare POST would make abandoning a possibly-live process one
+#: click away from asking it politely to stop.
+FORCE_FINISH_CONFIRMATION = "abandon"
 
 
 # -- injectable clock ------------------------------------------------------
@@ -281,7 +344,7 @@ async def start_run(request: Request):
             ),
         )
 
-    profile = await _submitted_profile(request) or None
+    profile = await _submitted_field(request, "profile") or None
 
     if profile is not None and profile not in project.profiles:
         # Rejected before anything is created: an invalid request must not
@@ -369,25 +432,26 @@ def _is_form_encoded(request: Request) -> bool:
     return _media_type(request) == FORM_CONTENT_TYPE
 
 
-async def _submitted_profile(request: Request) -> str:
-    """The submitted ``profile`` field, parsed from the urlencoded body.
+async def _submitted_field(request: Request, name: str) -> str:
+    """One field of a urlencoded body, stripped, or ``""`` if absent.
 
     Parsed here rather than through ``request.form()`` deliberately: Starlette
     routes *all* form parsing through ``python-multipart``, which is not a
     dependency of the ``web`` extra and does not need to become one. This UI
-    posts one ``application/x-www-form-urlencoded`` field from a plain HTML
-    form -- there are no file uploads anywhere in it, and there will not be.
+    posts ``application/x-www-form-urlencoded`` fields from plain HTML forms
+    -- there are no file uploads anywhere in it, and there will not be.
 
     Callers must gate on :func:`_is_form_encoded` first: hand-parsing means
     there is no framework layer to reject a JSON body or no body at all, and
-    an unparseable body silently reads as "no profile", which is a *valid*
-    request that starts a pipeline.
+    an unparseable body silently reads as "field absent". For ``profile`` that
+    is a *valid* request that starts a pipeline; for ``confirm`` it is the
+    difference between a refusal and an unconfirmed abandon.
 
     A repeated field takes its last value, matching how a browser resolves a
     duplicate control name.
     """
     body = (await request.body()).decode("utf-8", errors="replace")
-    values = urllib.parse.parse_qs(body, keep_blank_values=True).get("profile")
+    values = urllib.parse.parse_qs(body, keep_blank_values=True).get(name)
     return values[-1].strip() if values else ""
 
 
@@ -457,7 +521,8 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
         )
 
     log_path = Path(record.log_path)
-    events = [console_event(event, log_path) for event in store.events_after(run_id, 0)]
+    stored = store.events_after(run_id, 0)
+    events = [console_event(event, log_path) for event in stored]
     return request.app.state.templates.TemplateResponse(
         request,
         "run.html",
@@ -465,20 +530,360 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             "nav_active": "run",
             "run": record,
             "events": events,
-            "counters": _counters(events),
+            "counters": counters(stored),
+            "warnings": warning_summary(store.warning_groups(run_id)),
+            "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
             "is_terminal": record.status in TERMINAL_STATUSES,
             "last_sequence": events[-1]["sequence"] if events else 0,
         },
     )
 
 
-def _counters(events: list[dict[str, Any]]) -> dict[str, int]:
-    kinds = [event["kind"] for event in events]
-    return {
-        "tasks": kinds.count(EventKind.TASK_STARTED.value),
-        "skipped": kinds.count(EventKind.TASK_SKIPPED.value),
-        "warnings": kinds.count(EventKind.WARNING.value),
+# -- counts and the warning summary ---------------------------------------
+
+
+#: The ``task_finished`` statuses the executor emits (see
+#: ``kptn.runner.executor._emit_task_finished``).
+_TASK_OUTCOMES = ("succeeded", "failed")
+
+
+def counters(events: Sequence[StoredEvent]) -> dict[str, int]:
+    """Task and warning counts for one run, from its lifecycle events.
+
+    Counted from the stored events -- ``task_started``, ``task_skipped``, and
+    the ``status`` on each ``task_finished`` -- and never from the console
+    text. A task that prints the words ``task_started`` is output, not a task,
+    and a summary that scraped the log would say otherwise.
+
+    ``unfinished`` is the interesting one: tasks that started and never
+    reported an outcome. That is the shape a stopped or interrupted run leaves
+    behind, and it is the number that tells a reader where the run stopped
+    being trustworthy. It is floored at zero rather than trusted to be
+    non-negative: the event log is written by a worker that can be killed
+    mid-sequence, so "more finishes than starts" is a corrupt log, not a
+    negative count to render.
+
+    ``tasks``, ``skipped`` and ``warnings`` are also the console header's
+    counters, which ``app.js`` recounts off the DOM as events stream in. One
+    function so the two can never disagree about what a task is.
+    """
+    tallies = {
+        "tasks": 0,
+        "skipped": 0,
+        "warnings": 0,
+        "succeeded": 0,
+        "failed": 0,
     }
+    for event in events:
+        if event.kind == EventKind.TASK_STARTED.value:
+            tallies["tasks"] += 1
+        elif event.kind == EventKind.TASK_SKIPPED.value:
+            tallies["skipped"] += 1
+        elif event.kind == EventKind.WARNING.value:
+            tallies["warnings"] += 1
+        elif event.kind == EventKind.TASK_FINISHED.value:
+            # Only the two outcomes the executor emits are counted. An
+            # unrecognized status is left out of both rather than guessed at,
+            # where it shows up as ``unfinished`` -- the honest answer for a
+            # task whose outcome this UI does not understand.
+            status = str(event.payload.get("status") or "")
+            if status in _TASK_OUTCOMES:
+                tallies[status] += 1
+    tallies["unfinished"] = max(
+        tallies["tasks"] - tallies["succeeded"] - tallies["failed"], 0
+    )
+    return tallies
+
+
+def warning_summary(groups: Sequence[WarningGroup]) -> dict[str, Any]:
+    """A run's warnings, grouped for display and linked to every occurrence.
+
+    Grouping is *presentation only*: the store keeps every warning event, and
+    every one of their sequences is turned into an anchor here. A summary that
+    linked only the first occurrence would hide the repeat its own count is
+    advertising.
+
+    ``task_count`` counts the distinct tasks that warned. Warnings raised
+    outside any task (at pipeline import time, say) have no task to attribute
+    and are counted in ``total`` but not in ``task_count`` -- hence the
+    separate headline wording rather than a claim of "0 tasks".
+
+    Wording is decided here rather than in the template so that pluralization
+    lives in one testable place, and so the run page and the history row read
+    identically.
+    """
+    total = sum(group.count for group in groups)
+    tasks = {group.task_name for group in groups if group.task_name}
+    return {
+        "total": total,
+        "task_count": len(tasks),
+        "headline": _warning_headline(total, len(tasks)),
+        "groups": [_warning_group(group) for group in groups],
+    }
+
+
+def _warning_headline(total: int, task_count: int) -> str:
+    if not total:
+        return "No warnings"
+    warnings = _plural(total, "warning")
+    if not task_count:
+        return f"{warnings} outside any task"
+    return f"{warnings} in {_plural(task_count, 'task')}"
+
+
+def _warning_group(group: WarningGroup) -> dict[str, Any]:
+    # ``occurrence_sequences`` is the authoritative list. The fallback covers
+    # a group whose sequences were not recorded: one anchor to the occurrence
+    # the group does know about beats no way back to the console at all, and
+    # nothing here invents a sequence that was never stored.
+    sequences = group.occurrence_sequences or (group.first_sequence,)
+    return {
+        "task": group.task_name,
+        "category": group.category,
+        "sample_message": group.sample_message,
+        "count": group.count,
+        "occurrence_label": _plural(group.count, "occurrence"),
+        "occurrences": [
+            {"sequence": sequence, "anchor": f"#event-{sequence}"}
+            for sequence in sequences
+        ],
+    }
+
+
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+# -- GET /runs -------------------------------------------------------------
+
+
+@router.get("/runs", response_class=HTMLResponse)
+def run_history(request: Request) -> HTMLResponse:
+    """This project's run history, newest first.
+
+    Read out of the store on every request, which is what makes the page
+    durable rather than remembered: a run recorded by a server that has since
+    restarted, or by a detached worker while no server was up at all, is
+    still here.
+
+    The order is the store's (``created_at DESC, run_id DESC``) and is passed
+    straight through -- neither this function nor the template re-sorts, so
+    there is exactly one place the ordering can be wrong.
+
+    One summary query per listed run, bounded by :data:`HISTORY_LIMIT`. The
+    alternative -- one aggregate query in the store -- would put the "what
+    counts as a task" rule in a second place, which is the mistake
+    :func:`counters` exists to prevent.
+    """
+    project = request.app.state.project
+    store: RunStore = request.app.state.store
+    runs = [
+        {
+            "run": record,
+            "counters": counters(store.events_after(record.run_id, 0)),
+            "warnings": warning_summary(store.warning_groups(record.run_id)),
+        }
+        for record in store.list_runs(project.root, limit=HISTORY_LIMIT)
+    ]
+    return request.app.state.templates.TemplateResponse(
+        request, "runs.html", {"nav_active": "runs", "runs": runs}
+    )
+
+
+# -- GET /runs/{run_id}/log ------------------------------------------------
+
+
+@router.get("/runs/{run_id}/log")
+def run_log(request: Request, run_id: str):
+    """The raw captured log for one run, as a download.
+
+    **The path is resolved from the stored run and from nothing else.** Not
+    from a query parameter, not from a header, not by joining the run id onto
+    the project's log directory. This UI has no authentication and runs as the
+    developer, so a route that let a request name a file would read any file
+    that developer can read; the set of files this endpoint can serve is
+    exactly one per recorded run, and an unknown run id is a 404 before any
+    filesystem access happens at all.
+
+    A missing file is also a 404, not a 500: the log belongs to the worker and
+    can be deleted, rotated, or sitting on a volume that went away. That
+    degrades the download; it does not break the server.
+    """
+    store: RunStore = request.app.state.store
+    record = store.get_run(run_id)
+    if record is None:
+        return _error_response(
+            request,
+            status_code=404,
+            title="No such run",
+            detail=f"There is no run {run_id!r} in this project's history.",
+        )
+
+    log_path = Path(record.log_path)
+    if not log_path.is_file():
+        return _error_response(
+            request,
+            status_code=404,
+            title="This run has no log file",
+            detail=(
+                f"Run {run_id} recorded its log at {log_path}, and there is no "
+                "file there now. A worker's log can be deleted or rotated "
+                "after the run ends."
+            ),
+            run_id=run_id,
+        )
+
+    return FileResponse(
+        log_path,
+        media_type="text/plain; charset=utf-8",
+        # Named after the run, not after the file on disk: the stored path is
+        # an internal detail, and a browser download called
+        # "3f2c...e91.log" tells the developer nothing.
+        filename=f"kptn-{run_id}.log",
+    )
+
+
+# -- POST /runs/{run_id}/stop ---------------------------------------------
+
+
+@router.post("/runs/{run_id}/stop")
+def stop_run(request: Request, run_id: str):
+    """Ask a run to stop. Records the intent, then signals the worker.
+
+    ``request_stop`` is the gate rather than a status read of our own: it
+    tests and writes the transition in one transaction, so a run that went
+    terminal a microsecond ago is refused instead of being "stopped" on the
+    strength of a stale read. It is idempotent, so the supervisor recording
+    the same intent again a moment later changes nothing.
+
+    **A ``stop()`` of ``False`` is a success.** It means no live worker
+    matched -- the process is gone, or its PID cannot be inspected -- and the
+    intent is durably recorded for a worker that is mid-startup or for the
+    next reconciliation pass. Reporting that as a failure would tell the
+    developer their stop did not land when it did exactly what it promises.
+
+    Nothing here writes an outcome. ``stop_requested`` is not terminal: the
+    project keeps its lock until the worker records ``stopped`` or
+    reconciliation records ``interrupted``, because finishing a run whose
+    worker may still be writing is how two runs end up on one project.
+
+    No body is read, so there is no content-type gate: the gate on
+    ``POST /runs`` exists because an unparseable body there reads as a valid
+    request, and this route has no field to misread.
+    """
+    store: RunStore = request.app.state.store
+    manager = request.app.state.processes
+
+    try:
+        store.request_stop(run_id)
+    except RunNotFoundError:
+        return _error_response(
+            request,
+            status_code=404,
+            title="No such run",
+            detail=f"There is no run {run_id!r} in this project's history.",
+        )
+    except RunStateError:
+        record = store.get_run(run_id)
+        return _error_response(
+            request,
+            status_code=409,
+            title="This run has already finished",
+            detail=(
+                "A finished run cannot be stopped. Its outcome is already "
+                "recorded and it holds nothing."
+            ),
+            run=record,
+            run_id=run_id,
+        )
+
+    try:
+        manager.stop(run_id)
+    except Exception:  # noqa: BLE001 - the intent is already durable
+        # The stop is recorded either way, and reconciliation settles a worker
+        # that never hears about it. A supervisor that could not signal must
+        # not turn a landed stop request into a 500.
+        _LOGGER.exception("could not signal the worker for run %s", run_id)
+
+    return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+
+
+# -- POST /runs/{run_id}/force-finish -------------------------------------
+
+
+@router.post("/runs/{run_id}/force-finish")
+async def force_finish_run(request: Request, run_id: str):
+    """Abandon a wedged run's worker and release the project's lock.
+
+    The escape hatch described on :data:`FORCE_FINISH_CONFIRMATION`: the one
+    situation reconciliation cannot settle by design. It records
+    ``interrupted`` -- "this run's real fate is unknown", which is precisely
+    true here -- and ``finish_run`` drops the project's active-run lock in the
+    same transaction.
+
+    It signals nothing, on purpose. The recorded PID may have been recycled
+    onto an unrelated process, and a worker that is alive but un-inspectable
+    would not be reachable anyway. Abandoning is the honest description of
+    what this does, and the template says so.
+
+    The typed confirmation is what keeps this from being a one-click twin of
+    Stop, so the body is gated and parsed rather than trusted: an unparseable
+    body must be refused, never read as an absent field on a route where an
+    absent field is the only thing standing between a click and a possibly
+    live process being written off.
+    """
+    store: RunStore = request.app.state.store
+
+    if not _is_form_encoded(request):
+        return _error_response(
+            request,
+            status_code=415,
+            title="Unsupported request body",
+            detail=(
+                "Force-finishing takes an application/x-www-form-urlencoded "
+                f"body with a 'confirm' field; got {_media_type(request)!r}."
+            ),
+            run_id=run_id,
+        )
+
+    confirmation = await _submitted_field(request, "confirm")
+    if confirmation != FORCE_FINISH_CONFIRMATION:
+        return _error_response(
+            request,
+            status_code=400,
+            title="Force-finish was not confirmed",
+            detail=(
+                f"Type {FORCE_FINISH_CONFIRMATION!r} to force-finish this run. "
+                "It abandons a worker that may still be running, so it is not "
+                "a one-click action and nothing has been changed."
+            ),
+            run_id=run_id,
+        )
+
+    try:
+        store.finish_run(run_id, STATUS_INTERRUPTED)
+    except RunNotFoundError:
+        return _error_response(
+            request,
+            status_code=404,
+            title="No such run",
+            detail=f"There is no run {run_id!r} in this project's history.",
+        )
+    except RunStateError:
+        return _error_response(
+            request,
+            status_code=409,
+            title="This run has already finished",
+            detail=("A finished run holds no lock and has no worker to abandon."),
+            run=store.get_run(run_id),
+            run_id=run_id,
+        )
+
+    _LOGGER.warning(
+        "run %s was force-finished: its worker was abandoned, not stopped",
+        run_id,
+    )
+    return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
 
 # -- GET /runs/{run_id}/events --------------------------------------------
@@ -597,14 +1002,18 @@ def _parse_sequence(value: str | None, *, name: str) -> int | None:
 
 
 __all__ = [
+    "FORCE_FINISH_CONFIRMATION",
     "FORM_CONTENT_TYPE",
     "HEARTBEAT_INTERVAL_SECONDS",
+    "HISTORY_LIMIT",
     "MAX_LOG_SLICE_BYTES",
     "POLL_INTERVAL_SECONDS",
     "STATUS_EVENT_NAME",
     "console_event",
+    "counters",
     "event_frames",
     "log_text",
     "render_event",
     "router",
+    "warning_summary",
 ]
