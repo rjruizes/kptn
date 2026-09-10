@@ -1,53 +1,16 @@
 from __future__ import annotations
 
-import importlib
-import sys
-import tomllib
 from pathlib import Path
 
 import typer
 
-from kptn.exceptions import ProfileError
-from kptn.graph.graph import Graph
-from kptn.graph.pipeline import Pipeline
-from kptn.profiles.loader import ProfileLoader
-from kptn.profiles.resolved import ResolvedGraph
-from kptn.profiles.resolver import ProfileResolver
+from kptn.exceptions import ProfileError, ProjectConfigError
+from kptn.project import load_pipeline
+from kptn.runner.api import resolve_pipeline
 from kptn.runner.api import run as _run_pipeline
-from kptn.state_store.factory import init_state_store
 import kptn.runner.plan as runner_plan
 
 app = typer.Typer()
-
-
-def _load_pipeline_from_pyproject(project_root: Path) -> Pipeline:
-    with open(project_root / "pyproject.toml", "rb") as f:
-        config = tomllib.load(f)
-
-    pipeline_module = config.get("tool", {}).get("kptn", {}).get("pipeline")
-    if not pipeline_module:
-        raise typer.BadParameter(
-            "Missing [tool.kptn] pipeline in pyproject.toml. "
-            "Add: [tool.kptn]\npipeline = \"your_package.pipeline\""
-        )
-
-    sys.path.insert(0, str(project_root))
-    module = importlib.import_module(pipeline_module)
-
-    pipeline_attr = getattr(module, "pipeline", None)
-    if isinstance(pipeline_attr, Pipeline):
-        return pipeline_attr
-
-    graph_attr = getattr(module, "graph", None)
-    if isinstance(graph_attr, Pipeline):
-        return graph_attr
-    if isinstance(graph_attr, Graph):
-        return Pipeline("default", graph_attr)
-
-    raise typer.BadParameter(
-        f"Module {pipeline_module!r} must expose a 'pipeline' (Pipeline) "
-        "or 'graph' (Graph) attribute"
-    )
 
 
 @app.command()
@@ -56,7 +19,11 @@ def run(
     force: bool = typer.Option(False, "--force"),
 ) -> None:
     project_root = Path.cwd()
-    pipeline = _load_pipeline_from_pyproject(project_root)
+    try:
+        pipeline = load_pipeline(project_root)
+    except ProjectConfigError as e:
+        raise typer.BadParameter(str(e)) from e
+
     try:
         _run_pipeline(pipeline, profile=profile, force=force)
     except ProfileError as e:
@@ -71,21 +38,13 @@ def plan(
     profile: str | None = typer.Option(None, "--profile"),
 ) -> None:
     project_root = Path.cwd()
-    pipeline = _load_pipeline_from_pyproject(project_root)
-    config = ProfileLoader.load(project_root / "kptn.yaml")
+    try:
+        pipeline = load_pipeline(project_root)
+        resolved, state_store = resolve_pipeline(pipeline, project_root, profile)
+    except ProjectConfigError as e:
+        raise typer.BadParameter(str(e)) from e
+    except ProfileError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
 
-    if profile is not None:
-        try:
-            resolved = ProfileResolver(config).compile(pipeline, profile)
-        except ProfileError as e:
-            typer.echo(str(e), err=True)
-            raise typer.Exit(code=1)
-    else:
-        resolved = ResolvedGraph(
-            graph=pipeline,
-            pipeline=pipeline.name,
-            storage_key=config.settings.db_path or ".kptn/kptn.db",
-        )
-
-    state_store = init_state_store(config.settings)
     runner_plan.plan(resolved, state_store)

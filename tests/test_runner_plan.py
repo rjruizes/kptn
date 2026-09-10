@@ -23,7 +23,7 @@ from kptn.graph.nodes import (
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.schema import KptnConfig
-from kptn.runner.plan import plan
+from kptn.runner.plan import PlanAction, PlanEntry, build_plan, plan, render_plan
 from tests.fakes import FakeStateStore
 
 
@@ -234,6 +234,32 @@ def test_plan_topological_order(capsys: pytest.CaptureFixture) -> None:
     assert lines.index("[RUN] task_a") < lines.index("[RUN] task_b")
 
 
+def test_build_plan_returns_ordered_reasons() -> None:
+    """Structured plan entries preserve task order, action, and reason."""
+    node_a = _make_task_node("task_a")
+    node_b = _make_task_node("task_b", outputs=["b.csv"])
+    resolved = _make_resolved(Graph(nodes=[node_a, node_b], edges=[(node_a, node_b)]))
+
+    with patch(
+        "kptn.runner.plan.is_stale",
+        side_effect=[(True, "source changed"), (False, "cached")],
+    ):
+        entries = build_plan(resolved, FakeStateStore())
+
+    assert [(e.task_name, e.action, e.reason) for e in entries] == [
+        ("task_a", PlanAction.RUN, "source changed"),
+        ("task_b", PlanAction.SKIP, "cached"),
+    ]
+
+
+def test_render_plan_preserves_exact_cli_output(capsys: pytest.CaptureFixture) -> None:
+    """Rendering the structured plan preserves the existing terminal contract."""
+    render_plan([PlanEntry("task_name", PlanAction.SKIP, reason="cached")])
+
+    captured = capsys.readouterr()
+    assert captured.out == "[SKIP] task_name — cached\n"
+
+
 # ─── AC-4: ProfileError exits non-zero with stderr, no partial output ─────────
 
 
@@ -243,12 +269,10 @@ def test_plan_profile_error_exits_nonzero_stderr_no_partial_output() -> None:
     pipeline = Pipeline("default", Graph(nodes=[], edges=[]))
 
     with (
-        patch("kptn.cli.commands._load_pipeline_from_pyproject", return_value=pipeline),
-        patch("kptn.cli.commands.ProfileLoader") as mock_loader,
-        patch("kptn.cli.commands.ProfileResolver") as mock_resolver,
+        patch("kptn.cli.commands.load_pipeline", return_value=pipeline),
+        patch("kptn.cli.commands.resolve_pipeline") as mock_resolver,
     ):
-        mock_loader.load.return_value = KptnConfig()
-        mock_resolver.return_value.compile.side_effect = ProfileError("stale ref: 'missing_branch'")
+        mock_resolver.side_effect = ProfileError("stale ref: 'missing_branch'")
         result = runner.invoke(app, ["plan", "--profile", "dev"])
 
     assert result.exit_code == 1

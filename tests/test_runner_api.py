@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,7 +11,7 @@ from kptn.exceptions import ProfileError, TaskError
 from kptn.graph.graph import Graph
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.resolved import ResolvedGraph
-from kptn.runner.api import run
+from kptn.runner.api import plan, resolve_pipeline, run
 
 
 def _make_pipeline(name: str = "default") -> Pipeline:
@@ -170,3 +171,35 @@ def test_run_no_cache_does_not_create_db_file(tmp_path, monkeypatch) -> None:
     pipeline = _make_pipeline("no_db")
     run(pipeline, no_cache=True)
     assert not (tmp_path / ".kptn").exists(), ".kptn/ directory must not be created"
+
+
+def test_resolve_pipeline_returns_resolved_graph_and_state_store() -> None:
+    """Shared plan resolution returns the resolved graph and initialized state store."""
+    pipeline = _make_pipeline("default")
+    mock_settings = MagicMock(db="duckdb", db_path=".kptn/prod.db")
+    mock_config = MagicMock(settings=mock_settings)
+    mock_state_store = MagicMock()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.init_state_store", return_value=mock_state_store) as mock_store:
+        mock_loader.load.return_value = mock_config
+        resolved, state_store = resolve_pipeline(pipeline, Path("/tmp/project"), None)
+
+    assert resolved.pipeline == "default"
+    assert resolved.storage_key == ".kptn/prod.db"
+    assert state_store is mock_state_store
+    mock_store.assert_called_once_with(mock_settings, duckdb_factory=None)
+
+
+def test_plan_uses_shared_resolution() -> None:
+    """runner.api.plan() resolves through the shared helper before rendering."""
+    pipeline = _make_pipeline("default")
+    resolved = ResolvedGraph(graph=pipeline, pipeline="default", storage_key=".kptn/kptn.db")
+    state_store = MagicMock()
+
+    with patch("kptn.runner.api.resolve_pipeline", return_value=(resolved, state_store)) as mock_resolve, \
+         patch("kptn.runner.api._plan") as mock_plan:
+        plan(pipeline, profile="dev")
+
+    mock_resolve.assert_called_once_with(pipeline, Path.cwd(), "dev")
+    mock_plan.assert_called_once_with(resolved, state_store)

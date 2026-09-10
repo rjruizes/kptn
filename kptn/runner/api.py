@@ -12,6 +12,7 @@ from kptn.profiles.resolver import ProfileResolver
 from kptn.runner.executor import execute
 from kptn.runner.plan import plan as _plan
 from kptn.state_store.factory import init_state_store
+from kptn.state_store.protocol import StateStoreBackend
 
 if TYPE_CHECKING:
     import duckdb
@@ -49,6 +50,29 @@ def _gate(resolved: ResolvedGraph) -> ResolvedGraph:
 
 
 _LEGACY_KWARGS = frozenset({"project_dir", "task_names"})
+
+
+def resolve_pipeline(
+    pipeline: Pipeline,
+    project_root: Path,
+    profile: str | None,
+) -> tuple[ResolvedGraph, StateStoreBackend]:
+    config = ProfileLoader.load(project_root / "kptn.yaml")
+
+    if profile is not None:
+        resolved = ProfileResolver(config).compile(pipeline, profile)
+    else:
+        resolved = ResolvedGraph(
+            graph=pipeline,
+            pipeline=pipeline.name,
+            storage_key=config.settings.db_path or ".kptn/kptn.db",
+        )
+
+    resolved = _gate(resolved)
+
+    duckdb_factory, _ = _find_duckdb_factory(pipeline)
+    state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
+    return resolved, state_store
 
 
 def run(
@@ -160,21 +184,5 @@ def plan(
     profile:
         Optional profile name to resolve from ``kptn.yaml``.
     """
-    cwd = Path.cwd()
-    config = ProfileLoader.load(cwd / "kptn.yaml")
-
-    if profile is not None:
-        resolved = ProfileResolver(config).compile(pipeline, profile)
-    else:
-        resolved = ResolvedGraph(
-            graph=pipeline,
-            pipeline=pipeline.name,
-            storage_key=config.settings.db_path or ".kptn/kptn.db",
-        )
-
-    resolved = _gate(resolved)
-
-    duckdb_factory, _ = _find_duckdb_factory(pipeline)
-    state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
-
+    resolved, state_store = resolve_pipeline(pipeline, Path.cwd(), profile)
     _plan(resolved, state_store)
