@@ -3,13 +3,16 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from kptn.graph.nodes import ConfigNode
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.loader import ProfileLoader
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.resolver import ProfileResolver
+from kptn.runner.console import ConsoleEventSink
 from kptn.runner.executor import execute
+from kptn.runner.events import EventEmitter, EventKind, EventSink
 from kptn.runner.plan import plan as _plan
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
@@ -79,6 +82,8 @@ def run(
     pipeline: Pipeline,
     *,
     profile: str | None = None,
+    event_sink: EventSink | None = None,
+    run_id: str | None = None,
     keep_db_open: bool = False,
     no_cache: bool = False,
     force: bool = False,
@@ -92,6 +97,11 @@ def run(
         The pipeline to execute.
     profile:
         Optional profile name to resolve from ``kptn.yaml``.
+    event_sink:
+        Optional structured event sink. When omitted, terminal output is routed
+        through the default console sink to preserve the existing CLI contract.
+    run_id:
+        Optional stable identifier for the emitted run event stream.
     keep_db_open:
         When ``True`` and the pipeline declares ``kptn.config(duckdb=get_engine)``,
         the DuckDB connection is left open after the run and returned to the caller.
@@ -157,17 +167,34 @@ def run(
     else:
         state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
 
-    return execute(
-        resolved,
-        state_store,
-        cwd=cwd,
-        duckdb_factory=duckdb_factory,
-        duckdb_alias=duckdb_alias,
-        keep_db_open=keep_db_open,
-        no_cache=no_cache,
-        force=force,
-        extra_kwargs=kwargs or None,
+    sink = event_sink or ConsoleEventSink()
+    emitter = EventEmitter(
+        run_id or str(uuid4()),
+        resolved.pipeline,
+        profile,
+        sink,
     )
+    emitter.emit(EventKind.RUN_STARTED)
+
+    try:
+        result = execute(
+            resolved,
+            state_store,
+            cwd=cwd,
+            duckdb_factory=duckdb_factory,
+            duckdb_alias=duckdb_alias,
+            keep_db_open=keep_db_open,
+            no_cache=no_cache,
+            force=force,
+            extra_kwargs=kwargs or None,
+            emitter=emitter,
+        )
+    except Exception as exc:
+        emitter.emit(EventKind.RUN_FINISHED, status="failed", error=str(exc))
+        raise
+
+    emitter.emit(EventKind.RUN_FINISHED, status="succeeded")
+    return result
 
 
 def plan(

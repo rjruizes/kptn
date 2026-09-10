@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from kptn.graph.graph import Graph   # avoids circular at runtime
@@ -149,16 +151,36 @@ class _SqlTaskHandle:
             )
 
         from kptn.graph.nodes import SqlTaskNode
+        from kptn.runner.console import ConsoleEventSink
+        from kptn.runner.events import EventEmitter, EventKind
         from kptn.runner.executor import _dispatch_sql_task
-        from kptn.runner.plan import emit_fail, emit_run
 
         node = SqlTaskNode(path=self.__kptn__.path, spec=self.__kptn__, name=self.__name__)
-        emit_run(node.name, timestamp=True)
+        emitter = EventEmitter(str(uuid4()), node.name, None, ConsoleEventSink())
+        started_at = perf_counter()
+        emitter.emit(EventKind.TASK_STARTED, task_name=node.name, mode="sql")
         try:
-            _dispatch_sql_task(node, conn, cwd=Path.cwd())
+            with emitter.task_scope(node.name):
+                _dispatch_sql_task(node, conn, cwd=Path.cwd())
         except Exception as exc:
-            emit_fail(node.name, str(exc), timestamp=True)
+            emitter.emit(
+                EventKind.TASK_FINISHED,
+                task_name=node.name,
+                mode="sql",
+                status="failed",
+                cached=False,
+                duration_seconds=perf_counter() - started_at,
+                error=str(exc),
+            )
             raise
+        emitter.emit(
+            EventKind.TASK_FINISHED,
+            task_name=node.name,
+            mode="sql",
+            status="succeeded",
+            cached=False,
+            duration_seconds=perf_counter() - started_at,
+        )
 
     def __repr__(self) -> str:
         return f"<kptn sql_task '{self.__name__}'>"

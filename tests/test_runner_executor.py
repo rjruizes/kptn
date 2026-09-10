@@ -25,6 +25,7 @@ from kptn.graph.nodes import (
     TaskNode,
 )
 from kptn.profiles.resolved import ResolvedGraph
+from kptn.runner.events import EventEmitter, EventKind, RunEvent
 from kptn.runner.executor import execute, _dispatch_sql_task
 from tests.fakes import FakeStateStore
 
@@ -57,6 +58,14 @@ def _make_resolved(graph: Graph, bypassed_names: frozenset[str] | None = None) -
         storage_key="kptn",
         bypassed_names=bypassed_names or frozenset(),
     )
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def emit(self, event: RunEvent) -> None:
+        self.events.append(event)
 
 
 # ─── _dispatch_sql_task unit tests ───────────────────────────────────────────
@@ -150,6 +159,151 @@ def test_execute_runs_tasks_in_topological_order() -> None:
     execute(resolved, store)
 
     assert call_order == ["a", "b"]
+
+
+def test_execute_emits_task_lifecycle_in_order() -> None:
+    sink = RecordingSink()
+    emitter = EventEmitter("run-1", "default", None, sink)
+
+    def task_a() -> None:
+        pass
+
+    task_a.__name__ = "task_a"
+    node = TaskNode(fn=task_a, spec=TaskSpec(outputs=[]), name="task_a")
+    resolved = _make_resolved(Graph(nodes=[node], edges=[]))
+
+    execute(resolved, FakeStateStore(), emitter=emitter)
+
+    assert [event.kind for event in sink.events] == [
+        EventKind.TASK_STARTED,
+        EventKind.TASK_FINISHED,
+    ]
+    assert [event.sequence for event in sink.events] == [1, 2]
+    assert sink.events[0].payload["mode"] == "python"
+    assert sink.events[1].payload["status"] == "succeeded"
+    assert sink.events[1].payload["cached"] is False
+    assert sink.events[1].payload["duration_seconds"] >= 0
+
+
+def test_execute_emits_task_skipped_event_for_cached_task() -> None:
+    sink = RecordingSink()
+    emitter = EventEmitter("run-1", "default", None, sink)
+    node = _make_task_node("task_a", outputs=["out.csv"])
+    resolved = _make_resolved(Graph(nodes=[node], edges=[]))
+
+    with patch("kptn.runner.executor.is_stale", return_value=(False, "cached")):
+        execute(resolved, FakeStateStore(), emitter=emitter)
+
+    assert [event.kind for event in sink.events] == [EventKind.TASK_SKIPPED]
+    assert sink.events[0].task_name == "task_a"
+    assert sink.events[0].payload == {"mode": "python", "cached": True}
+
+
+def test_execute_emits_failed_task_finished_before_exception_propagates() -> None:
+    sink = RecordingSink()
+    emitter = EventEmitter("run-1", "default", None, sink)
+
+    def task_a() -> None:
+        raise ValueError("boom")
+
+    task_a.__name__ = "task_a"
+    node = TaskNode(fn=task_a, spec=TaskSpec(outputs=[]), name="task_a")
+    resolved = _make_resolved(Graph(nodes=[node], edges=[]))
+
+    with pytest.raises(ValueError, match="boom"):
+        execute(resolved, FakeStateStore(), emitter=emitter)
+
+    assert [event.kind for event in sink.events] == [
+        EventKind.TASK_STARTED,
+        EventKind.TASK_FINISHED,
+    ]
+    assert sink.events[-1].payload["status"] == "failed"
+    assert sink.events[-1].payload["error"] == "boom"
+
+
+def test_execute_emits_map_and_map_item_events() -> None:
+    sink = RecordingSink()
+    emitter = EventEmitter("run-1", "default", None, sink)
+
+    def ctx_task() -> dict[str, list[str]]:
+        return {"states": ["ca", "tx"]}
+
+    seen: list[str] = []
+
+    def process_state(item: str) -> None:
+        seen.append(item)
+
+    ctx_task.__name__ = "ctx"
+    process_state.__name__ = "process_state"
+    process_state.__kptn__ = TaskSpec(outputs=[])
+    ctx_node = TaskNode(fn=ctx_task, spec=TaskSpec(outputs=[]), name="ctx")
+    map_node = MapNode(task=process_state, over="ctx.states", name="process_state")
+    resolved = _make_resolved(Graph(nodes=[ctx_node, map_node], edges=[(ctx_node, map_node)]))
+
+    execute(resolved, FakeStateStore(), no_cache=True, emitter=emitter)
+
+    assert seen == ["ca", "tx"]
+    assert [(event.kind, event.task_name) for event in sink.events] == [
+        (EventKind.TASK_STARTED, "ctx"),
+        (EventKind.TASK_FINISHED, "ctx"),
+        (EventKind.TASK_STARTED, "process_state"),
+        (EventKind.TASK_STARTED, "process_state[ca]"),
+        (EventKind.TASK_FINISHED, "process_state[ca]"),
+        (EventKind.TASK_STARTED, "process_state[tx]"),
+        (EventKind.TASK_FINISHED, "process_state[tx]"),
+    ]
+    assert sink.events[2].payload == {"mode": "map", "count": 2}
+    assert sink.events[3].payload["mode"] == "map_item"
+    assert sink.events[4].payload["status"] == "succeeded"
+
+
+def test_execute_emits_sql_task_events(tmp_path: Path) -> None:
+    sink = RecordingSink()
+    emitter = EventEmitter("run-1", "default", None, sink)
+    sql_file = tmp_path / "query.sql"
+    sql_file.write_text("SELECT 1")
+    node = _make_sql_task_node("query", path=str(sql_file))
+    resolved = _make_resolved(Graph(nodes=[node], edges=[]))
+
+    execute(
+        resolved,
+        FakeStateStore(),
+        duckdb_factory=MagicMock(return_value=MagicMock()),
+        no_cache=True,
+        emitter=emitter,
+    )
+
+    assert [event.kind for event in sink.events] == [
+        EventKind.TASK_STARTED,
+        EventKind.TASK_FINISHED,
+    ]
+    assert sink.events[0].payload["mode"] == "sql"
+    assert sink.events[1].payload["status"] == "succeeded"
+
+
+def test_execute_emits_r_task_log_events() -> None:
+    sink = RecordingSink()
+    emitter = EventEmitter("run-1", "default", None, sink)
+    node_r = _make_r_task_node("my_script", path="analysis.R")
+    resolved = _make_resolved(Graph(nodes=[node_r], edges=[]))
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stderr = "warning\n"
+    mock_result.stdout = "hello\n"
+
+    with patch("kptn.runner.executor.subprocess.run", return_value=mock_result):
+        execute(resolved, FakeStateStore(), no_cache=True, emitter=emitter)
+
+    assert [event.kind for event in sink.events] == [
+        EventKind.TASK_STARTED,
+        EventKind.LOG,
+        EventKind.LOG,
+        EventKind.TASK_FINISHED,
+    ]
+    assert sink.events[1].payload == {"stream": "stdout", "message": "hello\n"}
+    assert sink.events[2].payload == {"stream": "stderr", "message": "warning\n"}
+    assert sink.events[3].payload["status"] == "succeeded"
 
 
 def test_execute_writes_hash_after_task_runs(tmp_path: Path) -> None:

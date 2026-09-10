@@ -5,7 +5,9 @@ import inspect
 import logging
 import subprocess
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable
+from uuid import uuid4
 
 from kptn.graph.nodes import (
     AnyNode,
@@ -22,16 +24,57 @@ from kptn.graph.nodes import (
 from kptn.graph.topo import topo_sort
 from kptn.graph.config import invoke_config
 from kptn.profiles.resolved import ResolvedGraph
-from kptn.state_store.protocol import StateStoreBackend
 from kptn.change_detector.hasher import hash_file, hash_sqlite_table
 from kptn.change_detector.detector import is_stale
 from kptn.exceptions import HashError, TaskError
-from kptn.runner.plan import emit_map, emit_fail, emit_skip, emit_run
+from kptn.runner.console import ConsoleEventSink
+from kptn.runner.events import EventEmitter, EventKind
 from kptn.runner.checkpoint import get_db_path, save_checkpoint, find_restore_candidate, restore_checkpoint
+from kptn.state_store.protocol import StateStoreBackend
 
 logger = logging.getLogger(__name__)
 
 _NON_EXEC_NODES = (ParallelNode, StageNode, NoopNode, PipelineNode)
+
+
+def _default_emitter(resolved: ResolvedGraph) -> EventEmitter:
+    return EventEmitter(str(uuid4()), resolved.pipeline, None, ConsoleEventSink())
+
+
+def _emit_task_started(
+    emitter: EventEmitter,
+    task_name: str,
+    *,
+    mode: str,
+    **payload: bool | float | int | str | None,
+) -> float:
+    emitter.emit(EventKind.TASK_STARTED, task_name=task_name, mode=mode, **payload)
+    return perf_counter()
+
+
+def _emit_task_skipped(emitter: EventEmitter, task_name: str, *, mode: str) -> None:
+    emitter.emit(EventKind.TASK_SKIPPED, task_name=task_name, mode=mode, cached=True)
+
+
+def _emit_task_finished(
+    emitter: EventEmitter,
+    task_name: str,
+    *,
+    mode: str,
+    status: str,
+    started_at: float,
+    cached: bool = False,
+    error: str | None = None,
+) -> None:
+    payload: dict[str, bool | float | str] = {
+        "mode": mode,
+        "status": status,
+        "duration_seconds": perf_counter() - started_at,
+        "cached": cached,
+    }
+    if error is not None:
+        payload["error"] = error
+    emitter.emit(EventKind.TASK_FINISHED, task_name=task_name, **payload)
 
 
 def _filter_kwargs(fn: Callable, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -63,13 +106,22 @@ def _dispatch_task(
     return node.fn(**kwargs)
 
 
-def _dispatch_r_task(node: RTaskNode, cwd: Path) -> None:
+def _dispatch_r_task(
+    node: RTaskNode,
+    cwd: Path,
+    emitter: EventEmitter | None = None,
+) -> None:
     result = subprocess.run(
         ["Rscript", node.path],
         capture_output=True,
         text=True,
         cwd=cwd,
     )
+    if emitter is not None:
+        if result.stdout:
+            emitter.emit(EventKind.LOG, stream="stdout", message=result.stdout)
+        if result.stderr:
+            emitter.emit(EventKind.LOG, stream="stderr", message=result.stderr)
     if result.returncode != 0:
         output = "\n".join(filter(None, [result.stderr, result.stdout]))
         msg = f"Rscript {node.path!r} exited with code {result.returncode}\n{output}"
@@ -213,6 +265,7 @@ def execute(
     no_cache: bool = False,
     force: bool = False,
     extra_kwargs: "dict[str, Any] | None" = None,
+    emitter: EventEmitter | None = None,
 ) -> "Any | None":
     """Execute the resolved pipeline graph.
 
@@ -239,6 +292,9 @@ def execute(
         extra_kwargs:
             Additional key/value pairs merged into ``config_kwargs`` before execution.
             Caller-supplied values take precedence over ConfigNode-resolved values.
+        emitter:
+            Optional structured event emitter. When omitted, execution emits the
+            existing console output through the default console sink.
 
     Returns the DuckDB connection when ``keep_db_open=True`` and a factory was
     provided; ``None`` otherwise.
@@ -246,6 +302,7 @@ def execute(
     if cwd is None:
         cwd = Path.cwd()
 
+    emitter = emitter or _default_emitter(resolved)
     _duckdb_alias = duckdb_alias or "duckdb"
 
     ordered: list[AnyNode] = topo_sort(resolved.graph)
@@ -301,7 +358,12 @@ def execute(
         # MapNode — resolve collection and dispatch per-item
         if isinstance(node, MapNode):
             collection = _resolve_collection(node.over, runtime_ctx)
-            emit_map(node.name, len(collection))
+            emitter.emit(
+                EventKind.TASK_STARTED,
+                task_name=node.name,
+                mode="map",
+                count=len(collection),
+            )
             any_item_ran_stale = False
             for item in collection:
                 item_task_name = f"{node.name}[{item}]"
@@ -316,10 +378,18 @@ def execute(
                         except HashError:
                             current_hash = None  # treat as stale
                         if current_hash is not None and current_hash == stored_hash:
-                            emit_skip(item_task_name, timestamp=True)
+                            _emit_task_skipped(
+                                emitter,
+                                item_task_name,
+                                mode="map_item",
+                            )
                             continue
                     item_stale = True
-                emit_run(item_task_name, timestamp=True)
+                started_at = _emit_task_started(
+                    emitter,
+                    item_task_name,
+                    mode="map_item",
+                )
                 if item_stale:
                     any_item_ran_stale = True
                 kwargs = _filter_kwargs(node.task, {
@@ -327,15 +397,30 @@ def execute(
                     **resolved.profile_args.get(node.name, {}),
                 })
                 try:
-                    result = node.task(item, **kwargs)
+                    with emitter.task_scope(item_task_name):
+                        node.task(item, **kwargs)
                 except TaskError as exc:
-                    emit_fail(item_task_name, str(exc), timestamp=True)
+                    _emit_task_finished(
+                        emitter,
+                        item_task_name,
+                        mode="map_item",
+                        status="failed",
+                        started_at=started_at,
+                        error=str(exc),
+                    )
                     raise
                 except Exception as exc:
                     task_err = TaskError(
                         f"MapNode item '{item_task_name}' raised an error: {exc}"
                     )
-                    emit_fail(item_task_name, str(task_err), timestamp=True)
+                    _emit_task_finished(
+                        emitter,
+                        item_task_name,
+                        mode="map_item",
+                        status="failed",
+                        started_at=started_at,
+                        error=str(task_err),
+                    )
                     raise task_err from exc
                 if not no_cache:
                     try:
@@ -350,6 +435,13 @@ def execute(
                         state_store.write_hash(
                             resolved.storage_key, resolved.pipeline, item_task_name, hash_
                         )
+                _emit_task_finished(
+                    emitter,
+                    item_task_name,
+                    mode="map_item",
+                    status="succeeded",
+                    started_at=started_at,
+                )
             if any_item_ran_stale:
                 dirty_names.add(node.name)
             continue
@@ -365,24 +457,39 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    emit_skip(node.name, timestamp=True)
+                    _emit_task_skipped(emitter, node.name, mode="python")
                     continue
                 actually_stale = stale
-            emit_run(node.name, timestamp=True)
+            started_at = _emit_task_started(emitter, node.name, mode="python")
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             profile_kwargs = resolved.profile_args.get(node.name, {})
             try:
-                result = _dispatch_task(node, config_kwargs, profile_kwargs)
+                with emitter.task_scope(node.name):
+                    result = _dispatch_task(node, config_kwargs, profile_kwargs)
             except Exception as exc:
-                emit_fail(node.name, str(exc), timestamp=True)
+                _emit_task_finished(
+                    emitter,
+                    node.name,
+                    mode="python",
+                    status="failed",
+                    started_at=started_at,
+                    error=str(exc),
+                )
                 raise
             runtime_ctx[node.name] = result
             if not no_cache:
                 try:
                     hash_ = _compute_hash(node)
                 except HashError as exc:
-                    emit_fail(node.name, str(exc), timestamp=True)
+                    _emit_task_finished(
+                        emitter,
+                        node.name,
+                        mode="python",
+                        status="failed",
+                        started_at=started_at,
+                        error=str(exc),
+                    )
                     raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
                 if hash_ is not None:
                     state_store.write_hash(
@@ -393,6 +500,13 @@ def execute(
                     db_path = get_db_path(conn)
                     if db_path is not None:
                         save_checkpoint(conn, db_path, node.name)
+            _emit_task_finished(
+                emitter,
+                node.name,
+                mode="python",
+                status="succeeded",
+                started_at=started_at,
+            )
             continue
 
         # RTaskNode
@@ -406,22 +520,37 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    emit_skip(node.name, timestamp=True)
+                    _emit_task_skipped(emitter, node.name, mode="r")
                     continue
                 actually_stale = stale
-            emit_run(node.name, timestamp=True)
+            started_at = _emit_task_started(emitter, node.name, mode="r")
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             try:
-                _dispatch_r_task(node, cwd)
+                with emitter.task_scope(node.name):
+                    _dispatch_r_task(node, cwd, emitter=emitter)
             except TaskError as exc:
-                emit_fail(node.name, str(exc), timestamp=True)
+                _emit_task_finished(
+                    emitter,
+                    node.name,
+                    mode="r",
+                    status="failed",
+                    started_at=started_at,
+                    error=str(exc),
+                )
                 raise
             if not no_cache:
                 try:
                     hash_ = _compute_hash(node)
                 except HashError as exc:
-                    emit_fail(node.name, str(exc), timestamp=True)
+                    _emit_task_finished(
+                        emitter,
+                        node.name,
+                        mode="r",
+                        status="failed",
+                        started_at=started_at,
+                        error=str(exc),
+                    )
                     raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
                 if hash_ is not None:
                     state_store.write_hash(
@@ -432,6 +561,13 @@ def execute(
                     db_path = get_db_path(conn)
                     if db_path is not None:
                         save_checkpoint(conn, db_path, node.name)
+            _emit_task_finished(
+                emitter,
+                node.name,
+                mode="r",
+                status="succeeded",
+                started_at=started_at,
+            )
             continue
 
         # SqlTaskNode — dispatch SQL file against DuckDB connection
@@ -453,22 +589,37 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    emit_skip(node.name, timestamp=True)
+                    _emit_task_skipped(emitter, node.name, mode="sql")
                     continue
                 actually_stale = stale
-            emit_run(node.name, timestamp=True)
+            started_at = _emit_task_started(emitter, node.name, mode="sql")
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             try:
-                _dispatch_sql_task(node, conn, cwd)
+                with emitter.task_scope(node.name):
+                    _dispatch_sql_task(node, conn, cwd)
             except TaskError as exc:
-                emit_fail(node.name, str(exc), timestamp=True)
+                _emit_task_finished(
+                    emitter,
+                    node.name,
+                    mode="sql",
+                    status="failed",
+                    started_at=started_at,
+                    error=str(exc),
+                )
                 raise
             if not no_cache:
                 try:
                     hash_ = _compute_hash(node)
                 except HashError as exc:
-                    emit_fail(node.name, str(exc), timestamp=True)
+                    _emit_task_finished(
+                        emitter,
+                        node.name,
+                        mode="sql",
+                        status="failed",
+                        started_at=started_at,
+                        error=str(exc),
+                    )
                     raise TaskError(f"Hash computation failed for '{node.name}': {exc}") from exc
                 if hash_ is not None:
                     state_store.write_hash(
@@ -479,6 +630,13 @@ def execute(
                     db_path = get_db_path(conn)
                     if db_path is not None:
                         save_checkpoint(conn, db_path, node.name)
+            _emit_task_finished(
+                emitter,
+                node.name,
+                mode="sql",
+                status="succeeded",
+                started_at=started_at,
+            )
             continue
 
     # Post-run: manage duckdb connection lifecycle
