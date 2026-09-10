@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -317,3 +319,58 @@ def test_busy_timeout_is_five_seconds(tmp_path: Path) -> None:
         assert timeout_ms == 5000
     finally:
         conn.close()
+
+
+# --- payload types from the real event contract -------------------------- #
+
+
+def test_append_event_accepts_mappingproxy_payload(tmp_path: Path) -> None:
+    # kptn/runner/events.py builds RunEvent.payload as
+    # MappingProxyType(dict(payload)) -- Task 5's worker sink will hand
+    # append_event exactly this object, not a plain dict.
+    store = RunStore(tmp_path / "ui.db")
+    run = store.create_run(request(tmp_path))
+    store.append_event(run.run_id, "run_started")
+
+    proxy_payload = MappingProxyType(
+        {"message": "disk almost full", "category": "disk"}
+    )
+    event = store.append_event(
+        run.run_id,
+        "warning",
+        task_name="load",
+        payload=proxy_payload,
+    )
+    assert event.payload == {"message": "disk almost full", "category": "disk"}
+
+    [stored] = [e for e in store.events_after(run.run_id, 0) if e.kind == "warning"]
+    assert stored.payload == {"message": "disk almost full", "category": "disk"}
+
+
+# --- concurrent first-creation of a brand-new database -------------------- #
+
+
+def test_concurrent_first_creation_does_not_raise(tmp_path: Path) -> None:
+    db_path = tmp_path / ".kptn" / "ui.db"
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+
+    def _create() -> None:
+        try:
+            barrier.wait(timeout=5)
+            RunStore(db_path)
+        except BaseException as exc:  # noqa: BLE001 - capture for the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_create) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert errors == []
+
+    # The schema is usable afterwards regardless of which thread "won".
+    store = RunStore(db_path)
+    run = store.create_run(request(tmp_path))
+    assert store.get_run(run.run_id) == run

@@ -119,12 +119,12 @@ _TIMESTAMP_RE = re.compile(
 def _normalize_warning_text(text: str) -> str:
     """Strip ANSI presentation codes and timestamps for fingerprinting.
 
-    Nothing else about the text is normalized -- whitespace, punctuation, and
-    wording differences still produce different fingerprints.
+    Nothing else about the text is normalized -- leading/trailing whitespace,
+    punctuation, and wording differences still produce different
+    fingerprints.
     """
     without_ansi = _ANSI_RE.sub("", text)
-    without_timestamps = _TIMESTAMP_RE.sub("<TS>", without_ansi)
-    return without_timestamps.strip()
+    return _TIMESTAMP_RE.sub("<TS>", without_ansi)
 
 
 def _dt_to_text(value: datetime | None) -> str | None:
@@ -171,7 +171,27 @@ class RunStore:
         if row is not None:
             return
         sql = _INITIAL_MIGRATION.read_text()
-        conn.executescript(sql)
+        # executescript() commits any pending transaction before it starts,
+        # then runs the given statements in sequence. To make the
+        # check-then-create atomic across processes/connections racing to
+        # initialize a brand-new database, wrap the migration itself in an
+        # explicit BEGIN IMMEDIATE/COMMIT inside the same script: the first
+        # connection to acquire the write lock creates the schema and
+        # commits; a connection that was blocked waiting for the lock then
+        # re-runs the same script against an already-migrated database and
+        # deterministically fails on "table schema_version already exists",
+        # which we treat as "someone else already did this" rather than an
+        # error.
+        script = f"BEGIN IMMEDIATE;\n{sql}\nCOMMIT;\n"
+        try:
+            conn.executescript(script)
+        except sqlite3.OperationalError as exc:
+            if "already exists" not in str(exc):
+                raise
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
 
     # -- row <-> dataclass conversion -----------------------------------------
 
@@ -373,7 +393,7 @@ class RunStore:
                     _dt_to_text(event_timestamp),
                     kind,
                     task_name,
-                    json.dumps(payload),
+                    json.dumps(dict(payload)),
                     log_start,
                     log_end,
                 ),
