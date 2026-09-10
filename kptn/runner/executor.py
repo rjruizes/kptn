@@ -302,7 +302,8 @@ def execute(
     if cwd is None:
         cwd = Path.cwd()
 
-    emitter = emitter or _default_emitter(resolved)
+    if emitter is None:
+        emitter = _default_emitter(resolved)
     _duckdb_alias = duckdb_alias or "duckdb"
 
     ordered: list[AnyNode] = topo_sort(resolved.graph)

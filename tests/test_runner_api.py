@@ -28,6 +28,11 @@ class RecordingSink:
         self.events.append(event)
 
 
+class FalsySink(RecordingSink):
+    def __bool__(self) -> bool:
+        return False
+
+
 def test_run_no_profile_uses_default_storage_key() -> None:
     """AC-1: minimal invocation uses default SQLite storage key."""
     pipeline = _make_pipeline("default")
@@ -254,6 +259,31 @@ def test_run_uses_supplied_run_id_without_generating_uuid() -> None:
 
     mock_uuid.assert_not_called()
     assert sink.events[0].run_id == "run-123"
+
+
+def test_run_preserves_falsy_supplied_sink_and_run_id() -> None:
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    sink = FalsySink()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute") as mock_exec, \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()), \
+         patch("kptn.runner.api.ConsoleEventSink") as mock_console, \
+         patch("kptn.runner.api.uuid4") as mock_uuid:
+        mock_loader.load.return_value = mock_config
+        run(pipeline, event_sink=sink, run_id="")
+
+    emitter = mock_exec.call_args.kwargs["emitter"]
+    assert emitter._sink is sink
+    assert emitter._run_id == ""
+    mock_console.assert_not_called()
+    mock_uuid.assert_not_called()
+    assert [event.kind for event in sink.events] == [
+        EventKind.RUN_STARTED,
+        EventKind.RUN_FINISHED,
+    ]
+    assert [event.run_id for event in sink.events] == ["", ""]
 
 
 def test_resolve_pipeline_returns_resolved_graph_and_state_store() -> None:

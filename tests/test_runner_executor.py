@@ -68,6 +68,11 @@ class RecordingSink:
         self.events.append(event)
 
 
+class FalsyEmitter(EventEmitter):
+    def __bool__(self) -> bool:
+        return False
+
+
 # ─── _dispatch_sql_task unit tests ───────────────────────────────────────────
 
 
@@ -304,6 +309,22 @@ def test_execute_emits_r_task_log_events() -> None:
     assert sink.events[1].payload == {"stream": "stdout", "message": "hello\n"}
     assert sink.events[2].payload == {"stream": "stderr", "message": "warning\n"}
     assert sink.events[3].payload["status"] == "succeeded"
+
+
+def test_execute_uses_falsy_supplied_emitter_instead_of_default() -> None:
+    sink = RecordingSink()
+    emitter = FalsyEmitter("run-1", "default", None, sink)
+    node = _make_task_node("task_a")
+    resolved = _make_resolved(Graph(nodes=[node], edges=[]))
+
+    with patch("kptn.runner.executor._default_emitter") as mock_default:
+        execute(resolved, FakeStateStore(), no_cache=True, emitter=emitter)
+
+    mock_default.assert_not_called()
+    assert [event.kind for event in sink.events] == [
+        EventKind.TASK_STARTED,
+        EventKind.TASK_FINISHED,
+    ]
 
 
 def test_execute_writes_hash_after_task_runs(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import StringIO
+from threading import Event, Thread
 
 from kptn.runner.console import ConsoleEventSink
 from kptn.runner.events import EventEmitter, EventKind, RunEvent, current_task_name
@@ -13,6 +14,21 @@ class RecordingSink:
 
     def emit(self, event: RunEvent) -> None:
         self.events.append(event)
+
+
+class ReentrantSink:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+        self.emitter: EventEmitter | None = None
+        self._triggered = False
+
+    def emit(self, event: RunEvent) -> None:
+        self.events.append(event)
+        if self._triggered:
+            return
+        self._triggered = True
+        assert self.emitter is not None
+        self.emitter.emit(EventKind.LOG, message="nested")
 
 
 def _event(
@@ -47,6 +63,33 @@ def test_event_emitter_tracks_sequence_and_task_scope() -> None:
     assert [event.sequence for event in sink.events] == [1]
     assert sink.events[0].task_name == "task_a"
     assert sink.events[0].payload == {"message": "careful"}
+
+
+def test_event_emitter_reentrant_sink_does_not_deadlock_and_preserves_sequence() -> None:
+    sink = ReentrantSink()
+    emitter = EventEmitter("run-1", "default", None, sink)
+    sink.emitter = emitter
+    finished = Event()
+    failures: list[BaseException] = []
+
+    def emit_outer_event() -> None:
+        try:
+            emitter.emit(EventKind.WARNING, message="outer")
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    thread = Thread(target=emit_outer_event, daemon=True)
+    thread.start()
+
+    assert finished.wait(1), "re-entrant sink deadlocked while EventEmitter.emit held the lock"
+    thread.join(timeout=0.1)
+    assert failures == []
+    assert [event.kind for event in sink.events] == [EventKind.WARNING, EventKind.LOG]
+    assert [event.sequence for event in sink.events] == [1, 2]
+    assert sink.events[0].payload == {"message": "outer"}
+    assert sink.events[1].payload == {"message": "nested"}
 
 
 def test_console_event_sink_preserves_executor_cli_contract() -> None:

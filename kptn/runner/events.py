@@ -82,18 +82,17 @@ class EventEmitter:
         resolved_task_name = task_name if task_name is not None else current_task_name()
         with self._lock:
             self._sequence += 1
-            self._sink.emit(
-                RunEvent(
-                    run_id=self._run_id,
-                    sequence=self._sequence,
-                    timestamp=datetime.now(timezone.utc),
-                    kind=kind,
-                    pipeline=self._pipeline,
-                    profile=self._profile,
-                    task_name=resolved_task_name,
-                    payload=MappingProxyType(dict(payload)),
-                )
+            event = RunEvent(
+                run_id=self._run_id,
+                sequence=self._sequence,
+                timestamp=datetime.now(timezone.utc),
+                kind=kind,
+                pipeline=self._pipeline,
+                profile=self._profile,
+                task_name=resolved_task_name,
+                payload=MappingProxyType(dict(payload)),
             )
+        self._sink.emit(event)
 
     def task_scope(self, task_name: str) -> Iterator[None]:
         return task_scope(task_name)

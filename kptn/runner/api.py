@@ -167,9 +167,9 @@ def run(
     else:
         state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
 
-    sink = event_sink or ConsoleEventSink()
+    sink = event_sink if event_sink is not None else ConsoleEventSink()
     emitter = EventEmitter(
-        run_id or str(uuid4()),
+        run_id if run_id is not None else str(uuid4()),
         resolved.pipeline,
         profile,
         sink,
