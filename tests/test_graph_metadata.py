@@ -8,7 +8,14 @@ unchanged.
 from __future__ import annotations
 
 import kptn
-from kptn.graph.decorators import RTaskSpec, SqlTaskSpec, TaskSpec, r_task, sql_task, task
+from kptn.graph.decorators import (
+    RTaskSpec,
+    SqlTaskSpec,
+    TaskSpec,
+    r_task,
+    sql_task,
+    task,
+)
 from kptn.graph.nodes import PipelineNode, StageNode
 
 

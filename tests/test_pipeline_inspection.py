@@ -149,7 +149,9 @@ def test_inspection_without_profile_inspects_raw_graph(tmp_path: Path) -> None:
     }
 
 
-def test_inspection_stage_and_pipeline_sentinels_carry_no_data_inputs(tmp_path: Path) -> None:
+def test_inspection_stage_and_pipeline_sentinels_carry_no_data_inputs(
+    tmp_path: Path,
+) -> None:
     pipeline = _build_dexcom_like_pipeline()
     config = _dexcom_test_config()
 
@@ -174,3 +176,44 @@ def test_resolve_docs_path_accepts_relative_path_within_root(tmp_path: Path) -> 
     (tmp_path / "docs" / "notes.md").write_text("hello")
     resolved = resolve_docs_path(tmp_path, "docs/notes.md")
     assert resolved == (tmp_path / "docs" / "notes.md").resolve()
+
+
+def test_inspection_reads_sql_task_and_r_task_declared_metadata(tmp_path: Path) -> None:
+    """Regression: SqlTaskNode/RTaskNode carry their spec as node.spec, not
+    node.__kptn__ (that attribute only exists on the pre-wrap handles). This
+    must resolve description/docs/inputs/outputs for sql_task and r_task the
+    same as it does for @kptn.task.
+    """
+    sql_handle = kptn.sql_task(
+        "queries/clean.sql",
+        outputs=["duckdb://main.cleaned"],
+        inputs=["duckdb://raw.source"],
+        description="Clean raw rows in SQL.",
+        docs="docs/source.md#sql-clean",
+    )
+    r_handle = kptn.r_task(
+        "scripts/analyze.R",
+        outputs=["duckdb://main.analyzed"],
+        inputs=["duckdb://main.cleaned"],
+        description="Analyze rows in R.",
+        docs="docs/source.md#r-analyze",
+    )
+
+    pipeline = kptn.Pipeline("sql_and_r", sql_handle >> r_handle)
+    config = KptnConfig(profiles={"default": ProfileSpec()})
+
+    inspection = inspect_pipeline(pipeline, config, "default", tmp_path)
+
+    by_name = {item.name: item for item in inspection.items}
+
+    sql_item = by_name["clean"]
+    assert sql_item.description == "Clean raw rows in SQL."
+    assert sql_item.docs_anchor == "sql-clean"
+    assert sql_item.inputs == ("duckdb://raw.source",)
+    assert sql_item.outputs == ("duckdb://main.cleaned",)
+
+    r_item = by_name["analyze"]
+    assert r_item.description == "Analyze rows in R."
+    assert r_item.docs_anchor == "r-analyze"
+    assert r_item.inputs == ("duckdb://main.cleaned",)
+    assert r_item.outputs == ("duckdb://main.analyzed",)

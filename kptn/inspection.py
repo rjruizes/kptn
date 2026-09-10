@@ -104,23 +104,22 @@ def _split_docs(docs: str | None, project_root: Path) -> tuple[Path | None, str 
     return docs_path, docs_anchor
 
 
-def _underlying_task(node: AnyNode) -> Any | None:
-    """Return the __kptn__-tagged callable/handle backing a node, if any."""
-    if isinstance(node, MapNode):
-        return node.task
-    if isinstance(node, TaskNode):
-        return node.fn
-    if isinstance(node, (SqlTaskNode, RTaskNode)):
-        return node
-    return None
-
-
 def _spec_for(node: AnyNode) -> Any | None:
-    """Return the TaskSpec/SqlTaskSpec/RTaskSpec backing a node, if any."""
-    task = _underlying_task(node)
-    if task is None:
-        return None
-    return getattr(task, "__kptn__", None)
+    """Return the TaskSpec/SqlTaskSpec/RTaskSpec backing a node, if any.
+
+    ``TaskNode``/``SqlTaskNode``/``RTaskNode`` all carry their spec directly
+    as ``node.spec`` (the same attribute ``kptn/runner/executor.py`` reads,
+    e.g. ``node.spec.outputs``) — the pre-wrap ``__kptn__`` attribute only
+    exists on the decorator-produced handles (``_KptnCallable``,
+    ``_SqlTaskHandle``, ``_RTaskHandle``), not on the node objects
+    themselves. ``MapNode`` is the exception: it stores the original
+    __kptn__-tagged callable in ``node.task``.
+    """
+    if isinstance(node, (TaskNode, SqlTaskNode, RTaskNode)):
+        return node.spec
+    if isinstance(node, MapNode):
+        return getattr(node.task, "__kptn__", None)
+    return None
 
 
 def _stripped_docstring(fn: Any) -> str | None:
