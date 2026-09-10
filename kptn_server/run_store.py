@@ -419,6 +419,83 @@ class RunStore:
             log_end=log_end,
         )
 
+    def record_worker_start(
+        self,
+        run_id: str,
+        *,
+        pid: int,
+        started_at: float,
+        timestamp: datetime | None = None,
+    ) -> RunRecord:
+        """Record the identity of the process executing *run_id*.
+
+        ``started_at`` is a wall-clock epoch timestamp for the worker process;
+        together with ``pid`` it lets a supervisor tell a live worker from a
+        recycled PID. Also seeds ``heartbeat_at`` so a freshly spawned worker
+        is never mistaken for a stale one.
+        """
+        beat = timestamp or datetime.now(timezone.utc)
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                conn.execute("ROLLBACK")
+                raise RunNotFoundError(f"no such run: {run_id}")
+            if row["status"] in TERMINAL_STATUSES:
+                conn.execute("ROLLBACK")
+                raise RunStateError(
+                    f"run {run_id} is already finished ({row['status']!r})"
+                )
+            conn.execute(
+                """
+                UPDATE runs
+                SET worker_pid = ?, worker_started_at = ?, heartbeat_at = ?
+                WHERE run_id = ?
+                """,
+                (pid, started_at, _dt_to_text(beat), run_id),
+            )
+            conn.execute("COMMIT")
+            row = conn.execute(
+                "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        except BaseException:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
+        return self._row_to_run(row)
+
+    def heartbeat(self, run_id: str, *, timestamp: datetime | None = None) -> bool:
+        """Refresh ``heartbeat_at`` for a still-running run.
+
+        Returns ``True`` when the heartbeat landed and ``False`` when the run
+        has already reached a terminal status -- a race a shutting-down worker
+        can lose harmlessly, so it is not an error.
+        """
+        beat = timestamp or datetime.now(timezone.utc)
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise RunNotFoundError(f"no such run: {run_id}")
+            if row["status"] in TERMINAL_STATUSES:
+                return False
+            conn.execute(
+                "UPDATE runs SET heartbeat_at = ? WHERE run_id = ?",
+                (_dt_to_text(beat), run_id),
+            )
+        finally:
+            conn.close()
+        return True
+
     def request_stop(self, run_id: str) -> RunRecord:
         conn = self._connect()
         try:

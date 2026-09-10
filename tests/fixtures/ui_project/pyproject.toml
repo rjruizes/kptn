@@ -1,0 +1,6 @@
+[project]
+name = "ui-fixture-project"
+version = "0.0.0"
+
+[tool.kptn]
+pipeline = "ui_pipeline"
