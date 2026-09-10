@@ -1,0 +1,26 @@
+{#
+  A run's current state, as a replaceable fragment.
+
+  Rendered in three places: on the run page, as the body of a 409 when the
+  project is already busy, and as the ``run_status`` SSE frame that closes a
+  stream. It therefore takes only ``run`` and ``is_terminal`` -- never the
+  request -- so it can be rendered straight from Python.
+
+  ``is_terminal`` comes from the run's *status*. It is never derived from the
+  event stream: a run the supervisor found interrupted has no finish event.
+#}
+<div class="run-status" id="run-status"
+     data-run-id="{{ run.run_id }}"
+     data-status="{{ run.status }}"
+     data-terminal="{{ 'true' if is_terminal else 'false' }}">
+  {% if message %}<p class="run-status__message">{{ message }}</p>{% endif %}
+  <span class="status status--{{ run.status }}" data-role="status">{{ run.status }}</span>
+  <a class="run-status__link" href="/runs/{{ run.run_id }}"><code>{{ run.run_id }}</code></a>
+  {% if run.profile %}<span class="run-status__profile">profile <code>{{ run.profile }}</code></span>{% endif %}
+  {% if run.current_task and not is_terminal %}
+  <span class="run-status__task">task <code>{{ run.current_task }}</code></span>
+  {% endif %}
+  {% if run.exit_code is not none %}
+  <span class="run-status__exit">exit <code>{{ run.exit_code }}</code></span>
+  {% endif %}
+</div>

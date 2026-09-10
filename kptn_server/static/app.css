@@ -249,3 +249,117 @@ button:disabled {
 .status--stop_requested {
   color: var(--warning);
 }
+
+/* -- the run console ---------------------------------------------------- */
+
+.run-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.run-status__message {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--warning);
+}
+
+.console__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.console__bar h2 {
+  margin: 0;
+}
+
+.console__counters {
+  display: flex;
+  gap: 12px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.console__follow {
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+/* The console is the one scrolling region in the UI: a long run must not turn
+ * the whole page into a mile of output. */
+.console__events {
+  max-height: 60vh;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.event {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.event:last-child {
+  border-bottom: none;
+}
+
+.event__seq,
+.event__clock {
+  color: var(--ink-muted);
+}
+
+.event__kind {
+  font-weight: 600;
+}
+
+.event__task {
+  color: var(--accent);
+}
+
+.event__text {
+  flex: 1 1 100%;
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.event--warning .event__kind,
+.event--stderr .event__kind {
+  color: var(--warning);
+}
+
+.event--run_finished .event__kind,
+.event--task_finished .event__kind {
+  color: var(--ok);
+}
+
+.notice--error {
+  border-left: 3px solid var(--danger);
+  padding-left: 12px;
+}
+
+.notice__title {
+  margin: 0 0 4px;
+  color: var(--danger);
+}
+
+.notice__detail {
+  margin: 0;
+  white-space: pre-wrap;
+}

@@ -1,0 +1,38 @@
+{#
+  One run's page.
+
+  It owns a ``run-form`` of its own so the base page's profile selector (which
+  carries ``form="run-form"``) keeps working here: from a finished run, the
+  obvious next action is to run it again.
+#}
+{% extends "base.html" %}
+
+{% block title %}{{ run.status }} - {{ project.pipeline_name }} - kptn{% endblock %}
+
+{% block profile_options %}
+<option value="" {% if not run.profile %}selected{% endif %}>(no profile)</option>
+{% for profile in project.profiles %}
+<option value="{{ profile }}" {% if profile == run.profile %}selected{% endif %}>{{ profile }}</option>
+{% endfor %}
+{% endblock %}
+
+{% block content %}
+<section class="panel" id="run-header">
+  <h2>Run</h2>
+  {% include "_run_status.html" %}
+  <dl class="project-facts">
+    <dt>Started</dt>
+    <dd>{{ run.started_at or run.created_at }}</dd>
+    <dt>Finished</dt>
+    <dd>{% if run.finished_at %}{{ run.finished_at }}{% else %}<span class="muted">still running</span>{% endif %}</dd>
+    <dt>Log</dt>
+    <dd><code>{{ run.log_path }}</code></dd>
+  </dl>
+
+  <form id="run-form" method="post" action="/runs">
+    <button type="submit" class="button button--primary">Run again</button>
+  </form>
+</section>
+
+{% include "_console.html" %}
+{% endblock %}

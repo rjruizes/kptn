@@ -16,6 +16,8 @@ from __future__ import annotations
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import HTMLResponse
 
+from kptn_server.routes import runs
+
 router = APIRouter()
 
 
@@ -40,6 +42,7 @@ def index(request: Request) -> HTMLResponse:
 def register_routers(app: FastAPI) -> None:
     """Attach every UI router to *app*."""
     app.include_router(router)
+    app.include_router(runs.router)
 
 
 __all__ = ["register_routers", "router"]
