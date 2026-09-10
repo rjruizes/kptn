@@ -63,6 +63,7 @@ from kptn_server.run_store import (
     STATUS_FAILED,
     TERMINAL_STATUSES,
     ActiveRunError,
+    RunRecord,
     RunRequest,
     RunStore,
     StoredEvent,
@@ -233,7 +234,7 @@ def _event_frame(payload: Mapping[str, Any], kind: str, sequence: int) -> str:
     return f"id: {sequence}\nevent: {kind}\ndata: {json.dumps(payload)}\n\n"
 
 
-def _status_payload(templates: Jinja2Templates, record) -> dict[str, Any]:
+def _status_payload(templates: Jinja2Templates, record: RunRecord) -> dict[str, Any]:
     return {
         "run_id": record.run_id,
         "status": record.status,
@@ -246,7 +247,7 @@ def _status_payload(templates: Jinja2Templates, record) -> dict[str, Any]:
     }
 
 
-def _status_frame(templates: Jinja2Templates, record) -> str:
+def _status_frame(templates: Jinja2Templates, record: RunRecord) -> str:
     # No ``id:`` field on purpose: this frame is not a stored event, and
     # letting it become the client's ``Last-Event-ID`` would corrupt the
     # resume cursor.
@@ -265,6 +266,20 @@ async def start_run(request: Request):
     project = request.app.state.project
     store: RunStore = request.app.state.store
     manager = request.app.state.processes
+
+    if not _is_form_encoded(request):
+        # No body, or a body this route cannot parse. Falling through would
+        # read "no profile" out of nothing and *start a pipeline* for a
+        # request that never asked for one.
+        return _error_response(
+            request,
+            status_code=415,
+            title="Unsupported request body",
+            detail=(
+                "POST /runs takes an application/x-www-form-urlencoded body "
+                f"with a 'profile' field; got {_media_type(request)!r}."
+            ),
+        )
 
     profile = await _submitted_profile(request) or None
 
@@ -300,26 +315,33 @@ async def start_run(request: Request):
                 title="Another run just finished",
                 detail="The project was busy a moment ago. Try again.",
             )
-        return HTMLResponse(
-            request.app.state.templates.get_template("_run_status.html").render(
-                run=active,
-                is_terminal=active.status in TERMINAL_STATUSES,
-                message=(
-                    f"This project already has an active run ({active.run_id}). "
-                    "Stop it before starting another."
-                ),
-            ),
+        # Through _error_response like every other error, so a plain form
+        # post -- which is what every form in this UI is -- gets the page
+        # shell rather than an orphan <div>. Nothing here is wired to htmx.
+        return _error_response(
+            request,
             status_code=409,
+            title="This project already has an active run",
+            detail=(
+                "Only one run per project at a time. Stop the active run "
+                "before starting another."
+            ),
+            run=active,
         )
 
+    # Nothing else will ever finish a run whose launch did not take: there
+    # is no worker to report, and reconcile() only settles runs it can prove
+    # are gone -- which needs a recorded pid this run never got. The cleanup
+    # is in a ``finally`` rather than the ``except`` so that a BaseException
+    # (a KeyboardInterrupt arriving in this exact window, say) also releases
+    # the project lock instead of wedging the project until someone edits the
+    # database by hand.
+    launched = False
     try:
         manager.start(record.run_id)
+        launched = True
     except Exception as exc:  # noqa: BLE001 - every launch failure lands here
-        # Nothing else will ever finish this run: there is no worker to
-        # report, and reconcile() only settles runs it can prove are gone. So
-        # finish it here, which is also what releases the project lock.
         _LOGGER.exception("could not launch a worker for run %s", record.run_id)
-        _finish_quietly(store, record.run_id)
         return _error_response(
             request,
             status_code=500,
@@ -327,8 +349,24 @@ async def start_run(request: Request):
             detail=f"{type(exc).__name__}: {exc}",
             run_id=record.run_id,
         )
+    finally:
+        if not launched:
+            _finish_quietly(store, record.run_id)
 
     return RedirectResponse(url=f"/runs/{record.run_id}", status_code=303)
+
+
+#: The one body type ``POST /runs`` accepts: what a plain HTML form sends.
+FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
+
+
+def _media_type(request: Request) -> str:
+    """The request's content type with any parameters (charset) stripped."""
+    return request.headers.get("content-type", "").split(";")[0].strip().lower()
+
+
+def _is_form_encoded(request: Request) -> bool:
+    return _media_type(request) == FORM_CONTENT_TYPE
 
 
 async def _submitted_profile(request: Request) -> str:
@@ -339,6 +377,11 @@ async def _submitted_profile(request: Request) -> str:
     dependency of the ``web`` extra and does not need to become one. This UI
     posts one ``application/x-www-form-urlencoded`` field from a plain HTML
     form -- there are no file uploads anywhere in it, and there will not be.
+
+    Callers must gate on :func:`_is_form_encoded` first: hand-parsing means
+    there is no framework layer to reject a JSON body or no body at all, and
+    an unparseable body silently reads as "no profile", which is a *valid*
+    request that starts a pipeline.
 
     A repeated field takes its last value, matching how a browser resolves a
     duplicate control name.
@@ -362,8 +405,19 @@ def _error_response(
     title: str,
     detail: str,
     run_id: str | None = None,
+    run: RunRecord | None = None,
 ) -> HTMLResponse:
-    """Render an error as a page, or as a fragment for an htmx request."""
+    """Render an error as a page, or as a fragment for an htmx request.
+
+    *run_id* names a run to link to; *run* embeds that run's status fragment,
+    which is what the conflict response needs -- the run holding the lock is
+    the thing the reader has to act on.
+
+    The page shell is the default and the fragment is the exception, because
+    every form in this UI is a plain ``<form method="post">``: there is no
+    ``hx-`` attribute anywhere in ``templates/``. A fragment served to a
+    browser navigation is a page with no stylesheet and no nav.
+    """
     template = "_error.html" if _is_fragment_request(request) else "error.html"
     return request.app.state.templates.TemplateResponse(
         request,
@@ -373,6 +427,10 @@ def _error_response(
             "error_title": title,
             "error_detail": detail,
             "error_run_id": run_id,
+            "run": run,
+            "is_terminal": (
+                run.status in TERMINAL_STATUSES if run is not None else False
+            ),
         },
         status_code=status_code,
     )
@@ -477,7 +535,7 @@ async def event_frames(
 
 
 @router.get("/runs/{run_id}/events")
-def run_events(request: Request, run_id: str, after: int = 0):
+def run_events(request: Request, run_id: str, after: str | None = None):
     """Stream this run's events, resuming from a cursor the client supplies."""
     store: RunStore = request.app.state.store
     if store.get_run(run_id) is None:
@@ -506,23 +564,40 @@ def run_events(request: Request, run_id: str, after: int = 0):
     )
 
 
-def _cursor(request: Request, after: int) -> int:
+def _cursor(request: Request, after: str | None) -> int:
     """The resume point: ``Last-Event-ID`` if the browser sent one, else ``after``.
 
     The header wins. A reconnecting ``EventSource`` reuses the URL it was
     created with -- ``?after=`` and all -- and adds the header, so honouring
     the query would replay the whole run into the console on every reconnect.
+
+    Both are parsed by the same tolerant rule, which is why ``after`` is typed
+    as text: a declared ``int`` would hand a garbled query string FastAPI's
+    422 JSON while the identically garbled header fell back to 0. A cursor is
+    a resume hint, and the worst case of not understanding one is replaying
+    events the client already has.
     """
-    header = request.headers.get("Last-Event-ID")
-    if header:
-        try:
-            return max(int(header.strip()), 0)
-        except ValueError:
-            _LOGGER.debug("ignoring unparseable Last-Event-ID %r", header)
-    return max(after, 0)
+    header = _parse_sequence(request.headers.get("Last-Event-ID"), name="Last-Event-ID")
+    if header is not None:
+        return header
+    return _parse_sequence(after, name="after") or 0
+
+
+def _parse_sequence(value: str | None, *, name: str) -> int | None:
+    """A non-negative sequence number, or ``None`` if *value* is not one."""
+    if value is None or not value.strip():
+        return None
+    try:
+        # Negatives clamp rather than reject: they are as meaningless as a
+        # letter, and events_after() would treat one as "everything" anyway.
+        return max(int(value.strip()), 0)
+    except ValueError:
+        _LOGGER.debug("ignoring unparseable %s %r", name, value)
+        return None
 
 
 __all__ = [
+    "FORM_CONTENT_TYPE",
     "HEARTBEAT_INTERVAL_SECONDS",
     "MAX_LOG_SLICE_BYTES",
     "POLL_INTERVAL_SECONDS",

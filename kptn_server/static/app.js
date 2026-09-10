@@ -54,6 +54,14 @@
     return highest;
   }
 
+  function resumeFrom(console_, list) {
+    /* The page's own cursor: whichever of "what the server had rendered" and
+     * "what is actually in the list" is further along. They agree on a fresh
+     * page; they diverge if a fragment swap ever replaces the list. */
+    var rendered = parseInt(console_.getAttribute("data-last-sequence"), 10);
+    return Math.max(isNaN(rendered) ? 0 : rendered, highestSequence(list));
+  }
+
   function fragmentFrom(html) {
     /* A <template> parses the fragment without running it or reparenting it
      * into the document. The fragment is server-rendered and already escaped;
@@ -161,7 +169,7 @@
         return;
       }
       source = new EventSource(
-        console_.getAttribute("data-stream-url") + "?after=" + highestSequence(list)
+        console_.getAttribute("data-stream-url") + "?after=" + resumeFrom(console_, list)
       );
       for (var i = 0; i < EVENT_KINDS.length; i += 1) {
         source.addEventListener(EVENT_KINDS[i], appendEvent);

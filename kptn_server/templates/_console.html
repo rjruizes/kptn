@@ -6,11 +6,13 @@
   element are the contract between the two:
 
     data-stream-url  where to open the EventSource
-    data-last-sequence  the cursor to resume from on a first connection
+    data-last-sequence  the server's cursor when the page was rendered
     data-terminal    whether the run is already over (from its *status*)
 
-  A reconnect uses the highest ``data-sequence`` in the list rather than this
-  attribute, so a long-lived page resumes from what it actually has.
+  A connection resumes from ``max(data-last-sequence, highest data-sequence in
+  the list)``: the attribute is what the server had rendered, the list is what
+  the page actually holds, and the higher of the two is the only cursor that
+  can neither replay nor skip.
 #}
 {% from "_event.html" import event_row %}
 <section class="panel console" id="console"

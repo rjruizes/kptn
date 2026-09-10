@@ -32,7 +32,8 @@ from typing import AsyncIterator
 import pytest
 from fastapi.testclient import TestClient
 
-from kptn_server.app import create_app
+from kptn.runner.events import EventKind
+from kptn_server.app import STATIC_DIR, create_app
 from kptn_server.routes import runs as runs_module
 from kptn_server.run_store import (
     STATUS_INTERRUPTED,
@@ -236,6 +237,35 @@ def test_event_stream_ignores_an_unparseable_last_event_id(
 
     assert response.status_code == 200
     assert "id: 3\n" in response.text
+
+
+@pytest.mark.parametrize("after", ["not-a-number", "", "  ", "3.5"])
+def test_event_stream_tolerates_an_unparseable_after(
+    client: TestClient, seeded_events: RunRecord, after: str
+) -> None:
+    """``?after=`` is parsed by the same tolerant rule as the header.
+
+    A declared ``int`` parameter would hand a garbled query string FastAPI's
+    422 JSON body while the identically garbled ``Last-Event-ID`` fell back to
+    0 -- two different behaviours for the same malformed cursor, on the same
+    endpoint. A cursor is a resume hint: not understanding one costs a replay,
+    never an error page in place of the stream.
+    """
+    response = client.get(f"/runs/{seeded_events.run_id}/events?after={after}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "id: 1\n" in response.text
+
+
+def test_event_stream_clamps_a_negative_after(
+    client: TestClient, seeded_events: RunRecord
+) -> None:
+    """FastAPI accepts ``after=-5`` happily, so the clamp has to be real."""
+    response = client.get(f"/runs/{seeded_events.run_id}/events?after=-5")
+
+    assert response.status_code == 200
+    assert "id: 1\n" in response.text
 
 
 def test_event_stream_404s_for_an_unknown_run(client: TestClient) -> None:
@@ -467,3 +497,26 @@ def test_event_stream_reads_its_intervals_from_the_module_constants(
     assert set(clock.delays) == {2.5}
     heartbeats = [frame for frame in frames if frame.startswith(":")]
     assert len(heartbeats) == 2, f"expected two heartbeats, saw {len(heartbeats)}"
+
+
+# -- the browser's half of the contract ------------------------------------
+
+
+def test_app_js_listens_for_every_event_kind() -> None:
+    """The JS event-name list must match ``EventKind`` exactly.
+
+    ``EventSource`` dispatches by event name, so a kind the browser does not
+    listen for arrives and is dropped in silence -- no console error, no
+    missing-frame symptom, just an event that never appears in the console.
+    Tasks 9-10 add surfaces to this same app; if one adds a kind, this fails
+    instead of the console quietly going incomplete.
+    """
+    source = (STATIC_DIR / "app.js").read_text()
+
+    match = re.search(r"var EVENT_KINDS = \[(.*?)\];", source, re.S)
+    assert match, "EVENT_KINDS is no longer a literal array in app.js"
+    listed = re.findall(r'"([a-z_]+)"', match.group(1))
+
+    assert listed == [kind.value for kind in EventKind], (
+        "app.js and kptn.runner.events.EventKind have diverged"
+    )

@@ -213,6 +213,41 @@ def test_post_run_returns_active_fragment_when_locked(
     assert seeded_active_run.run_id in response.text
 
 
+def test_post_run_conflict_renders_the_whole_page_for_a_plain_form_post(
+    client: TestClient, seeded_active_run: RunRecord
+) -> None:
+    """The lock conflict is the one error a real user actually hits.
+
+    Every form in this UI is a plain ``<form method="post">`` -- there is no
+    ``hx-`` attribute anywhere in ``templates/`` -- so pressing Run while the
+    project is busy is a browser *navigation*. Answering it with a bare
+    fragment lands the developer on an unstyled orphan ``<div>`` with no nav
+    and no stylesheet, while the same module builds a proper page for the 400,
+    404 and 500 paths.
+    """
+    response = client.post("/runs", data={"profile": "success"})
+
+    assert response.status_code == 409
+    assert seeded_active_run.run_id in response.text
+    # The page shell, not a fragment.
+    assert "<!DOCTYPE html>" in response.text
+    assert "/static/app.css" in response.text
+    assert 'aria-label="Main"' in response.text
+
+
+def test_post_run_conflict_stays_a_fragment_for_an_htmx_request(
+    client: TestClient, seeded_active_run: RunRecord
+) -> None:
+    """The fragment path must stay a fragment, or a swap injects a whole page."""
+    response = client.post(
+        "/runs", data={"profile": "success"}, headers={"HX-Request": "true"}
+    )
+
+    assert response.status_code == 409
+    assert seeded_active_run.run_id in response.text
+    assert "<!DOCTYPE html>" not in response.text
+
+
 def test_post_run_does_not_start_a_second_worker_when_locked(
     client: TestClient, manager: MagicMock, seeded_active_run: RunRecord
 ) -> None:
@@ -256,6 +291,81 @@ def test_post_run_finishes_the_run_as_failed_when_the_launch_fails(
 
     assert response.status_code == 500
     assert "worker vanished before exec" in response.text
+
+    runs = store.list_runs(app.state.project.root)
+    assert len(runs) == 1
+    assert runs[0].status == STATUS_FAILED
+    assert store.active_run(app.state.project.root) is None
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "label"),
+    [
+        ({}, "no body at all"),
+        ({"content": b"{}", "headers": {"content-type": "application/json"}}, "json"),
+        (
+            {"content": b"profile=success", "headers": {"content-type": "text/plain"}},
+            "text/plain",
+        ),
+    ],
+    ids=["no-body", "json-body", "text-body"],
+)
+def test_post_run_rejects_a_body_it_cannot_parse(
+    client: TestClient, manager: MagicMock, app, store: RunStore, kwargs, label: str
+) -> None:
+    """A body this route cannot read must not be read as "no profile".
+
+    The form field is hand-parsed (Starlette routes ``request.form()`` through
+    ``python-multipart``, which is not a dependency here), so there is no
+    framework layer rejecting a JSON body or an empty one. Without this gate,
+    ``parse_qs`` finds no ``profile`` key, that reads as the perfectly legal
+    "(no profile)" choice, and a typo'd client *starts a pipeline* instead of
+    getting an error.
+    """
+    response = client.post("/runs", **kwargs)
+
+    assert response.status_code == 415, f"{label} was accepted"
+    manager.start.assert_not_called()
+    assert store.list_runs(app.state.project.root) == []
+    assert store.active_run(app.state.project.root) is None
+
+
+def test_post_run_accepts_a_form_body_with_a_charset(
+    client: TestClient, store: RunStore
+) -> None:
+    """The gate matches on the media type, not the raw header.
+
+    A browser is entitled to send ``; charset=UTF-8``, and rejecting that
+    would break the only client this UI has.
+    """
+    response = client.post(
+        "/runs",
+        content=b"profile=success",
+        headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    run_id = response.headers["location"].rsplit("/", 1)[-1]
+    assert store.get_run(run_id).profile == "success"
+
+
+def test_post_run_releases_the_lock_when_the_launch_is_interrupted(
+    client: TestClient, manager: MagicMock, app, store: RunStore
+) -> None:
+    """A BaseException in the launch window must not wedge the project.
+
+    ``reconcile()`` can only settle a run it can prove is gone, and proof is a
+    recorded pid -- which a run whose launch never returned does not have. So
+    a ``KeyboardInterrupt`` arriving between ``create_run`` and a successful
+    ``start`` would leave the project locked by an unfinishable run until
+    someone edited the database by hand. Cleanup therefore belongs in a
+    ``finally``, not in an ``except Exception``.
+    """
+    manager.start.side_effect = KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        client.post("/runs", data={"profile": "success"})
 
     runs = store.list_runs(app.state.project.root)
     assert len(runs) == 1
