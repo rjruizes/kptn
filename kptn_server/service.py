@@ -14,6 +14,20 @@ context.
 
 ``kptn.lineage`` parses SQL with ``sqlglot``, so importing this module needs
 the ``web`` extra -- which declares it.
+
+**On the ``os.chdir`` in the three entry points below.** Each one chdirs into
+the project directory and restores the original in a ``finally``, because
+``read_config`` and the DuckDB connection factory both resolve relative paths
+against the working directory. That is process-global state, and on the shared
+UI application it is safe for one reason worth stating rather than
+rediscovering: these routes only ever chdir to *the served project's own root*
+(``routes/lineage.py`` refuses any other ``configPath``), the app serves
+exactly one project for its lifetime, and every request handler that reaches
+here is synchronous -- FastAPI runs a non-``async def`` endpoint in a
+threadpool, but the chdir is bracketed and the destination is identical for
+every concurrent caller, so no request can observe a directory other than the
+one it wanted. A route that accepted an arbitrary path, or a second served
+project, would break that argument.
 """
 
 from __future__ import annotations

@@ -212,11 +212,11 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Contains: app factory (`app.py`), project discovery (`project.py`), SQLite run store (`run_store.py` + `migrations/`), detached worker lifecycle (`processes.py`, `worker.py`, `capture.py`), routers (`routes/`), retained lineage and table-preview helpers (`service.py`), Jinja2 templates (`templates/`), vendored assets (`static/`)
 - Depends on: `kptn/` package, `fastapi`, `uvicorn`, `jinja2`, `psutil`, `markdown-it-py`, `sqlglot` (the `kptn[web]` extra)
 - Used by: a browser, and the VS Code extension's webview — both against the same server started by `kptn ui`. There is no second frontend and no JSON-RPC protocol
-- Purpose: Legacy FastAPI WebSocket server; built for the removed React UI and used by nothing current
+- Purpose: Legacy FastAPI WebSocket server, built for the removed React UI
 - Location: `kptn/watcher/`
 - Contains: FastAPI app with WebSocket support (`app.py`), local task enrichment (`local.py`), stack management (`stacks.py`), utilities (`util.py`), file watcher (`filewatcher/`)
 - Depends on: `kptn/caching/` (legacy), `fastapi`, `watchfiles`
-- Used by: nothing current — the React UI it served was removed along with the rest of the superseded frontend. Treat as legacy; `kptn ui` does not use it
+- Used by: only `kptn/cli/_v01.py`'s `backend` command (`from kptn.watcher.app import start`), which is unreachable while `kptn/cli/__init__.py` pins `_CLI_VERSION = "v2"`. Treat as dormant v0.1 code; `kptn ui` does not use it
 - Purpose: Browser-based dashboard for monitoring and triggering pipelines
 - Location: `kptn_server/templates/` and `kptn_server/static/`, served by `kptn ui`
 - Contains: server-rendered pages — run console, run history, plan, walkthrough, lineage, table preview — with htmx for fragment swaps and SSE for the live console
@@ -256,7 +256,7 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Responsibilities: Load pipeline from `pyproject.toml`, resolve profiles, delegate to `runner/api.py`
 - Location: `kptn/watcher/app.py`
 - Triggers: Started manually or via CLI; listens on `localhost:8000`
-- Responsibilities: Serve `GET /api/state`, `WebSocket /ws`, run tasks on demand. Legacy: superseded by `kptn ui`, kept only because nothing has removed it yet
+- Responsibilities: Serve `GET /api/state`, `WebSocket /ws`, run tasks on demand. Superseded by `kptn ui`; reachable only by switching `_CLI_VERSION` back to `"v1"`
 - Location: `kptn_server/app.py` (`create_app`), launched by `kptn/cli/commands.py` `ui()`
 - Triggers: `kptn ui [--host HOST] [--port PORT] [--open/--no-open]` — the only supported way to serve the UI
 - Responsibilities: Serve one project's pages, start and supervise detached run workers, reconcile interrupted runs. Binds `127.0.0.1` by default; no authentication and no remote execution

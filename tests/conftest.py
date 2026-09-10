@@ -91,15 +91,32 @@ _INSTALLED_PACKAGE_DIRS = tuple(
 def _is_installed_module(name: str) -> bool:
     """Was this module imported from an installed package directory?
 
-    A module with no ``__file__`` (builtin, namespace package, or one whose
-    import is still in flight) counts as installed: nothing about a fixture
-    project produces one, and evicting a half-initialized module is how import
-    machinery gets confused.
+    Three cases, and the middle one is the subtle one.
+
+    *Has a ``__file__``.* Installed exactly when that path is under one of
+    :data:`_INSTALLED_PACKAGE_DIRS`.
+
+    *No ``__file__`` but has a ``__path__`` -- a namespace package.* **Not**
+    installed, so it is evicted. A fixture project directory without an
+    ``__init__.py`` imports as precisely this: ``tests/test_ui_lineage_routes``
+    writes a ``src/`` with no ``__init__.py``, and every other fixture project
+    in this suite is free to do the same. Leaving such a name cached is the
+    ``sys.modules['src']`` shadowing that already broke
+    ``tests/test_table_preview_api`` once -- the next test's ``src`` would lose
+    to the previous test's. A namespace package holds no state worth
+    preserving, so evicting it is safe as well as necessary.
+
+    *Neither ``__file__`` nor ``__path__``* -- a builtin, an extension baked
+    into the interpreter, or a module whose import is still in flight. Treated
+    as installed and left alone: none of these can come from a fixture
+    project, and evicting a half-initialized module is how import machinery
+    gets confused.
     """
     module = sys.modules.get(name)
     origin = getattr(module, "__file__", None)
     if origin is None:
-        return True
+        # A namespace package is a fixture-project directory as often as not.
+        return not hasattr(module, "__path__")
     return origin.startswith(_INSTALLED_PACKAGE_DIRS)
 
 
