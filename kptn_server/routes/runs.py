@@ -347,7 +347,24 @@ async def start_run(request: Request):
             ),
         )
 
-    profile = await _submitted_field(request, "profile") or None
+    submitted = await _submitted_field(request, "profile")
+    if submitted is None:
+        # A body with no ``profile`` key at all is not the UI's form: the
+        # ``<select>`` always submits the field, empty for "(no profile)".
+        # Reading an absent field as "(no profile)" would mean a request
+        # carrying *no fields whatsoever* -- exactly what a drive-by form
+        # post sends -- starts a pipeline.
+        return _error_response(
+            request,
+            status_code=400,
+            title="No profile was submitted",
+            detail=(
+                "POST /runs requires a 'profile' field. Send it empty to run "
+                "with no profile; omitting it entirely is not a request this "
+                "UI makes."
+            ),
+        )
+    profile = submitted or None
 
     if profile is not None and profile not in project.profiles:
         # Rejected before anything is created: an invalid request must not
@@ -436,8 +453,12 @@ def _is_form_encoded(request: Request) -> bool:
     return _media_type(request) == FORM_CONTENT_TYPE
 
 
-async def _submitted_field(request: Request, name: str) -> str:
-    """One field of a urlencoded body, stripped, or ``""`` if absent.
+async def _submitted_field(request: Request, name: str) -> str | None:
+    """One field of a urlencoded body, stripped, or ``None`` if absent.
+
+    Absent and empty are *different* answers, and both callers depend on the
+    distinction. ``profile=`` is a legitimate request meaning "no profile";
+    a body with no ``profile`` key is not this UI's form at all.
 
     Parsed here rather than through ``request.form()`` deliberately: Starlette
     routes *all* form parsing through ``python-multipart``, which is not a
@@ -446,17 +467,15 @@ async def _submitted_field(request: Request, name: str) -> str:
     -- there are no file uploads anywhere in it, and there will not be.
 
     Callers must gate on :func:`_is_form_encoded` first: hand-parsing means
-    there is no framework layer to reject a JSON body or no body at all, and
-    an unparseable body silently reads as "field absent". For ``profile`` that
-    is a *valid* request that starts a pipeline; for ``confirm`` it is the
-    difference between a refusal and an unconfirmed abandon.
+    there is no framework layer to reject a JSON body, and an unparseable
+    body reads as "field absent" -- which both callers now refuse outright.
 
     A repeated field takes its last value, matching how a browser resolves a
     duplicate control name.
     """
     body = (await request.body()).decode("utf-8", errors="replace")
     values = urllib.parse.parse_qs(body, keep_blank_values=True).get(name)
-    return values[-1].strip() if values else ""
+    return values[-1].strip() if values else None
 
 
 def _finish_quietly(store: RunStore, run_id: str) -> None:

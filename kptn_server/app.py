@@ -22,7 +22,10 @@ waits on, or otherwise touches a running worker process.
 
 Security posture: no authentication, no remote execution, and the launcher
 binds loopback. This serves a single developer's own project on their own
-machine.
+machine. What loopback does *not* cover is a page on another origin posting a
+form at this server -- ``POST /runs`` is form-encoded, so a browser sends it
+with no preflight -- and that is what the ``Sec-Fetch-Site`` middleware
+registered here refuses. See :mod:`kptn_server.origin`.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
+from kptn_server.origin import enforce_same_origin
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
 from kptn_server.project import ProjectContext
 from kptn_server.routes import register_routers
@@ -145,6 +149,11 @@ def create_app(project_root: Path) -> FastAPI:
     app.state.store = store
     app.state.processes = processes
     app.state.templates = _build_templates()
+
+    # Before any router, so that a state-changing route added later cannot
+    # be added without it. See :mod:`kptn_server.origin` for why
+    # ``Sec-Fetch-Site`` is the check and why safe methods are exempt.
+    app.middleware("http")(enforce_same_origin)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     register_routers(app)
