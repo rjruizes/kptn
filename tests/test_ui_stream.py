@@ -1,9 +1,9 @@
 """Tests for the resumable SSE event stream.
 
 The stream is the one part of this UI that has to survive everything: the
-browser reloading, VS Code quitting, the FastAPI server restarting on a file
-save. It can therefore hold *no* per-connection state -- the cursor arrives
-from the client on every connection (``Last-Event-ID``, or ``?after=``) and
+browser reloading, VS Code quitting, the FastAPI server being stopped and
+started again. It can therefore hold *no* per-connection state -- the cursor
+arrives from the client on every connection (``Last-Event-ID``, or ``?after=``) and
 every event is read back out of the durable store.
 
 Two failure modes get explicit guards here:
