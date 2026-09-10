@@ -16,7 +16,14 @@ class Pipeline(Graph):
     The runner (Epic 2) uses PipelineNode to identify pipeline scope.
     """
 
-    def __init__(self, name: str, graph: Graph) -> None:
+    def __init__(
+        self,
+        name: str,
+        graph: Graph,
+        *,
+        description: str | None = None,
+        docs: str | None = None,
+    ) -> None:
         # Auto-wrap a single node into a Graph for convenience.
         if not isinstance(graph, Graph):
             graph = Graph._from_node(graph)
@@ -25,7 +32,12 @@ class Pipeline(Graph):
         # Collapse requires-injected duplicates of a shared prerequisite that
         # arise when requirers in separate Pipelines are composed with >>.
         graph = coalesce_requires(graph)
-        sentinel = PipelineNode(name=name, members=frozenset(n.name for n in graph.nodes))
+        sentinel = PipelineNode(
+            name=name,
+            members=frozenset(n.name for n in graph.nodes),
+            description=description,
+            docs=docs,
+        )
         all_nodes = [sentinel] + graph.nodes
         cross_edges = [(sentinel, h) for h in graph._heads()]
         all_edges = graph.edges + cross_edges

@@ -1,0 +1,176 @@
+"""Tests for kptn/inspection.py — profile-aware, read-only pipeline inspection."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+import kptn
+from kptn.inspection import (
+    PipelineInspection,
+    inspect_pipeline,
+    resolve_docs_path,
+)
+from kptn.profiles.schema import KptnConfig, ProfileSpec
+
+
+def _build_dexcom_like_pipeline() -> kptn.Pipeline:
+    @kptn.task(outputs=["duckdb://main.init"], description="Initialize the database.")
+    def init_database() -> None:
+        pass
+
+    @kptn.task(outputs=["duckdb://dexcom.raw"])
+    def load_dexcom_reports() -> None:
+        pass
+
+    @kptn.task(outputs=["duckdb://other.raw"])
+    def load_other_reports() -> None:
+        pass
+
+    @kptn.task(
+        outputs=["duckdb://dexcom.qc"],
+        inputs=["duckdb://dexcom.raw"],
+        description="Check Dexcom interval quality.",
+    )
+    def qc_dexcom_detail() -> None:
+        pass
+
+    graph = (
+        init_database
+        >> kptn.Stage("data_sources", load_dexcom_reports, load_other_reports)
+        >> qc_dexcom_detail
+    )
+    return kptn.Pipeline("dexcom_pipeline", graph)
+
+
+def _dexcom_test_config() -> KptnConfig:
+    return KptnConfig(
+        profiles={
+            "dexcom_test": ProfileSpec(
+                stage_selections={"data_sources": ["load_dexcom_reports"]}
+            )
+        }
+    )
+
+
+def test_inspection_uses_resolved_order_and_marks_bypassed(tmp_path: Path) -> None:
+    pipeline = _build_dexcom_like_pipeline()
+    config = _dexcom_test_config()
+
+    inspection = inspect_pipeline(pipeline, config, "dexcom_test", tmp_path)
+
+    assert isinstance(inspection, PipelineInspection)
+    assert inspection.pipeline == "dexcom_pipeline"
+    assert inspection.profile == "dexcom_test"
+    assert [item.name for item in inspection.items] == [
+        n.name for n in inspection.items
+    ]  # sanity: names present
+
+    assert [item.name for item in inspection.items if item.executable] == [
+        "init_database",
+        "load_dexcom_reports",
+        "qc_dexcom_detail",
+    ]
+    # The inactive stage branch is pruned entirely — never inferred as bypassed data.
+    assert all(item.name != "load_other_reports" for item in inspection.items)
+
+    assert inspection.items[-1].description == "Check Dexcom interval quality."
+    assert inspection.items[-1].name == "qc_dexcom_detail"
+    assert inspection.items[-1].inputs == ("duckdb://dexcom.raw",)
+    assert inspection.items[-1].outputs == ("duckdb://dexcom.qc",)
+
+
+def test_inspection_marks_start_from_cursor_nodes_bypassed(tmp_path: Path) -> None:
+    pipeline = _build_dexcom_like_pipeline()
+    config = KptnConfig(
+        profiles={
+            "dexcom_test": ProfileSpec(
+                stage_selections={"data_sources": ["load_dexcom_reports"]},
+                start_from="qc_dexcom_detail",
+            )
+        }
+    )
+
+    inspection = inspect_pipeline(pipeline, config, "dexcom_test", tmp_path)
+
+    by_name = {item.name: item for item in inspection.items}
+    assert by_name["init_database"].bypassed is True
+    assert by_name["init_database"].executable is False
+    assert by_name["qc_dexcom_detail"].bypassed is False
+    assert by_name["qc_dexcom_detail"].executable is True
+
+
+def test_inspection_populates_python_task_source_location(tmp_path: Path) -> None:
+    pipeline = _build_dexcom_like_pipeline()
+    config = _dexcom_test_config()
+
+    inspection = inspect_pipeline(pipeline, config, "dexcom_test", tmp_path)
+
+    init_item = next(item for item in inspection.items if item.name == "init_database")
+    assert init_item.source_path == Path(__file__).resolve()
+    assert isinstance(init_item.source_line, int)
+    assert init_item.source_line > 0
+
+
+def test_inspection_resolves_declared_docs_within_project_root(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    docs_file = tmp_path / "docs" / "dexcom.md"
+    docs_file.write_text("# Dexcom\n")
+
+    @kptn.task(outputs=["duckdb://dexcom.raw"], docs="docs/dexcom.md#loading")
+    def load_dexcom_reports() -> None:
+        pass
+
+    pipeline = kptn.Pipeline("dexcom_only", load_dexcom_reports)
+    config = KptnConfig(profiles={"dexcom_test": ProfileSpec()})
+
+    inspection = inspect_pipeline(pipeline, config, "dexcom_test", tmp_path)
+
+    item = next(i for i in inspection.items if i.name == "load_dexcom_reports")
+    assert item.docs_path == docs_file.resolve()
+    assert item.docs_anchor == "loading"
+
+
+def test_inspection_without_profile_inspects_raw_graph(tmp_path: Path) -> None:
+    pipeline = _build_dexcom_like_pipeline()
+    config = _dexcom_test_config()
+
+    inspection = inspect_pipeline(pipeline, config, None, tmp_path)
+
+    assert inspection.profile is None
+    names = [item.name for item in inspection.items if item.executable]
+    # No profile resolution → both stage branches survive, none bypassed.
+    assert set(names) == {
+        "init_database",
+        "load_dexcom_reports",
+        "load_other_reports",
+        "qc_dexcom_detail",
+    }
+
+
+def test_inspection_stage_and_pipeline_sentinels_carry_no_data_inputs(tmp_path: Path) -> None:
+    pipeline = _build_dexcom_like_pipeline()
+    config = _dexcom_test_config()
+
+    inspection = inspect_pipeline(pipeline, config, "dexcom_test", tmp_path)
+
+    stage_item = next(i for i in inspection.items if i.kind == "stage")
+    pipeline_item = next(i for i in inspection.items if i.kind == "pipeline")
+    assert stage_item.inputs == ()
+    assert stage_item.outputs == ()
+    assert stage_item.executable is False
+    assert pipeline_item.inputs == ()
+    assert pipeline_item.executable is False
+
+
+def test_inspection_rejects_docs_outside_project(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must stay within project root"):
+        resolve_docs_path(tmp_path, "../secret.md")
+
+
+def test_resolve_docs_path_accepts_relative_path_within_root(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "notes.md").write_text("hello")
+    resolved = resolve_docs_path(tmp_path, "docs/notes.md")
+    assert resolved == (tmp_path / "docs" / "notes.md").resolve()

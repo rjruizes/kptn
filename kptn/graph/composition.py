@@ -62,7 +62,12 @@ def parallel(*args: Any) -> "Graph":
     return Graph(nodes=all_nodes, edges=all_edges, requires_edges=all_requires_edges)
 
 
-def Stage(name: str, *branches: Any) -> "Graph":
+def Stage(
+    name: str,
+    *branches: Any,
+    description: str | None = None,
+    docs: str | None = None,
+) -> "Graph":
     """Group branches as profile-conditional selection options.
 
     Usage:
@@ -76,13 +81,17 @@ def Stage(name: str, *branches: Any) -> "Graph":
     Selection is deferred to Epic 3 (ResolvedGraph / profile resolver).
     Stage atomicity: if start_from/stop_after reference a node within a Stage group,
     the ENTIRE group is the cursor unit. This is enforced in Epic 3.
+
+    ``description`` and ``docs`` are optional documentation metadata for the
+    stage sentinel — read by ``kptn.inspection``; they do not affect selection
+    or execution.
     """
     from kptn.graph.graph import Graph
 
     if not branches:
         raise ValueError("Stage() requires at least one branch")
 
-    sentinel = StageNode(name=name)
+    sentinel = StageNode(name=name, description=description, docs=docs)
 
     all_nodes: list[AnyNode] = [sentinel]
     all_edges: list[tuple[AnyNode, AnyNode]] = []

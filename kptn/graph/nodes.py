@@ -41,6 +41,8 @@ class ParallelNode:
 class StageNode:
     name: str                # required — stage name for profile selection (Epic 3)
     members: frozenset[str] = field(default_factory=frozenset, compare=False)
+    description: str | None = None
+    docs: str | None = None
 
 
 @dataclass
@@ -59,6 +61,8 @@ class MapNode:
 class PipelineNode:
     name: str  # the pipeline name — used by topo_sort cycle error reporting
     members: frozenset[str] = field(default_factory=frozenset, compare=False)
+    description: str | None = None
+    docs: str | None = None
 
 
 @dataclass
