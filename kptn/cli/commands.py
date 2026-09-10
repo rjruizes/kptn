@@ -58,9 +58,15 @@ def plan(
 DEFAULT_UI_HOST = "127.0.0.1"
 DEFAULT_UI_PORT = 8000
 
-#: How long the launcher waits for the server to answer before giving up on
-#: opening a browser. The server itself keeps running either way.
-BROWSER_READY_TIMEOUT_SECONDS = 30.0
+#: How many times the launcher probes the health endpoint before giving up on
+#: opening a browser. An attempt count rather than a wall-clock deadline
+#: precisely because it is also the test seam: a test that injects ``sleep``
+#: gets exactly the production number of attempts without any clock advancing.
+#: The elapsed time this corresponds to is not fixed -- each probe can itself
+#: block for up to ``_HEALTH_PROBE_TIMEOUT_SECONDS`` inside ``urllib`` (a
+#: filtered port, as opposed to a refused connection) -- so the constant is
+#: named for what it actually bounds. The server keeps running either way.
+BROWSER_READY_PROBE_ATTEMPTS = 300
 BROWSER_POLL_INTERVAL_SECONDS = 0.1
 _HEALTH_PROBE_TIMEOUT_SECONDS = 1.0
 
@@ -90,20 +96,19 @@ def _open_when_ready(
     probe: Callable[[str], bool] = _probe_health,
     opener: Callable[[str], bool] | None = None,
     sleep: Callable[[float], None] = time.sleep,
-    timeout: float = BROWSER_READY_TIMEOUT_SECONDS,
+    attempts: int = BROWSER_READY_PROBE_ATTEMPTS,
     interval: float = BROWSER_POLL_INTERVAL_SECONDS,
 ) -> bool:
     """Open *url* in a browser once its health endpoint answers.
 
-    Polling is bounded by an attempt count derived from *timeout* and
-    *interval* rather than a wall-clock deadline, so a caller that injects
-    ``sleep`` (a test) gets exactly the same number of attempts as production
-    without any clock having to advance. Returns whether a browser was opened;
-    a server that never answers simply leaves the developer to click the URL
-    the command printed.
+    Polling is bounded by *attempts* rather than a wall-clock deadline, so a
+    caller that injects ``sleep`` (a test) gets exactly the same number of
+    attempts as production without any clock having to advance. Returns
+    whether a browser was opened; a server that never answers simply leaves
+    the developer to click the URL the command printed.
     """
     health_url = urljoin(url, "healthz")
-    attempts = max(1, int(timeout / interval))
+    attempts = max(1, attempts)
     # Resolved at call time, not captured as a default, so a test that
     # forbids the real browser actually forbids it.
     open_url = opener if opener is not None else webbrowser.open

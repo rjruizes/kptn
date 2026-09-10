@@ -107,7 +107,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             await task
 
 
-def _build_templates(project: ProjectContext) -> Jinja2Templates:
+def _build_templates() -> Jinja2Templates:
     """Jinja environment whose every render already knows the project.
 
     The base page needs the project name and the profile list on *every* page,
@@ -118,11 +118,9 @@ def _build_templates(project: ProjectContext) -> Jinja2Templates:
     def project_context(request: Request) -> dict[str, Any]:
         return {"project": request.app.state.project}
 
-    templates = Jinja2Templates(
+    return Jinja2Templates(
         directory=str(TEMPLATES_DIR), context_processors=[project_context]
     )
-    templates.env.globals["project_name"] = project.pipeline_name
-    return templates
 
 
 def create_app(project_root: Path) -> FastAPI:
@@ -146,7 +144,7 @@ def create_app(project_root: Path) -> FastAPI:
     app.state.project = project
     app.state.store = store
     app.state.processes = processes
-    app.state.templates = _build_templates(project)
+    app.state.templates = _build_templates()
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     register_routers(app)

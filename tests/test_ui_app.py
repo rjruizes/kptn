@@ -23,10 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
-import sys
 import threading
-import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -46,90 +43,14 @@ from kptn_server.run_store import (
     RunStore,
 )
 
-FIXTURE_PROJECT = Path(__file__).parent / "fixtures" / "ui_project"
 EVENT_TIMEOUT_SECONDS = 30.0
+
+# Opts this module into restore_process_state and reap_spawned_workers; the
+# ui_project / broken_ui_project fixtures come from tests/conftest.py too.
+pytestmark = pytest.mark.ui_hygiene
 
 
 # -- fixtures --------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def restore_process_state():
-    """Undo what loading a project pipeline does to this process.
-
-    ``load_pipeline`` inserts the project root on ``sys.path`` and evicts
-    project modules from ``sys.modules`` so a reload picks up edited code.
-    Every test here loads a *different* temporary copy of the same fixture
-    project, so without this the copies would shadow one another.
-    """
-    original_cwd = Path.cwd()
-    original_path = sys.path.copy()
-    original_modules = set(sys.modules)
-    original_showwarning = warnings.showwarning
-    root = logging.getLogger()
-    original_handlers = root.handlers.copy()
-
-    yield
-
-    os.chdir(original_cwd)
-    sys.path[:] = original_path
-    for name in set(sys.modules) - original_modules:
-        sys.modules.pop(name, None)
-    warnings.showwarning = original_showwarning
-    root.handlers[:] = original_handlers
-
-
-@pytest.fixture(autouse=True)
-def reap_spawned_workers():
-    """Kill any child process a test leaves behind.
-
-    Nothing in this module is supposed to launch a worker, which is exactly
-    why this is structural rather than opt-in: if a regression ever makes the
-    app factory or its reconciliation loop spawn one, the ``slow`` fixture
-    profile blocks on a sentinel file forever and would hang the suite.
-    """
-    before = {(child.pid, _safe_create_time(child)) for child in _own_children()}
-
-    yield
-
-    leaked = [
-        child
-        for child in _own_children()
-        if (child.pid, _safe_create_time(child)) not in before
-    ]
-    for child in leaked:
-        try:
-            child.kill()
-        except psutil.Error:  # pragma: no cover - defensive
-            pass
-    psutil.wait_procs(leaked, timeout=10)
-    for child in leaked:
-        try:
-            os.waitpid(child.pid, os.WNOHANG)
-        except (ChildProcessError, OSError):
-            pass
-    assert not leaked, f"the app factory leaked child processes: {leaked}"
-
-
-def _own_children() -> list[psutil.Process]:
-    try:
-        return psutil.Process().children(recursive=True)
-    except psutil.Error:  # pragma: no cover - defensive
-        return []
-
-
-def _safe_create_time(proc: psutil.Process) -> float:
-    try:
-        return proc.create_time()
-    except psutil.Error:  # pragma: no cover - defensive
-        return -1.0
-
-
-@pytest.fixture
-def ui_project(tmp_path: Path) -> Path:
-    destination = tmp_path / "project"
-    shutil.copytree(FIXTURE_PROJECT, destination)
-    return destination
 
 
 class ParkingSleep:
@@ -170,6 +91,20 @@ def _queued_run(store: RunStore, project_root: Path, *, profile: str = "success"
 
 
 # -- project discovery -----------------------------------------------------
+
+
+def test_module_opts_into_the_ui_hygiene_fixtures(
+    request: pytest.FixtureRequest,
+) -> None:
+    """Pin the ``pytestmark`` opt-in.
+
+    ``restore_process_state`` and ``reap_spawned_workers`` are gated on the
+    marker, so deleting the module's ``pytestmark`` line would silently strip
+    this module of both -- no error, no failure, just a module that can leak a
+    detached worker and pollute ``sys.path`` for everything after it. This
+    turns that silent loss into a failure.
+    """
+    assert request.node.get_closest_marker("ui_hygiene") is not None
 
 
 def test_index_lists_profiles(ui_project: Path) -> None:
@@ -232,6 +167,85 @@ def test_project_context_rejects_an_invalid_profile_file(ui_project: Path) -> No
         ProjectContext.load(ui_project)
 
 
+def test_project_context_cannot_be_built_without_a_pipeline() -> None:
+    """No defaults on ``pipeline``/``config``.
+
+    A default of ``None`` would permit a silently-invalid context that Task
+    10's inspection call hits as an ``AttributeError`` far from the cause.
+    Every field is required, so the invalid shape is unconstructable.
+    """
+    with pytest.raises(TypeError, match="pipeline"):
+        ProjectContext(  # type: ignore[call-arg]
+            root=Path("/tmp/x"),
+            pipeline_name="p",
+            profiles=(),
+            database_path=Path("/tmp/x/.kptn/ui.db"),
+            run_log_dir=Path("/tmp/x/.kptn/runs"),
+        )
+
+
+def test_project_context_rejects_a_pipeline_module_that_raises_on_import(
+    broken_ui_project: Path,
+) -> None:
+    """The most common project-authoring mistake must still be a ProjectError.
+
+    ``load_pipeline`` wraps a missing file, bad TOML, a missing
+    ``[tool.kptn] pipeline``, an ImportError, and a wrong attribute type -- but
+    an error raised in the project module's *body* is none of those and
+    travels straight out of ``importlib.import_module``. A ``ValueError`` is
+    not an ``ImportError``, so nothing below this line would convert it.
+
+    ``create_app`` documents ``ProjectError`` and ``kptn ui`` catches only
+    ``ProjectError``, so anything else reaches the developer as a raw
+    traceback -- and Tasks 8-11 would inherit the hole.
+    """
+    with pytest.raises(ProjectError) as excinfo:
+        ProjectContext.load(broken_ui_project)
+
+    # The underlying message has to survive: it is the only thing telling the
+    # developer what is actually wrong with their file.
+    assert "broken fixture project" in str(excinfo.value)
+    assert "ValueError" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, ValueError)
+
+
+def test_create_app_rejects_a_pipeline_module_that_raises_on_import(
+    broken_ui_project: Path,
+) -> None:
+    """The factory's own documented contract, not just ProjectContext's."""
+    with pytest.raises(ProjectError, match="broken fixture project"):
+        create_app(broken_ui_project)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_type"),
+    [
+        ("def broken(:\n    pass\n", "SyntaxError"),
+        ("pipeline = undefined_name\n", "NameError"),
+        ("raise KeyError('missing step')\n", "KeyError"),
+    ],
+    ids=["syntax-error", "name-error", "key-error"],
+)
+def test_project_context_wraps_any_import_time_failure(
+    tmp_path: Path, body: str, expected_type: str
+) -> None:
+    """Not just one exception type: the wrap has to be unconditional.
+
+    A SyntaxError is the sharpest case -- it is not an ImportError, and it is
+    what a half-saved file in an editor produces.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "wip"\nversion = "0.0.0"\n\n'
+        '[tool.kptn]\npipeline = "wip_pipeline"\n'
+    )
+    (tmp_path / "wip_pipeline.py").write_text(body)
+
+    with pytest.raises(ProjectError) as excinfo:
+        ProjectContext.load(tmp_path)
+
+    assert expected_type in str(excinfo.value)
+
+
 def test_project_context_allows_a_project_with_no_profile_file(
     ui_project: Path,
 ) -> None:
@@ -292,7 +306,7 @@ def test_reconcile_loop_uses_the_supervisor_interval(
 
 
 def test_lifespan_reconciles_a_run_whose_worker_is_gone(
-    ui_project: Path, parking_sleep: ParkingSleep
+    ui_project: Path, parking_sleep: ParkingSleep, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The whole point of the loop: release a project wedged by a dead worker.
 
@@ -309,13 +323,24 @@ def test_lifespan_reconciles_a_run_whose_worker_is_gone(
     future = datetime.now(timezone.utc) + timedelta(hours=1)
     app.state.processes = RunProcessManager(store, now=lambda: future)
 
-    with TestClient(app):
-        parking_sleep.wait_for_one_pass()
+    with caplog.at_level(logging.DEBUG, logger=app_module._LOGGER.name):
+        with TestClient(app):
+            parking_sleep.wait_for_one_pass()
 
     assert store.get_run(record.run_id).status == STATUS_INTERRUPTED
     # finish_run drops the project lock in the same transaction, so the
     # project must be runnable again.
     assert store.active_run(ui_project) is None
+    # reconcile() appends no event, so nothing in the run's event stream will
+    # ever mention this. The warning is the only trace that the supervisor,
+    # rather than the pipeline, decided this run's fate.
+    warnings_logged = [
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+    ]
+    assert any(
+        record.run_id in message and "interrupted" in message
+        for message in warnings_logged
+    ), f"the interrupted run was not logged; saw {warnings_logged}"
 
 
 def test_lifespan_never_disturbs_a_live_worker(
@@ -380,7 +405,7 @@ def test_lifespan_cancels_the_reconcile_loop_before_shutdown_returns(
 
 
 def test_reconcile_loop_survives_a_failing_pass(
-    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A store hiccup must not silently take the loop out for the whole session."""
     app = create_app(ui_project)
@@ -403,10 +428,21 @@ def test_reconcile_loop_survives_a_failing_pass(
 
     monkeypatch.setattr(app_module, "_sleep", immediate_sleep)
 
-    with TestClient(app):
-        assert released.wait(EVENT_TIMEOUT_SECONDS)
+    with caplog.at_level(logging.DEBUG, logger=app_module._LOGGER.name):
+        with TestClient(app):
+            assert released.wait(EVENT_TIMEOUT_SECONDS)
 
     assert len(calls) >= 2
+    # The log is the operator's only window into a loop that is limping: the
+    # pass failed, nothing was written, and no page will ever say so.
+    failures = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR and record.exc_info is not None
+    ]
+    assert failures, "a failing reconciliation pass was swallowed silently"
+    assert "reconciliation" in failures[0].getMessage()
+    assert failures[0].exc_info[0] is RuntimeError
 
 
 # -- assets and the base page ---------------------------------------------

@@ -1,0 +1,6 @@
+[project]
+name = "ui-broken-fixture-project"
+version = "0.0.0"
+
+[tool.kptn]
+pipeline = "broken_pipeline"

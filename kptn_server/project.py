@@ -51,9 +51,10 @@ class ProjectError(KptnError):
 
     Deliberately distinct from :class:`kptn.exceptions.ProjectConfigError`:
     the UI has to be able to answer "this folder cannot be served, and here is
-    why" for a *missing* manifest, a malformed manifest, an unimportable
-    pipeline module, and a broken profile file alike. Callers get one exception
-    type to handle and the underlying cause on ``__cause__``.
+    why" for a missing manifest, a malformed manifest, no ``[tool.kptn]``
+    pipeline entry, an unimportable pipeline module, a pipeline module that
+    raises while being imported, and a broken profile file alike. Callers get
+    one exception type to handle and the underlying cause on ``__cause__``.
     """
 
 
@@ -71,8 +72,8 @@ class ProjectContext:
     # graph without reloading the project on every request. Excluded from
     # equality: a Pipeline is a graph object, not a value, and two contexts
     # for the same root describe the same project regardless.
-    pipeline: Pipeline = field(compare=False, repr=False, default=None)  # type: ignore[assignment]
-    config: KptnConfig = field(compare=False, repr=False, default=None)  # type: ignore[assignment]
+    pipeline: Pipeline = field(compare=False, repr=False)
+    config: KptnConfig = field(compare=False, repr=False)
 
     @classmethod
     def load(cls, root: Path) -> ProjectContext:
@@ -91,7 +92,26 @@ class ProjectContext:
         try:
             pipeline = load_pipeline(canonical_root)
         except ProjectConfigError as exc:
+            # The shapes the shared loader names itself: a missing or
+            # malformed pyproject.toml, no [tool.kptn] pipeline, an
+            # unimportable module, or the wrong attribute type. Its messages
+            # already tell the developer what to fix.
             raise ProjectError(str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 - see below
+            # Anything the project's own pipeline module raises while being
+            # *executed* on import: a SyntaxError (which is not an
+            # ImportError, so it travels straight through
+            # importlib.import_module), a NameError, a bad constant, a step
+            # defined against something that does not exist. This is the most
+            # common project-authoring mistake, and it must still arrive as a
+            # ProjectError -- that is what create_app documents and the only
+            # thing `kptn ui` knows how to report as a clean message rather
+            # than a traceback.
+            raise ProjectError(
+                f"Could not load the pipeline for {canonical_root}: "
+                f"{type(exc).__name__}: {exc}. Fix the error in the project's "
+                "pipeline module and reload."
+            ) from exc
 
         config_path = canonical_root / PROFILE_CONFIG_FILENAME
         try:

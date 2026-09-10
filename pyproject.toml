@@ -54,3 +54,6 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "example/step_example/tests"]
+markers = [
+    "ui_hygiene: opt a module into the pipeline-UI process-state and leaked-worker fixtures (see tests/conftest.py)",
+]

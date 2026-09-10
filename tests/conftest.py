@@ -1,0 +1,169 @@
+"""Shared fixtures for the pipeline-UI test modules.
+
+Every UI test module needs the same two pieces of hygiene:
+
+``restore_process_state``
+    Loading a project pipeline mutates *this* process -- ``load_pipeline``
+    prepends the project root to ``sys.path`` and evicts project modules from
+    ``sys.modules`` so a reload picks up edited code. Each UI test loads a
+    different temporary copy of the same fixture project, so without this the
+    copies shadow one another and tests pass or fail depending on order.
+
+``reap_spawned_workers``
+    Kills and reaps any child process a test leaves behind, then asserts none
+    leaked. A *failing* test must not be able to strand a detached worker on
+    the developer's machine or in CI, and the fixture project's ``slow``
+    profile blocks on a sentinel file forever if nobody releases it.
+
+Both are autouse, and both are **gated on the ``ui_hygiene`` marker**. A
+module opts in with one line::
+
+    pytestmark = pytest.mark.ui_hygiene
+
+The gate is the point. An ungated autouse fixture in this file would apply to
+the whole suite -- ~750 tests that have no business having ``sys.modules``
+pruned after each one, several of which legitimately spawn subprocesses the
+child-process assertion would then fail on. Gating keeps the blast radius at
+exactly the modules that asked, while still letting pytest resolve the
+fixtures by name with no imports (and therefore no ``F811`` fixture-shadowing
+noise from ruff).
+
+``tests/test_run_worker.py`` and ``tests/test_run_processes.py`` define their
+own same-named fixtures. A module-level fixture shadows a conftest one
+completely, so those two files keep their own behaviour; they also do not set
+the marker, so the versions here would no-op for them regardless.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import sys
+import warnings
+from pathlib import Path
+
+import psutil
+import pytest
+
+#: The deterministic project every UI test serves. Its ``success``, ``slow``,
+#: ``failure`` and ``db_error`` profiles are documented in
+#: ``tests/fixtures/ui_project/ui_pipeline.py``.
+FIXTURE_PROJECT = Path(__file__).parent / "fixtures" / "ui_project"
+
+#: A project whose pipeline module raises while being imported.
+BROKEN_FIXTURE_PROJECT = Path(__file__).parent / "fixtures" / "ui_broken_project"
+
+
+#: Modules opting into the UI hygiene fixtures carry this marker.
+UI_HYGIENE_MARKER = "ui_hygiene"
+
+
+def _wants_ui_hygiene(request: pytest.FixtureRequest) -> bool:
+    return request.node.get_closest_marker(UI_HYGIENE_MARKER) is not None
+
+
+@pytest.fixture(autouse=True)
+def restore_process_state(request: pytest.FixtureRequest):
+    """Undo what loading a project pipeline does to this process."""
+    if not _wants_ui_hygiene(request):
+        yield
+        return
+
+    original_cwd = Path.cwd()
+    original_path = sys.path.copy()
+    original_modules = set(sys.modules)
+    original_showwarning = warnings.showwarning
+    root = logging.getLogger()
+    original_handlers = root.handlers.copy()
+
+    yield
+
+    os.chdir(original_cwd)
+    sys.path[:] = original_path
+    for name in set(sys.modules) - original_modules:
+        sys.modules.pop(name, None)
+    warnings.showwarning = original_showwarning
+    root.handlers[:] = original_handlers
+
+
+@pytest.fixture(autouse=True)
+def reap_spawned_workers(request: pytest.FixtureRequest):
+    """Kill, reap, and then refuse to tolerate any leaked child process."""
+    if not _wants_ui_hygiene(request):
+        yield
+        return
+
+    before = {(child.pid, _safe_create_time(child)) for child in _own_children()}
+
+    yield
+
+    leaked = [
+        child
+        for child in _own_children()
+        if (child.pid, _safe_create_time(child)) not in before
+    ]
+    for child in leaked:
+        try:
+            child.kill()
+        except psutil.Error:  # pragma: no cover - defensive
+            pass
+    psutil.wait_procs(leaked, timeout=10)
+    for child in leaked:
+        try:
+            os.waitpid(child.pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
+            pass
+    assert not leaked, f"the test leaked child processes: {leaked}"
+
+
+def _own_children() -> list[psutil.Process]:
+    try:
+        return psutil.Process().children(recursive=True)
+    except psutil.Error:  # pragma: no cover - defensive
+        return []
+
+
+def _safe_create_time(proc: psutil.Process) -> float:
+    try:
+        return proc.create_time()
+    except psutil.Error:  # pragma: no cover - defensive
+        return -1.0
+
+
+def copy_fixture_project(source: Path, tmp_path: Path, name: str) -> Path:
+    """Copy a fixture project so a test can write ``.kptn/`` into it freely.
+
+    A plain function, not a fixture, so that each fixture below depends only
+    on pytest built-ins. Fixtures imported into a module's namespace do not
+    bring their own dependencies along, so a fixture-to-fixture dependency
+    here would silently oblige every importing module to import the
+    dependency too -- a trap worth designing out rather than documenting.
+    """
+    destination = tmp_path / name
+    shutil.copytree(source, destination)
+    return destination
+
+
+@pytest.fixture
+def ui_project(tmp_path: Path) -> Path:
+    """A private copy of the fixture project."""
+    return copy_fixture_project(FIXTURE_PROJECT, tmp_path, "project")
+
+
+@pytest.fixture
+def ui_project_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The fixture project, with the process chdir'd into it.
+
+    ``kptn ui`` serves ``Path.cwd()`` and takes no project path, so the
+    launcher's tests have to run from inside the project.
+    """
+    project = copy_fixture_project(FIXTURE_PROJECT, tmp_path, "project")
+    monkeypatch.chdir(project)
+    return project
+
+
+@pytest.fixture
+def broken_ui_project(tmp_path: Path) -> Path:
+    """A copy of the project whose pipeline module raises on import."""
+    return copy_fixture_project(BROKEN_FIXTURE_PROJECT, tmp_path, "broken")
