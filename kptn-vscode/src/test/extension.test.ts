@@ -152,6 +152,60 @@ function flakyGate(healthyOnAttempt: number, firstPort = 40200): LoopbackGate & 
 	};
 }
 
+/**
+ * A gate whose health answers are controlled by the test.
+ *
+ * `settleIsHealthy` releases a pending `isHealthy`, `settleWait` a pending
+ * `waitUntilHealthy`, so a test can land `dispose()` in the exact window
+ * between a probe starting and answering.
+ */
+function deferredGate(firstPort = 40300): LoopbackGate & {
+	reserved: number[];
+	settleIsHealthy(healthy: boolean): void;
+	settleWait(healthy: boolean): void;
+	waitStarted(): boolean;
+} {
+	const reserved: number[] = [];
+	let releaseIsHealthy: ((healthy: boolean) => void) | undefined;
+	let releaseWait: ((healthy: boolean) => void) | undefined;
+	return {
+		reserved,
+		reservePort: async () => {
+			const port = firstPort + reserved.length;
+			reserved.push(port);
+			return port;
+		},
+		isHealthy: () =>
+			new Promise<boolean>((resolve) => {
+				releaseIsHealthy = resolve;
+			}),
+		waitUntilHealthy: () =>
+			new Promise<boolean>((resolve) => {
+				releaseWait = resolve;
+			}),
+		settleIsHealthy: (healthy: boolean) => releaseIsHealthy?.(healthy),
+		settleWait: (healthy: boolean) => releaseWait?.(healthy),
+		waitStarted: () => releaseWait !== undefined,
+	};
+}
+
+/**
+ * Capture how a start settles without leaving a floating rejection, so a test
+ * can assert the spawn count *first* and report the count -- not a mocha
+ * timeout -- as the failure when a post-disposal child hangs forever.
+ */
+function outcomeOf(started: Promise<URL>): Promise<string> {
+	return started.then(
+		(url) => `resolved:${url.toString()}`,
+		(error: unknown) => `rejected:${error instanceof Error ? error.message : String(error)}`,
+	);
+}
+
+/** Let queued microtasks and immediates run, without waiting on a clock. */
+function settle(): Promise<void> {
+	return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 const workspaceUri = { fsPath: path.join(path.sep, 'work', 'project') };
 
 suite('shared UI launcher', () => {
@@ -296,6 +350,133 @@ suite('shared UI launcher', () => {
 			['SIGTERM'],
 			'a child still booting at disposal must be terminated exactly once',
 		);
+	});
+
+	test('does not spawn a replacement after disposal, and rejects', async () => {
+		const children = [new FakeProcess(''), new FakeProcess('')];
+		const spawner = fakeSpawner(...children);
+		const gate = deferredGate();
+		const server = new KptnServer(spawner, gate);
+
+		// Seed a live cached server: first start, healthy.
+		const first = server.start(workspaceUri, '/venv/bin/python');
+		await settle();
+		gate.settleWait(true);
+		await first;
+		assert.strictEqual(spawner.calls.length, 1);
+
+		// Second start: the reuse probe hangs, disposal lands, probe says dead.
+		const second = outcomeOf(server.start(workspaceUri, '/venv/bin/python'));
+		await settle();
+		server.dispose();
+		gate.settleIsHealthy(false);
+		await settle();
+
+		assert.strictEqual(
+			spawner.calls.length,
+			1,
+			'a post-disposal relaunch must not happen: nothing would ever terminate it',
+		);
+		assert.match(await second, /rejected:.*disposed/i);
+		for (const [index, child] of children.slice(0, spawner.calls.length).entries()) {
+			assert.ok(child.killSignals.length > 0, `child ${index} was never signalled`);
+		}
+	});
+
+	test('does not return a URL for a cached child disposal already killed', async () => {
+		const child = new FakeProcess('');
+		const spawner = fakeSpawner(child);
+		const gate = deferredGate();
+		const server = new KptnServer(spawner, gate);
+
+		const first = server.start(workspaceUri, '/venv/bin/python');
+		await settle();
+		gate.settleWait(true);
+		const url = await first;
+
+		const second = outcomeOf(server.start(workspaceUri, '/venv/bin/python'));
+		await settle();
+		server.dispose();
+		gate.settleIsHealthy(true);
+		await settle();
+
+		assert.match(
+			await second,
+			/rejected:.*disposed/i,
+			'reusing a child that disposal just terminated would frame a webview on a dead port',
+		);
+		assert.deepStrictEqual(child.killSignals, ['SIGTERM']);
+		assert.strictEqual(url.port, String(gate.reserved[0]));
+	});
+
+	test('does not spawn a retry attempt after disposal', async () => {
+		const children = [new FakeProcess(ADDRESS_IN_USE_STDERR), new FakeProcess('')];
+		const spawner = fakeSpawner(...children);
+		const gate = deferredGate();
+		const server = new KptnServer(spawner, gate);
+
+		const started = outcomeOf(server.start(workspaceUri, '/venv/bin/python'));
+		await settle();
+		assert.strictEqual(spawner.calls.length, 1, 'attempt 1 must have spawned');
+
+		server.dispose();
+		gate.settleWait(false);
+		await settle();
+
+		assert.strictEqual(
+			spawner.calls.length,
+			1,
+			'the address-in-use retry must not spawn attempt 2 after disposal',
+		);
+		assert.match(await started, /rejected:.*disposed/i);
+	});
+
+	test('every child the spawner ever created is signalled, even around disposal', async () => {
+		// Deliberately asserted against the spawner's own creation log rather
+		// than the launcher's `live` set: a set that is missing an entry cannot
+		// reveal the entry it is missing.
+		const children = [new FakeProcess(ADDRESS_IN_USE_STDERR), new FakeProcess(''), new FakeProcess('')];
+		const spawner = fakeSpawner(...children);
+		const gate = deferredGate();
+		const server = new KptnServer(spawner, gate);
+
+		const started = outcomeOf(server.start(workspaceUri, '/venv/bin/python'));
+		await settle();
+		server.dispose();
+		gate.settleWait(false);
+		await settle();
+
+		for (let index = 0; index < spawner.calls.length; index += 1) {
+			assert.ok(
+				children[index].killSignals.length > 0,
+				`child ${index} was created by the spawner but never signalled -- it would outlive the extension`,
+			);
+		}
+		assert.match(await started, /rejected:.*disposed/i);
+	});
+
+	test('every child of a retrying launch is signalled by disposal', async () => {
+		const children = [
+			new FakeProcess(ADDRESS_IN_USE_STDERR),
+			new FakeProcess(ADDRESS_IN_USE_STDERR),
+			new FakeProcess(''),
+		];
+		const spawner = fakeSpawner(...children);
+		const gate = flakyGate(3);
+		const server = new KptnServer(spawner, gate);
+
+		await server.start(workspaceUri, '/venv/bin/python');
+		assert.strictEqual(spawner.calls.length, 3, 'two lost ports then a healthy start');
+
+		server.dispose();
+
+		for (const [index, child] of children.entries()) {
+			assert.deepStrictEqual(
+				child.killSignals,
+				['SIGTERM'],
+				`child ${index} (port ${gate.reserved[index]}) must be signalled exactly once`,
+			);
+		}
 	});
 
 	test('relaunches when the cached server stops answering', async () => {

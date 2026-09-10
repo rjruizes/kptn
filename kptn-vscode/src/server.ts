@@ -185,6 +185,10 @@ export function isAddressInUse(stderr: string): boolean {
 	);
 }
 
+function disposedError(): Error {
+	return new Error('The kptn UI launcher was disposed.');
+}
+
 interface RunningServer {
 	url: URL;
 	child: SpawnedProcess;
@@ -222,9 +226,7 @@ export class KptnServer {
 		pythonPath: string,
 		options: { extraPythonPath?: string } = {},
 	): Promise<URL> {
-		if (this.disposed) {
-			throw new Error('The kptn UI launcher was disposed.');
-		}
+		this.refuseIfDisposed();
 		if (this.starting) {
 			return this.starting;
 		}
@@ -241,6 +243,19 @@ export class KptnServer {
 		return this.starting;
 	}
 
+	/**
+	 * Refuse to go any further once disposed.
+	 *
+	 * Called before every spawn and after every await that a `dispose()` could
+	 * have interleaved with, so a launcher that is shutting down can neither
+	 * create a child that outlives it nor hand back a URL for one it killed.
+	 */
+	private refuseIfDisposed(): void {
+		if (this.disposed) {
+			throw disposedError();
+		}
+	}
+
 	/** Reuse a healthy cached server, or replace it. Only ever one at a time. */
 	private async resolve(
 		workspace: WorkspaceLocation,
@@ -249,7 +264,13 @@ export class KptnServer {
 	): Promise<URL> {
 		const current = this.running;
 		if (current?.alive) {
-			if (await this.gate.isHealthy(current.url)) {
+			const healthy = await this.gate.isHealthy(current.url);
+			// Disposal can land while that probe is in flight. Returning here
+			// would hand back a URL for a child `dispose()` has already killed;
+			// falling through would spawn a replacement after the live set was
+			// swept, leaving a child nothing will ever signal.
+			this.refuseIfDisposed();
+			if (healthy) {
 				this.log.appendLine(`Reusing the running kptn UI server at ${current.url.toString()}`);
 				return current.url;
 			}
@@ -268,6 +289,10 @@ export class KptnServer {
 		let lastFailure = 'the server never answered /healthz';
 
 		for (let attempt = 1; attempt <= PORT_RESERVATION_ATTEMPTS; attempt += 1) {
+			// Checked before *every* attempt, not just the first: disposal can
+			// land during attempt N's health wait, and attempt N+1 would then
+			// add to a live set that has already been swept.
+			this.refuseIfDisposed();
 			const port = await this.gate.reservePort();
 			const url = new URL(`http://${LOOPBACK_HOST}:${port}/`);
 			const argv = ['-m', 'kptn', 'ui', '--no-open', '--port', String(port)];
@@ -314,7 +339,7 @@ export class KptnServer {
 				if (this.disposed) {
 					// Disposed while this child was booting: it must not outlive us.
 					this.terminate(state);
-					throw new Error('The kptn UI launcher was disposed.');
+					throw disposedError();
 				}
 				this.running = state;
 				return url;
