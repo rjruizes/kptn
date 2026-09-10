@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
-from threading import Lock
+from threading import RLock
 from types import MappingProxyType
 from typing import Iterator, Mapping, Protocol, TypeAlias
 
@@ -70,7 +71,9 @@ class EventEmitter:
         self._profile = profile
         self._sink = sink
         self._sequence = 0
-        self._lock = Lock()
+        self._lock = RLock()
+        self._pending: deque[RunEvent] = deque()
+        self._dispatching = False
 
     def emit(
         self,
@@ -82,7 +85,7 @@ class EventEmitter:
         resolved_task_name = task_name if task_name is not None else current_task_name()
         with self._lock:
             self._sequence += 1
-            event = RunEvent(
+            self._pending.append(RunEvent(
                 run_id=self._run_id,
                 sequence=self._sequence,
                 timestamp=datetime.now(timezone.utc),
@@ -91,8 +94,26 @@ class EventEmitter:
                 profile=self._profile,
                 task_name=resolved_task_name,
                 payload=MappingProxyType(dict(payload)),
-            )
-        self._sink.emit(event)
+            ))
+            if self._dispatching:
+                return
+            self._dispatching = True
+
+        self._drain_pending()
+
+    def _drain_pending(self) -> None:
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._dispatching = False
+                    return
+                event = self._pending.popleft()
+            try:
+                self._sink.emit(event)
+            except BaseException:
+                with self._lock:
+                    self._dispatching = False
+                raise
 
     def task_scope(self, task_name: str) -> Iterator[None]:
         return task_scope(task_name)
