@@ -201,6 +201,85 @@ function outcomeOf(started: Promise<URL>): Promise<string> {
 	);
 }
 
+/**
+ * A gate that can hold **any one** await in the start path.
+ *
+ * `hold` names a stage and an occurrence -- `reservePort:1`, `wait:2`,
+ * `isHealthy:1` -- and that call returns a promise the test releases by hand.
+ * Holds are ignored until `arm()` is called, so a scenario can seed a running
+ * server first and still label stages by their position in the start under
+ * test. Any health wait whose answer is not scripted **stalls forever**, which
+ * is what a `kptn ui` child that never answers `/healthz` really does: an
+ * unterminated child in that state is an orphan nothing will ever signal.
+ */
+function scriptedGate(options: {
+	hold: string;
+	waits?: boolean[];
+	cachedHealthy?: boolean;
+	firstPort?: number;
+}): LoopbackGate & { reserved: number[]; reachedHold(): boolean; release(): void } {
+	const reserved: number[] = [];
+	const counts: Record<string, number> = { reservePort: 0, isHealthy: 0, wait: 0 };
+	let armed = false;
+	let reached = false;
+	let release: (() => void) | undefined;
+	const firstPort = options.firstPort ?? 40500;
+
+	const stall = (): Promise<never> => new Promise<never>(() => { });
+	const maybeHold = (stage: string): Promise<void> => {
+		if (!armed || `${stage}:${counts[stage]}` !== options.hold) {
+			return Promise.resolve();
+		}
+		reached = true;
+		return new Promise<void>((resolve) => {
+			release = resolve;
+		});
+	};
+
+	return {
+		reserved,
+		reachedHold: () => reached,
+		release: () => release?.(),
+		arm: () => {
+			armed = true;
+			counts.reservePort = 0;
+			counts.isHealthy = 0;
+			counts.wait = 0;
+		},
+		reservePort: async () => {
+			counts.reservePort += 1;
+			await maybeHold('reservePort');
+			const port = firstPort + reserved.length;
+			reserved.push(port);
+			return port;
+		},
+		isHealthy: async () => {
+			counts.isHealthy += 1;
+			await maybeHold('isHealthy');
+			return options.cachedHealthy ?? false;
+		},
+		waitUntilHealthy: async () => {
+			counts.wait += 1;
+			await maybeHold('wait');
+			const scripted = options.waits?.[counts.wait - 1];
+			return scripted === undefined ? stall() : scripted;
+		},
+	} as LoopbackGate & {
+		reserved: number[];
+		reachedHold(): boolean;
+		release(): void;
+		arm(): void;
+	};
+}
+
+/** Run the event loop until the scripted gate is parked on its held stage. */
+async function reachHold(gate: { reachedHold(): boolean }): Promise<void> {
+	for (let tick = 0; tick < 200 && !gate.reachedHold(); tick += 1) {
+		await settle();
+	}
+	assert.ok(gate.reachedHold(), 'the scripted gate never reached the stage it was told to hold');
+}
+
 /** Let queued microtasks and immediates run, without waiting on a clock. */
 function settle(): Promise<void> {
 	return new Promise<void>((resolve) => setImmediate(resolve));
@@ -478,6 +557,112 @@ suite('shared UI launcher', () => {
 			);
 		}
 	});
+
+	test('does not leave an unsignalled child when disposal lands during port reservation', async () => {
+		const child = new FakeProcess('');
+		const spawner = fakeSpawner(child);
+		const gate = scriptedGate({ hold: 'reservePort:1', waits: [] });
+		(gate as unknown as { arm(): void }).arm();
+		const server = new KptnServer(spawner, gate);
+
+		const started = outcomeOf(server.start(workspaceUri, '/venv/bin/python'));
+		await reachHold(gate);
+		server.dispose();
+		gate.release();
+		await settle();
+		await settle();
+
+		for (let index = 0; index < spawner.calls.length; index += 1) {
+			assert.ok(
+				child.killSignals.length > 0,
+				`child ${index} was spawned after dispose() swept the live set and never signalled`,
+			);
+		}
+		assert.match(await started, /rejected:.*disposed/i);
+	});
+
+	test('does not leave an unsignalled child when disposal lands during a retry reservation', async () => {
+		const children = [new FakeProcess(ADDRESS_IN_USE_STDERR), new FakeProcess('')];
+		const spawner = fakeSpawner(...children);
+		const gate = scriptedGate({ hold: 'reservePort:2', waits: [false] });
+		(gate as unknown as { arm(): void }).arm();
+		const server = new KptnServer(spawner, gate);
+
+		const started = outcomeOf(server.start(workspaceUri, '/venv/bin/python'));
+		await reachHold(gate);
+		assert.strictEqual(spawner.calls.length, 1, 'attempt 1 must have spawned and lost its port');
+		server.dispose();
+		gate.release();
+		await settle();
+		await settle();
+
+		for (let index = 0; index < spawner.calls.length; index += 1) {
+			assert.ok(
+				children[index].killSignals.length > 0,
+				`child ${index} was spawned during a retry after disposal and never signalled`,
+			);
+		}
+		assert.match(await started, /rejected:.*disposed/i);
+	});
+
+	// The sweep. One case per deferrable await in the start path, on the first
+	// attempt and on a retry. Whichever await a future change adds, the shape
+	// of this table is what makes the next missed window fail loudly instead of
+	// shipping: the invariant asserted is always the same, and it is asserted
+	// against the spawner's own creation log, never against the launcher's
+	// `live` set -- a set that is missing an entry cannot reveal that entry.
+	const disposalWindows: {
+		name: string;
+		hold: string;
+		waits?: boolean[];
+		cachedHealthy?: boolean;
+		seed?: boolean;
+		stderr?: string[];
+	}[] = [
+		{ name: 'the cached-server health probe (reports dead)', hold: 'isHealthy:1', seed: true, cachedHealthy: false },
+		{ name: 'the cached-server health probe (reports alive)', hold: 'isHealthy:1', seed: true, cachedHealthy: true },
+		{ name: 'the first port reservation', hold: 'reservePort:1', waits: [] },
+		{ name: 'the first health wait', hold: 'wait:1', waits: [false] },
+		{ name: 'a retry port reservation', hold: 'reservePort:2', waits: [false], stderr: [ADDRESS_IN_USE_STDERR, ''] },
+		{ name: 'a retry health wait', hold: 'wait:2', waits: [false, false], stderr: [ADDRESS_IN_USE_STDERR, ''] },
+	];
+
+	for (const window of disposalWindows) {
+		test(`disposal during ${window.name} leaves no unsignalled child`, async () => {
+			const stderrs = window.stderr ?? ['', '', ''];
+			const children = [0, 1, 2].map((index) => new FakeProcess(stderrs[index] ?? ''));
+			const spawner = fakeSpawner(...children);
+			const seedWaits = window.seed ? [true] : [];
+			const gate = scriptedGate({
+				hold: window.hold,
+				waits: [...seedWaits, ...(window.waits ?? [])],
+				cachedHealthy: window.cachedHealthy,
+			});
+			const server = new KptnServer(spawner, gate);
+
+			if (window.seed) {
+				await server.start(workspaceUri, '/venv/bin/python');
+				assert.strictEqual(spawner.calls.length, 1, 'the cached server must be running');
+			}
+			(gate as unknown as { arm(): void }).arm();
+
+			const started = outcomeOf(server.start(workspaceUri, '/venv/bin/python'));
+			await reachHold(gate);
+			server.dispose();
+			gate.release();
+			await settle();
+			await settle();
+
+			for (let index = 0; index < spawner.calls.length; index += 1) {
+				assert.ok(
+					children[index].killSignals.length > 0,
+					`child ${index} of ${spawner.calls.length} exists after disposal with no signal -- ` +
+					`an orphan holding port ${gate.reserved[index]}`,
+				);
+			}
+			assert.match(await started, /rejected:.*disposed/i);
+		});
+	}
 
 	test('relaunches when the cached server stops answering', async () => {
 		const first = new FakeProcess('');

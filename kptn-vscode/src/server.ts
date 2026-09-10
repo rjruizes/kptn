@@ -289,9 +289,10 @@ export class KptnServer {
 		let lastFailure = 'the server never answered /healthz';
 
 		for (let attempt = 1; attempt <= PORT_RESERVATION_ATTEMPTS; attempt += 1) {
-			// Checked before *every* attempt, not just the first: disposal can
-			// land during attempt N's health wait, and attempt N+1 would then
-			// add to a live set that has already been swept.
+			// A fast path, not the invariant: it avoids reserving a port and
+			// spawning a child that the post-`live.add` check below would only
+			// have to kill. Deliberately redundant -- no single test pins it,
+			// because correctness no longer depends on it.
 			this.refuseIfDisposed();
 			const port = await this.gate.reservePort();
 			const url = new URL(`http://${LOOPBACK_HOST}:${port}/`);
@@ -312,6 +313,18 @@ export class KptnServer {
 
 			const state: RunningServer = { url, child, alive: true };
 			this.live.add(state);
+			// THE invariant, and the reason the guards above are conveniences
+			// rather than the mechanism: a child is never observable-and-
+			// untracked. Between the spawn and this line there is no await, so
+			// a `dispose()` that raced any earlier await -- the cached-server
+			// probe, the port reservation, or any await a later change
+			// introduces -- is caught here and this child is terminated. A
+			// child spawned and immediately killed during a disposal race is
+			// wasteful; an unterminable orphan holding a port is a defect.
+			if (this.disposed) {
+				this.terminate(state);
+				throw disposedError();
+			}
 			let stderr = '';
 			let spawnError: Error | undefined;
 
@@ -335,12 +348,15 @@ export class KptnServer {
 				this.log.appendLine(`kptn UI failed to launch: ${error.message}`);
 			});
 
-			if (await this.gate.waitUntilHealthy(url)) {
-				if (this.disposed) {
-					// Disposed while this child was booting: it must not outlive us.
-					this.terminate(state);
-					throw disposedError();
-				}
+			const healthy = await this.gate.waitUntilHealthy(url);
+			if (this.disposed) {
+				// Disposed while this child was booting, whatever the verdict:
+				// it must not outlive us, and the caller must be told it was a
+				// disposal rather than a startup failure.
+				this.terminate(state);
+				throw disposedError();
+			}
+			if (healthy) {
 				this.running = state;
 				return url;
 			}
