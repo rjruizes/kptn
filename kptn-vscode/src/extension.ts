@@ -106,10 +106,13 @@ async function openPipelineUI(
 			hosted = undefined;
 		});
 		// Registered once per panel, so reopening the command cannot pile up
-		// listeners holding stale tokens.
-		panel.webview.onDidReceiveMessage((message: unknown) =>
-			handleBridgeMessage(message, hosted, output),
-		);
+		// listeners holding stale tokens. The returned promise must be caught
+		// here: `openTextDocument` rejects for an authorized path that no
+		// longer exists, and the page supplies that path, so an uncaught
+		// rejection on the extension's only bridge is a real possibility.
+		panel.webview.onDidReceiveMessage((message: unknown) => {
+			void dispatchBridgeMessage(message, hosted, output);
+		});
 	} else {
 		hosted.token = token;
 		hosted.workspaceRoot = workspaceRoot;
@@ -118,6 +121,30 @@ async function openPipelineUI(
 
 	hosted.panel.webview.html = buildHostHtml(pageUrl, token);
 	output.appendLine(`Hosting the kptn pipeline UI from ${externalUri.toString()}`);
+}
+
+/**
+ * Deliver one page message and absorb every failure.
+ *
+ * `openTextDocument` rejects for an authorized path that no longer exists, and
+ * the path comes from the page, so the bridge's only listener must never leave
+ * a floating promise: the failure is logged and shown instead. `notify` is
+ * injectable so the real-editor test can assert the user actually gets told.
+ */
+export async function dispatchBridgeMessage(
+	message: unknown,
+	target: { token: string; workspaceRoot: string } | undefined,
+	output: Pick<vscode.OutputChannel, 'appendLine'>,
+	notify: (text: string) => void = (text) => void vscode.window.showErrorMessage(text),
+): Promise<boolean> {
+	try {
+		return await handleBridgeMessage(message, target, output);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		output.appendLine(`Could not open the requested source: ${detail}`);
+		notify(`kptn could not open the requested source: ${detail}`);
+		return false;
+	}
 }
 
 /**

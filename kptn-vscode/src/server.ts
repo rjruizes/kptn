@@ -70,6 +70,15 @@ export interface LoopbackGate {
 	waitUntilHealthy(url: URL): Promise<boolean>;
 }
 
+/**
+ * The filesystem reads the containment check needs. `fs` satisfies it; a test
+ * can substitute one to drive the symlink branches deterministically.
+ */
+export interface PathProbe {
+	realpathSync(target: string): string;
+	lstatSync(target: string): { isSymbolicLink(): boolean };
+}
+
 /** Anything with an `fsPath` -- `vscode.Uri` satisfies this. */
 export interface WorkspaceLocation {
 	readonly fsPath: string;
@@ -180,12 +189,20 @@ interface RunningServer {
 	url: URL;
 	child: SpawnedProcess;
 	alive: boolean;
+	/** Set once this child has been signalled, so it is signalled exactly once. */
+	terminated?: boolean;
 }
 
 export class KptnServer {
 	private running?: RunningServer;
 	private starting?: Promise<URL>;
 	private disposed = false;
+	/**
+	 * Every child this launcher has spawned and not yet reaped. `running` is
+	 * only set once a child answers `/healthz`, so this is what makes an
+	 * in-flight or already-replaced child terminable by `dispose()`.
+	 */
+	private readonly live = new Set<RunningServer>();
 
 	constructor(
 		private readonly spawner: Spawner = defaultSpawner,
@@ -212,6 +229,24 @@ export class KptnServer {
 			return this.starting;
 		}
 
+		// The memoized promise covers the *whole* resolution -- the health probe
+		// of a cached server included -- and is assigned before this method
+		// awaits anything. If the probe were awaited out here, two concurrent
+		// invocations that both find a wedged-but-alive server would both get
+		// past the guard, both relaunch, and one of the two children would
+		// never be recorded in `this.running` and so could never be terminated.
+		this.starting = this.resolve(workspace, pythonPath, options).finally(() => {
+			this.starting = undefined;
+		});
+		return this.starting;
+	}
+
+	/** Reuse a healthy cached server, or replace it. Only ever one at a time. */
+	private async resolve(
+		workspace: WorkspaceLocation,
+		pythonPath: string,
+		options: { extraPythonPath?: string },
+	): Promise<URL> {
 		const current = this.running;
 		if (current?.alive) {
 			if (await this.gate.isHealthy(current.url)) {
@@ -222,10 +257,7 @@ export class KptnServer {
 			this.terminate(current);
 		}
 
-		this.starting = this.launch(workspace, pythonPath, options).finally(() => {
-			this.starting = undefined;
-		});
-		return this.starting;
+		return this.launch(workspace, pythonPath, options);
 	}
 
 	private async launch(
@@ -254,6 +286,7 @@ export class KptnServer {
 			});
 
 			const state: RunningServer = { url, child, alive: true };
+			this.live.add(state);
 			let stderr = '';
 			let spawnError: Error | undefined;
 
@@ -267,15 +300,22 @@ export class KptnServer {
 			child.stdout?.on('data', (chunk) => this.log.appendLine(`[kptn ui] ${chunk.toString().trimEnd()}`));
 			child.on('exit', (code, signal) => {
 				state.alive = false;
+				this.live.delete(state);
 				this.log.appendLine(`kptn UI exited (${signal ? `signal ${signal}` : `code ${code}`}).`);
 			});
 			child.on('error', (error) => {
 				state.alive = false;
+				this.live.delete(state);
 				spawnError = error;
 				this.log.appendLine(`kptn UI failed to launch: ${error.message}`);
 			});
 
 			if (await this.gate.waitUntilHealthy(url)) {
+				if (this.disposed) {
+					// Disposed while this child was booting: it must not outlive us.
+					this.terminate(state);
+					throw new Error('The kptn UI launcher was disposed.');
+				}
 				this.running = state;
 				return url;
 			}
@@ -311,17 +351,24 @@ export class KptnServer {
 	 */
 	dispose(): void {
 		this.disposed = true;
-		if (this.running) {
-			this.terminate(this.running);
-			this.running = undefined;
+		// Every spawned child, not just the one that became `running`: a child
+		// still booting, or one already replaced, is ours to clean up too.
+		for (const state of [...this.live]) {
+			this.terminate(state);
 		}
+		this.running = undefined;
 	}
 
 	private terminate(state: RunningServer): void {
 		state.alive = false;
+		this.live.delete(state);
 		if (this.running === state) {
 			this.running = undefined;
 		}
+		if (state.terminated) {
+			return;
+		}
+		state.terminated = true;
 		try {
 			state.child.kill('SIGTERM');
 		} catch (error) {
@@ -361,10 +408,24 @@ export function createBridgeToken(): string {
 }
 
 function tokensMatch(expected: string, provided: unknown): boolean {
-	if (typeof provided !== 'string' || provided.length !== expected.length || expected.length === 0) {
+	if (typeof provided !== 'string' || expected.length === 0) {
 		return false;
 	}
-	return crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(provided, 'utf8'));
+	// `.length` counts UTF-16 code units, `timingSafeEqual` compares bytes and
+	// throws when they differ, so the guard has to be on byte length: a
+	// multibyte string of the same `.length` (`'é'.repeat(24)`) is 96 bytes.
+	const mine = Buffer.from(expected, 'utf8');
+	const theirs = Buffer.from(provided, 'utf8');
+	if (mine.length !== theirs.length) {
+		return false;
+	}
+	try {
+		return crypto.timingSafeEqual(mine, theirs);
+	} catch {
+		// The security decision function never throws; an unusable comparison
+		// is a rejection.
+		return false;
+	}
 }
 
 /** Convert a one-based editor line into a zero-based `vscode.Position` line. */
@@ -386,7 +447,7 @@ export function zeroBasedLine(line: unknown): number {
 export function resolveInsideWorkspace(
 	workspaceRoot: string,
 	requested: unknown,
-	realpath: (target: string) => string = fs.realpathSync,
+	probe: PathProbe = fs,
 ): string | undefined {
 	if (typeof requested !== 'string' || requested.trim() === '') {
 		return undefined;
@@ -395,9 +456,15 @@ export function resolveInsideWorkspace(
 		return undefined;
 	}
 
-	const realRoot = realOrSelf(workspaceRoot, realpath);
+	const realRoot = realOrRefuse(workspaceRoot, probe);
+	if (realRoot === undefined) {
+		return undefined;
+	}
 	const absolute = path.resolve(realRoot, requested);
-	const candidate = realOrSelf(absolute, realpath);
+	const candidate = realOrRefuse(absolute, probe);
+	if (candidate === undefined) {
+		return undefined;
+	}
 
 	const relative = path.relative(realRoot, candidate);
 	if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -406,17 +473,42 @@ export function resolveInsideWorkspace(
 	return candidate;
 }
 
-/** Realpath what exists; fall back to the nearest existing ancestor's realpath. */
-function realOrSelf(target: string, realpath: (target: string) => string): string {
+/**
+ * Realpath *target*, or -- when it does not exist yet -- the realpath of its
+ * nearest existing ancestor with the missing tail appended.
+ *
+ * Refuses rather than synthesizing whenever the missing component is itself a
+ * symlink: a dangling link inside the workspace resolves to nothing, and a
+ * path this function cannot verify must not be handed back as if it had been.
+ * That closes the TOCTOU seam where the link is repointed outside the
+ * workspace between this check and the open.
+ */
+function realOrRefuse(target: string, probe: PathProbe): string | undefined {
 	try {
-		return realpath(target);
+		return probe.realpathSync(target);
 	} catch {
-		const parent = path.dirname(target);
-		if (parent === target) {
-			return target;
-		}
-		return path.join(realOrSelf(parent, realpath), path.basename(target));
+		// Falls through: either the path does not exist, or it is a link we
+		// cannot follow.
 	}
+
+	try {
+		if (probe.lstatSync(target).isSymbolicLink()) {
+			return undefined;
+		}
+	} catch {
+		// Nothing at this path at all: a not-yet-created leaf is fine.
+	}
+
+	const parent = path.dirname(target);
+	if (parent === target) {
+		// Not even the filesystem root resolved; there is nothing to trust.
+		return undefined;
+	}
+	const realParent = realOrRefuse(parent, probe);
+	if (realParent === undefined) {
+		return undefined;
+	}
+	return path.join(realParent, path.basename(target));
 }
 
 /**
@@ -432,7 +524,7 @@ export function authorizeOpenSource(
 	options: {
 		token: string;
 		workspaceRoot: string;
-		realpath?: (target: string) => string;
+		probe?: PathProbe;
 	},
 ): OpenSourceDecision {
 	if (typeof message !== 'object' || message === null) {
@@ -449,7 +541,7 @@ export function authorizeOpenSource(
 		return { ok: false, reason: 'invalid-path' };
 	}
 
-	const fsPath = resolveInsideWorkspace(options.workspaceRoot, request.path, options.realpath);
+	const fsPath = resolveInsideWorkspace(options.workspaceRoot, request.path, options.probe);
 	if (!fsPath) {
 		return { ok: false, reason: 'outside-workspace' };
 	}

@@ -15,7 +15,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-import { handleBridgeMessage } from '../extension';
+import { dispatchBridgeMessage, handleBridgeMessage } from '../extension';
 
 const token = 'd'.repeat(48);
 const silentOutput = { appendLine: (): void => { } };
@@ -97,5 +97,36 @@ suite('shared UI bridge in a real editor', () => {
 
 		assert.strictEqual(opened, false);
 		assert.strictEqual(vscode.window.activeTextEditor, undefined, 'no editor may be opened');
+	});
+
+	test('reports an authorized path that no longer exists instead of failing silently', async () => {
+		const notified: string[] = [];
+		const logged: string[] = [];
+
+		const opened = await dispatchBridgeMessage(
+			{ type: 'openSource', path: 'models/deleted.sql', line: 2, token },
+			{ token, workspaceRoot: root },
+			{ appendLine: (line: string) => logged.push(line) },
+			(text: string) => notified.push(text),
+		);
+
+		assert.strictEqual(opened, false, 'a missing file opens nothing');
+		assert.strictEqual(notified.length, 1, 'the user must be told, not left with a silent failure');
+		assert.ok(/could not open the requested source/i.test(notified[0]), notified[0]);
+		assert.strictEqual(logged.length, 1, 'the failure must reach the output channel');
+		assert.strictEqual(vscode.window.activeTextEditor, undefined);
+	});
+
+	test('a refused message is not reported as an error to the user', async () => {
+		const notified: string[] = [];
+		const opened = await dispatchBridgeMessage(
+			{ type: 'openSource', path: '/etc/passwd', token },
+			{ token, workspaceRoot: root },
+			{ appendLine: (): void => { } },
+			(text: string) => notified.push(text),
+		);
+
+		assert.strictEqual(opened, false);
+		assert.deepStrictEqual(notified, [], 'a refusal is logged, not raised as a notification');
 	});
 });

@@ -220,6 +220,84 @@ suite('shared UI launcher', () => {
 		assert.strictEqual(spawner.calls.length, 2, 'a dead server must be replaced, not reused');
 	});
 
+	test('does not race into extra servers when the cached server is wedged', async () => {
+		// The regression this pins: the in-flight guard used to be checked
+		// before the cached server's health probe was awaited, so two
+		// concurrent invocations both got past it, both relaunched, and the
+		// loser of the `starting` assignment was never recorded -- an orphan
+		// holding a port that `dispose()` could not reach.
+		const children = [new FakeProcess(''), new FakeProcess(''), new FakeProcess('')];
+		const spawner = fakeSpawner(...children);
+		let cachedIsHealthy = true;
+		let reserved = 0;
+		const gate: LoopbackGate = {
+			reservePort: async () => 50000 + reserved++,
+			isHealthy: async () => cachedIsHealthy,
+			waitUntilHealthy: async () => true,
+		};
+		const server = new KptnServer(spawner, gate);
+
+		await server.start(workspaceUri, '/venv/bin/python');
+		assert.strictEqual(spawner.calls.length, 1);
+
+		cachedIsHealthy = false;
+		const [first, second] = await Promise.all([
+			server.start(workspaceUri, '/venv/bin/python'),
+			server.start(workspaceUri, '/venv/bin/python'),
+		]);
+
+		assert.strictEqual(
+			spawner.calls.length,
+			2,
+			'a wedged cached server must be replaced exactly once, however many callers noticed',
+		);
+		assert.strictEqual(first.toString(), second.toString(), 'both callers must get the same server');
+
+		server.dispose();
+		for (let index = 0; index < spawner.calls.length; index += 1) {
+			assert.ok(
+				children[index].killSignals.includes('SIGTERM'),
+				`child ${index} was spawned but never terminated -- it would outlive the extension`,
+			);
+		}
+	});
+
+	test('terminates a child that was still booting when disposal happened', async () => {
+		const child = new FakeProcess('');
+		let release: ((healthy: boolean) => void) | undefined;
+		const gate: LoopbackGate = {
+			reservePort: async () => 50100,
+			isHealthy: async () => false,
+			waitUntilHealthy: () =>
+				new Promise<boolean>((resolve) => {
+					release = resolve;
+				}),
+		};
+		const server = new KptnServer(fakeSpawner(child), gate);
+
+		const started = server.start(workspaceUri, '/venv/bin/python');
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.strictEqual(child.killSignals.length, 0, 'the child must still be booting');
+
+		server.dispose();
+		// Immediately, without waiting for the health probe: a `kptn ui` that
+		// hangs before it ever answers would otherwise be left running with no
+		// handle to it, since it is not yet recorded as the running server.
+		assert.deepStrictEqual(
+			child.killSignals,
+			['SIGTERM'],
+			'disposal must terminate a booting child without waiting on its health probe',
+		);
+
+		release?.(true);
+		await assert.rejects(() => started, /disposed/i);
+		assert.deepStrictEqual(
+			child.killSignals,
+			['SIGTERM'],
+			'a child still booting at disposal must be terminated exactly once',
+		);
+	});
+
 	test('relaunches when the cached server stops answering', async () => {
 		const first = new FakeProcess('');
 		const second = new FakeProcess('');
@@ -407,6 +485,39 @@ suite('shared UI bridge authorization', () => {
 		assert.strictEqual(approve({ type: 'openSource', path: '', token }).ok, false);
 		assert.strictEqual(approve({ type: 'openSource', path: 42, token }).ok, false);
 		assert.strictEqual(approve({ type: 'openSource', token }).ok, false);
+	});
+
+	test('rejects a multibyte token of the same string length without throwing', () => {
+		// 'é'.repeat(n) has the same .length as an n-character ASCII token but
+		// twice the bytes; comparing byte-unequal buffers throws, and the
+		// security decision function must reject rather than throw.
+		const multibyte = '\u00e9'.repeat(token.length);
+		assert.strictEqual(multibyte.length, token.length);
+		assert.notStrictEqual(Buffer.byteLength(multibyte, 'utf8'), Buffer.byteLength(token, 'utf8'));
+		const result = approve({ type: 'openSource', path: 'models/orders.sql', token: multibyte });
+		assert.strictEqual(result.ok, false);
+		assert.ok(!result.ok && result.reason === 'bad-token');
+	});
+
+	test('rejects a dangling symlink inside the workspace', function () {
+		const link = path.join(root, 'dangling');
+		if (!fs.existsSync(path.join(root, 'escape'))) {
+			this.skip();
+		}
+		if (!fs.lstatSync(link, { throwIfNoEntry: false })) {
+			fs.symlinkSync(path.join(root, 'models', 'does-not-exist.sql'), link);
+		}
+		const result = approve({ type: 'openSource', path: 'dangling', token });
+		assert.strictEqual(
+			result.ok,
+			false,
+			'a link that resolves to nothing must not be synthesized into a path',
+		);
+	});
+
+	test('still accepts a file that does not exist yet under a real directory', () => {
+		const result = approve({ type: 'openSource', path: 'models/not-created-yet.sql', token });
+		assert.strictEqual(result.ok, true, 'a plain missing leaf is not a symlink and stays resolvable');
 	});
 
 	test('rejects a mismatched bridge token', () => {
