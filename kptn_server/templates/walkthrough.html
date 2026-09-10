@@ -10,6 +10,10 @@
 
   Each task row is an ordinary link. htmx swaps the detail into the panel
   below when scripting is available; following the link works when it is not.
+
+  A task whose ``docs`` reference was refused is marked here and explains
+  itself in its detail panel. One bad reference costs that task its
+  documentation, never the page.
 #}
 {% extends "base.html" %}
 
@@ -45,6 +49,7 @@
              hx-target="#task-detail"
              hx-swap="innerHTML"><code>{{ item.name }}</code></a>
           {% if item.bypassed %}<span class="badge">bypassed</span>{% endif %}
+          {% if item.docs_error %}<span class="badge">documentation link rejected</span>{% endif %}
         </td>
         <td class="muted">{{ item.kind }}</td>
         <td class="muted">{{ item.description or not_documented }}</td>

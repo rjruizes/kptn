@@ -173,6 +173,33 @@ def test_inspection_rejects_docs_outside_project(tmp_path: Path) -> None:
         resolve_docs_path(tmp_path, "../secret.md")
 
 
+def test_inspection_reports_an_escaping_docs_reference_per_item(
+    tmp_path: Path,
+) -> None:
+    """A bad ``docs=`` degrades that one item, and nothing else.
+
+    Building the read model used to raise, which made a single bad reference
+    anywhere in a pipeline cost the caller the entire inspection.
+    """
+
+    @kptn.task(outputs=["duckdb://main.a"], docs="../../outside.md")
+    def escaping() -> None: ...
+
+    @kptn.task(outputs=["duckdb://main.b"], docs="docs/fine.md")
+    def innocent() -> None: ...
+
+    pipeline = kptn.Pipeline("escaper", escaping >> innocent)
+
+    inspection = inspect_pipeline(pipeline, KptnConfig(), None, tmp_path)
+
+    by_name = {item.name: item for item in inspection.items}
+    assert by_name["escaping"].docs_path is None
+    assert by_name["escaping"].docs_anchor is None
+    assert "must stay within project root" in (by_name["escaping"].docs_error or "")
+    assert by_name["innocent"].docs_error is None
+    assert by_name["innocent"].docs_path == (tmp_path / "docs" / "fine.md").resolve()
+
+
 def test_resolve_docs_path_accepts_relative_path_within_root(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "notes.md").write_text("hello")

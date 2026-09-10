@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
+from kptn.runner.events import EventKind
+
 JSONValue = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
@@ -43,11 +45,16 @@ STATUS_INTERRUPTED = "interrupted"
 #: The event kinds :meth:`RunStore.event_counts` aggregates. Deliberately
 #: excludes ``log``, which is by far the most numerous kind and contributes
 #: nothing to a run's task or warning counts.
+#:
+#: Derived from :class:`~kptn.runner.events.EventKind` rather than spelled
+#: out, along with every other kind this module tests for: the runner owns
+#: the vocabulary, and a rename there has to break loudly here instead of
+#: quietly zeroing a count or skipping a state transition.
 COUNTED_EVENT_KINDS = (
-    "task_started",
-    "task_skipped",
-    "warning",
-    "task_finished",
+    EventKind.TASK_STARTED.value,
+    EventKind.TASK_SKIPPED.value,
+    EventKind.WARNING.value,
+    EventKind.TASK_FINISHED.value,
 )
 
 TERMINAL_STATUSES = frozenset(
@@ -353,7 +360,7 @@ class RunStore:
                 raise RunNotFoundError(f"no such run: {run_id}")
             current_status = row["status"]
 
-            if kind == "run_started":
+            if kind == EventKind.RUN_STARTED.value:
                 if current_status != STATUS_QUEUED:
                     conn.execute("ROLLBACK")
                     raise RunStateError(
@@ -368,7 +375,7 @@ class RunStore:
                         run_id,
                     ),
                 )
-            elif kind == "task_started":
+            elif kind == EventKind.TASK_STARTED.value:
                 if current_status in TERMINAL_STATUSES:
                     conn.execute("ROLLBACK")
                     raise RunStateError(
@@ -378,7 +385,7 @@ class RunStore:
                     "UPDATE runs SET current_task = ?, heartbeat_at = ? WHERE run_id = ?",
                     (task_name, _dt_to_text(event_timestamp), run_id),
                 )
-            elif kind == "run_finished":
+            elif kind == EventKind.RUN_FINISHED.value:
                 if current_status not in (STATUS_RUNNING, STATUS_STOP_REQUESTED):
                     conn.execute("ROLLBACK")
                     raise RunStateError(

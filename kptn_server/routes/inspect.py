@@ -57,6 +57,7 @@ to start.
 
 from __future__ import annotations
 
+import logging
 import urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
@@ -78,12 +79,21 @@ from kptn_server.markdown import DocumentationError, render_project_markdown
 from kptn_server.project import PROFILE_CONFIG_FILENAME, ProjectContext
 from kptn_server.routes.support import error_response, is_fragment_request
 
+_LOGGER = logging.getLogger(__name__)
+
 router = APIRouter()
 
 #: Shown wherever a task declared nothing. One spelling, one definition: a
 #: page that said "n/a" in one panel and "-" in another would read as though
 #: the two meant different things.
 NOT_DOCUMENTED = "Not documented."
+
+#: Appended to a refused ``docs`` reference, so the message says where the
+#: bad declaration lives rather than only that something was refused.
+DOCS_REJECTION_ADVICE = (
+    "Documentation must live inside the project, and the reference is "
+    "declared on a task, Stage, or Pipeline in the project's own code."
+)
 
 #: Where ``kptn`` keeps task state when ``kptn.yaml`` names no ``db_path``.
 #: Mirrors :func:`kptn.state_store.factory.init_state_store`'s own default.
@@ -311,29 +321,6 @@ def _detail_url(name: str, profile: str | None) -> str:
     return f"{path}?{query}" if query else path
 
 
-def _invalid_documentation(
-    request: Request, exc: Exception, *, nav_active: str
-) -> HTMLResponse:
-    """A project whose ``docs`` reference escapes the project root.
-
-    ``inspect_pipeline`` refuses the reference while building the read model,
-    so this fires before any file is opened -- and it is a page, not a blank
-    panel, because a project that cannot be inspected at all is not something
-    to render half of.
-    """
-    return error_response(
-        request,
-        status_code=500,
-        title="This pipeline's documentation cannot be read",
-        detail=(
-            f"{exc} Documentation must live inside the project, and "
-            "the reference is declared on a task, Stage, or Pipeline in the "
-            "project's own code."
-        ),
-        nav_active=nav_active,
-    )
-
-
 @router.get("/walkthrough", response_class=HTMLResponse)
 def walkthrough(request: Request, profile: str | None = None) -> HTMLResponse:
     """The resolved pipeline, in order, as a reader would walk it."""
@@ -344,8 +331,6 @@ def walkthrough(request: Request, profile: str | None = None) -> HTMLResponse:
 
     try:
         inspection = _inspection(project, selected)
-    except ValueError as exc:
-        return _invalid_documentation(request, exc, nav_active="docs")
     except KptnError as exc:
         return error_response(
             request,
@@ -408,6 +393,12 @@ def _rendered_docs(
     or unreadable file becomes a visible message: a blank panel would be
     indistinguishable from a task that documented nothing.
     """
+    if item.docs_error is not None:
+        # Refused by ``inspect_pipeline``, per item. The reference never
+        # became a path, so there is nothing to read and nothing to link --
+        # only a message naming what the project declared and why it was
+        # rejected.
+        return None, f"{item.docs_error} {DOCS_REJECTION_ADVICE}"
     reference = _docs_reference(project, item)
     if reference is None:
         return None, None
@@ -438,13 +429,24 @@ def _resolver() -> tuple[Any, Any] | None:
     Returns ``None`` when the service cannot be imported. It is also the seam
     the link tests replace, so that a test about *linking* does not depend on
     a real project having a built DuckDB file.
+
+    Every import-time failure counts, not only ``ImportError``. The contract
+    this seam advertises is "degrade to no links", and a module-scope error of
+    any other shape -- a bad ``sqlglot`` build raising at import, a
+    configuration read that throws -- would otherwise leave a task-detail
+    render with an unhandled 500. The failure is logged rather than swallowed,
+    so the install still gets diagnosed.
     """
     try:
         from kptn_server.service import (  # noqa: PLC0415 - see docstring
             _normalize_table_name,
             build_table_file_map,
         )
-    except ImportError:
+    except Exception:  # noqa: BLE001 - two links must not cost the page
+        _LOGGER.exception(
+            "kptn_server.service could not be imported; "
+            "lineage and preview links are unavailable"
+        )
         return None
     return build_table_file_map, _normalize_table_name
 
@@ -523,8 +525,6 @@ def task_detail(
 
     try:
         inspection = _inspection(project, selected)
-    except ValueError as exc:
-        return _invalid_documentation(request, exc, nav_active="docs")
     except KptnError as exc:
         return error_response(
             request,
@@ -573,6 +573,7 @@ def _first_named(items: Iterable[InspectionItem], name: str) -> InspectionItem |
 
 
 __all__ = [
+    "DOCS_REJECTION_ADVICE",
     "LINEAGE_PATH",
     "TASK_KINDS",
     "NOT_DOCUMENTED",

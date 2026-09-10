@@ -67,6 +67,10 @@ class InspectionItem:
     source_line: int | None
     docs_path: Path | None
     docs_anchor: str | None
+    #: Why this item's ``docs`` reference was refused, if it was. Set instead
+    #: of ``docs_path``, never alongside it: one bad reference degrades that
+    #: task's documentation, and nothing else on the page.
+    docs_error: str | None
     predecessors: tuple[str, ...]
     successors: tuple[str, ...]
 
@@ -95,14 +99,27 @@ def resolve_docs_path(project_root: Path, candidate: str) -> Path:
     return resolved
 
 
-def _split_docs(docs: str | None, project_root: Path) -> tuple[Path | None, str | None]:
-    """Split a ``docs`` string ("path/to/file.md#anchor") into (path, anchor)."""
+def _split_docs(
+    docs: str | None, project_root: Path
+) -> tuple[Path | None, str | None, str | None]:
+    """Split a ``docs`` string ("path/to/file.md#anchor") into (path, anchor, error).
+
+    A reference that escapes the project root is *rejected here*, per item,
+    rather than raised out of the whole inspection: one task's bad ``docs=``
+    must cost that task its documentation panel, not cost the reader the
+    entire walkthrough. The refusal travels as a message so the page can say
+    which reference was refused and why.
+    """
     if not docs:
-        return None, None
+        return None, None, None
     path_part, sep, anchor = docs.partition("#")
-    docs_path = resolve_docs_path(project_root, path_part) if path_part else None
     docs_anchor = anchor if sep else None
-    return docs_path, docs_anchor
+    if not path_part:
+        return None, docs_anchor, None
+    try:
+        return resolve_docs_path(project_root, path_part), docs_anchor, None
+    except ValueError as exc:
+        return None, None, str(exc)
 
 
 def _spec_for(node: AnyNode) -> Any | None:
@@ -246,7 +263,7 @@ def inspect_pipeline(
             sequence += 1
             seq = sequence
 
-        docs_path, docs_anchor = _split_docs(_docs_for(node), project_root)
+        docs_path, docs_anchor, docs_error = _split_docs(_docs_for(node), project_root)
         source_path, source_line = _source_for(node)
 
         items.append(
@@ -263,6 +280,7 @@ def inspect_pipeline(
                 source_line=source_line,
                 docs_path=docs_path,
                 docs_anchor=docs_anchor,
+                docs_error=docs_error,
                 predecessors=tuple(predecessors[id(node)]),
                 successors=tuple(successors[id(node)]),
             )

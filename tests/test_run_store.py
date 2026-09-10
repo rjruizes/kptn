@@ -501,3 +501,27 @@ def test_event_counts_is_empty_for_a_run_with_no_counted_events(
     assert store.event_counts(record.run_id) == {}
     # And for a run that does not exist at all: a count of nothing, not a raise.
     assert store.event_counts("nope") == {}
+
+
+def test_the_stores_event_vocabulary_comes_from_the_runner() -> None:
+    """Every kind this module tests for is an ``EventKind``, not a literal.
+
+    Three sites keyed off bare strings: the counted kinds, and -- worse --
+    ``append_event``'s status machine, where a rename in the runner would
+    have broken a state transition rather than merely zeroing a count.
+    Deriving them means a rename is an ``AttributeError`` at import.
+    """
+    from kptn.runner.events import EventKind
+    from kptn_server import run_store
+
+    known = {kind.value for kind in EventKind}
+    assert set(COUNTED_EVENT_KINDS) <= known
+    # ``log`` is the one work-shaped kind deliberately left out.
+    assert EventKind.LOG.value not in COUNTED_EVENT_KINDS
+
+    source = Path(run_store.__file__).read_text(encoding="utf-8")
+    for kind in EventKind:
+        assert f'"{kind.value}"' not in source, (
+            f"{kind.value!r} is spelled as a literal in run_store.py; "
+            "derive it from EventKind instead"
+        )

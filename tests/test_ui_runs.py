@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 
 from kptn_server.app import create_app
 from kptn_server.processes import ProcessIdentity, ProcessLaunchError
+from kptn_server.routes.runs import LAUNCH_FAILURE_PREFIX
 from kptn_server.run_store import (
     STATUS_FAILED,
     STATUS_INTERRUPTED,
@@ -348,6 +349,77 @@ def test_post_run_accepts_a_form_body_with_a_charset(
     assert response.status_code == 303
     run_id = response.headers["location"].rsplit("/", 1)[-1]
     assert store.get_run(run_id).profile == "success"
+
+
+def test_post_run_persists_the_launch_error_for_a_later_reload(
+    client: TestClient, manager: MagicMock, app, store: RunStore
+) -> None:
+    """The reason a run never started has to survive a page refresh.
+
+    It used to exist only in the 500 body: reload the run page and you got a
+    failed run with no explanation anywhere. The design says a failure to
+    spawn the worker marks the run failed *with the launch error*, so the
+    error is appended as a console event before the run is finished.
+    """
+    manager.start.side_effect = ProcessLaunchError("worker vanished before exec")
+
+    first = client.post("/runs", data={"profile": "success"})
+    assert first.status_code == 500
+
+    run_id = store.list_runs(app.state.project.root)[0].run_id
+    reloaded = client.get(f"/runs/{run_id}")
+
+    assert reloaded.status_code == 200
+    assert LAUNCH_FAILURE_PREFIX in reloaded.text
+    assert "worker vanished before exec" in reloaded.text
+    assert f'data-status="{STATUS_FAILED}"' in reloaded.text
+
+
+def test_an_unidentifiable_worker_fails_the_run_like_any_other_launch_failure(
+    app, store: RunStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One event, one status.
+
+    ``RunProcessManager.start`` used to write ``interrupted`` when it could
+    not identify the process it had just spawned, while the route wrote
+    ``failed`` for every other launch failure -- and then the route's
+    ``finally`` called ``finish_run`` on that already-terminal run and logged
+    a full traceback for a case it had handled. ``start`` now finishes
+    nothing and the route is the single writer.
+    """
+    import psutil
+
+    from kptn_server import processes as processes_module
+
+    class _FakePopen:
+        pid = 999999
+
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(
+        processes_module.subprocess, "Popen", lambda *a, **k: _FakePopen()
+    )
+
+    def _no_such_process(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(processes_module.psutil, "Process", _no_such_process)
+
+    app.state.processes = processes_module.RunProcessManager(store)
+    client = TestClient(app)
+
+    response = client.post("/runs", data={"profile": "success"})
+
+    assert response.status_code == 500
+    runs = store.list_runs(app.state.project.root)
+    assert len(runs) == 1
+    assert runs[0].status == STATUS_FAILED
+    assert store.active_run(app.state.project.root) is None
+
+    body = client.get(f"/runs/{runs[0].run_id}").text
+    assert LAUNCH_FAILURE_PREFIX in body
+    assert "vanished before it could be identified" in body
 
 
 def test_post_run_releases_the_lock_when_the_launch_is_interrupted(

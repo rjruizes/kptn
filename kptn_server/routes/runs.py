@@ -102,6 +102,7 @@ from kptn_server.run_store import (
     RunRequest,
     RunStateError,
     RunStore,
+    RunStoreError,
     StoredEvent,
     WarningGroup,
 )
@@ -419,23 +420,28 @@ async def start_run(request: Request):
     # is in a ``finally`` rather than the ``except`` so that a BaseException
     # (a KeyboardInterrupt arriving in this exact window, say) also releases
     # the project lock instead of wedging the project until someone edits the
-    # database by hand.
+    # database by hand. ``_fail_launch`` is idempotent, so the ``except``
+    # path's call -- the one that carries the reason -- is not repeated here.
     launched = False
     try:
         manager.start(record.run_id)
         launched = True
     except Exception as exc:  # noqa: BLE001 - every launch failure lands here
-        _LOGGER.exception("could not launch a worker for run %s", record.run_id)
+        detail = f"{type(exc).__name__}: {exc}"
+        _LOGGER.warning(
+            "could not launch a worker for run %s: %s", record.run_id, detail
+        )
+        _fail_launch(store, record.run_id, detail)
         return _error_response(
             request,
             status_code=500,
             title="The run could not be started",
-            detail=f"{type(exc).__name__}: {exc}",
+            detail=detail,
             run_id=record.run_id,
         )
     finally:
         if not launched:
-            _finish_quietly(store, record.run_id)
+            _fail_launch(store, record.run_id, None)
 
     return RedirectResponse(url=f"/runs/{record.run_id}", status_code=303)
 
@@ -478,11 +484,61 @@ async def _submitted_field(request: Request, name: str) -> str | None:
     return values[-1].strip() if values else None
 
 
-def _finish_quietly(store: RunStore, run_id: str) -> None:
+#: Prefixes the console line a launch failure leaves behind, so the reason a
+#: run never started reads as kptn's own words rather than as pipeline output
+#: (the pipeline never ran).
+LAUNCH_FAILURE_PREFIX = "kptn could not start this run:"
+
+
+def _fail_launch(store: RunStore, run_id: str, detail: str | None) -> None:
+    """Record a launch that never produced a worker: ``failed``, with why.
+
+    Two things have to be true afterwards and neither was.
+
+    **One status.** ``RunProcessManager.start`` used to write ``interrupted``
+    on one failure path while this route wrote ``failed`` on the other, so
+    the same event -- no worker -- produced two different outcomes depending
+    on where it was noticed. ``start`` now finishes nothing; this is the only
+    writer, and the status is always ``failed``, which is what the design
+    says a failure to spawn the worker is.
+
+    **The reason survives a reload.** The launch error used to exist only in
+    the 500 body, so refreshing the run page showed a failed run with no
+    explanation at all. It is appended as a ``log`` event first, while the
+    run is still non-terminal, and the console renders it like any other
+    line.
+
+    Idempotent, and quiet about a run that is already terminal: the caller
+    reaches here twice on the error path (once with the reason, once from its
+    ``finally``), and a run someone else finished in the meantime is not this
+    function's problem to shout about.
+    """
+    record = store.get_run(run_id)
+    if record is None or record.status in TERMINAL_STATUSES:
+        return
+
+    if detail:
+        try:
+            store.append_event(
+                run_id,
+                EventKind.LOG.value,
+                payload={
+                    "message": f"{LAUNCH_FAILURE_PREFIX} {detail}",
+                    "stream": "stderr",
+                    "severity": "error",
+                },
+            )
+        except RunStoreError as exc:
+            _LOGGER.debug(
+                "could not record the launch failure for run %s: %s", run_id, exc
+            )
+
     try:
         store.finish_run(run_id, STATUS_FAILED)
-    except Exception:  # noqa: BLE001 - the launch error is the one that matters
-        _LOGGER.exception("could not finish run %s after a failed launch", run_id)
+    except RunStoreError as exc:
+        # A worker that got there first, or a run already gone. Both are
+        # states this function wanted, not errors it caused.
+        _LOGGER.debug("run %s was already finished before cleanup: %s", run_id, exc)
 
 
 #: Rendering an error is shared with every other router in this package --

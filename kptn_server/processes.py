@@ -130,7 +130,14 @@ class RunProcessManager:
         ]
 
     def start(self, run_id: str) -> ProcessIdentity:
-        """Launch a detached worker for *run_id* and record its identity."""
+        """Launch a detached worker for *run_id* and record its identity.
+
+        Never finishes the run. A failure raises -- ``ProcessLaunchError`` for
+        a worker that could not be identified, ``RunStateError`` for a run
+        that must not be launched -- and the caller owns recording the
+        terminal state and its reason, so that a launch failure has exactly
+        one status and one message wherever it came from.
+        """
         record = self._require_run(run_id)
         if record.status in TERMINAL_STATUSES:
             raise RunStateError(f"run {run_id} is already finished ({record.status!r})")
@@ -164,8 +171,14 @@ class RunProcessManager:
         except psutil.Error as exc:
             # The worker died before we could read its creation time, so we
             # have no identity for it and can never safely signal that PID.
-            # Fail the run rather than leave the project locked by a ghost.
-            self._finish_quietly(run_id, STATUS_INTERRUPTED, exit_code=proc.poll())
+            #
+            # The run is *not* finished here. Every launch failure has to
+            # reach the caller as one kind of failure with one terminal
+            # status, and the caller is the only place that knows the error
+            # text worth persisting. Writing ``interrupted`` here and letting
+            # the caller then write ``failed`` produced two different
+            # outcomes for the same event -- and a spurious traceback when
+            # the second write hit an already-terminal run.
             raise ProcessLaunchError(
                 f"worker for run {run_id} vanished before it could be identified: {exc}"
             ) from exc

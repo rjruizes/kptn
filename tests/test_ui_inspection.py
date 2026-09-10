@@ -488,11 +488,63 @@ def test_task_detail_refuses_documentation_outside_the_project(
     )
     client = project_client(root)
 
-    for path in ("/walkthrough", "/walkthrough/task/escaping"):
-        response = client.get(path)
-        assert response.status_code == 500, path
-        assert SECRET not in response.text, path
-        assert "must stay within project root" in response.text, path
+    detail = client.get("/walkthrough/task/escaping")
+    assert detail.status_code == 200
+    assert SECRET not in detail.text
+    assert "must stay within project root" in detail.text
+    assert "declared on a task, Stage, or Pipeline" in detail.text
+
+
+def test_one_escaping_docs_reference_does_not_break_the_walkthrough(
+    tmp_path: Path,
+) -> None:
+    """Per-link rejection, not a 500 for the whole read model.
+
+    ``inspect_pipeline`` used to raise while *building* the inspection, so a
+    single bad ``docs=`` anywhere in a pipeline made ``/walkthrough`` -- and
+    every task's detail page, including the well-documented ones -- a 500.
+    The spec asks for the reference to be rejected with an explicit message;
+    that is a property of one link, not of the page.
+    """
+    (tmp_path / "outside.md").write_text(f"# Secret\n\n{SECRET}\n")
+    root = write_project(
+        tmp_path,
+        "one_escaper",
+        module_source=(
+            "import kptn\n\n\n"
+            '@kptn.task(outputs=[], description="Points out of the project.",\n'
+            '           docs="../../outside.md")\n'
+            "def escaping() -> None:\n    return None\n\n\n"
+            '@kptn.task(outputs=[], description="Documented properly.",\n'
+            '           docs="docs/fine.md")\n'
+            "def innocent() -> None:\n    return None\n\n\n"
+            'pipeline = kptn.Pipeline("one_escaper", escaping >> innocent)\n'
+        ),
+    )
+    (root / "docs").mkdir()
+    (root / "docs" / "fine.md").write_text("# Fine\n\nnothing wrong here\n")
+    client = project_client(root)
+
+    page = client.get("/walkthrough")
+    assert page.status_code == 200
+    assert SECRET not in page.text
+    # Both tasks are still listed, in order, and the bad one is marked.
+    assert "escaping" in page.text
+    assert "innocent" in page.text
+    assert "documentation link rejected" in _row_for(page.text, "escaping")
+    assert "documentation link rejected" not in _row_for(page.text, "innocent")
+
+    # The innocent task's own documentation still renders.
+    good = client.get("/walkthrough/task/innocent")
+    assert good.status_code == 200
+    assert "nothing wrong here" in good.text
+    assert SECRET not in good.text
+
+    # The offending task explains itself instead of serving the file.
+    bad = client.get("/walkthrough/task/escaping")
+    assert bad.status_code == 200
+    assert SECRET not in bad.text
+    assert "must stay within project root" in bad.text
 
 
 def test_render_project_markdown_escapes_raw_html(tmp_path: Path) -> None:
@@ -858,6 +910,41 @@ def test_the_resolver_seam_resolves_now_that_sqlglot_ships(tmp_path: Path) -> No
 
     assert normalize("main.widgets") == "widgets"
     assert "widgets" in build_table_file_map(config)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [ImportError("no sqlglot"), RuntimeError("sqlglot built wrong")],
+    ids=["import-error", "other-error"],
+)
+def test_a_broken_service_import_costs_two_links_not_the_page(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """The seam's contract is "degrade to no links", for *any* import failure.
+
+    It used to catch only ``ImportError``, so anything else raised at
+    ``kptn_server.service`` import time -- a bad ``sqlglot`` build, a
+    configuration read that throws -- came out of a task-detail render as an
+    unhandled 500 instead.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _raising_import(name, *args, **kwargs):
+        if name == "kptn_server.service":
+            raise failure
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(__import__("sys").modules, "kptn_server.service", raising=False)
+    monkeypatch.setattr(builtins, "__import__", _raising_import)
+
+    assert inspect_routes._resolver() is None
+
+    response = client.get("/walkthrough/task/noisy_task?profile=success")
+
+    assert response.status_code == 200
+    assert "/lineage-page" not in response.text
 
 
 def test_the_lineage_targets_are_served_by_the_shared_app(ui_project: Path) -> None:
