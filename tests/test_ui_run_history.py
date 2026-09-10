@@ -42,8 +42,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kptn_server.app import create_app
-from kptn_server.processes import RunProcessManager
-from kptn_server.routes.runs import FORCE_FINISH_CONFIRMATION
+from kptn_server.processes import STALE_WORKER_GRACE_SECONDS, RunProcessManager
+from kptn_server.routes.runs import FORCE_FINISH_CONFIRMATION, HISTORY_LIMIT
 from kptn_server.run_store import (
     STATUS_FAILED,
     STATUS_INTERRUPTED,
@@ -65,9 +65,24 @@ pytestmark = pytest.mark.ui_hygiene
 #: than "cannot tell". Used to make a run reconcilable on purpose.
 DEAD_PID = 2_147_483_646
 
-#: A hostile string used wherever pipeline- or project-supplied text reaches
-#: the page. It must arrive as text on every surface that shows it.
-HOSTILE = '<img src=x onerror="alert(1)">'
+#: Hostile strings, one per field that reaches the page, so an assertion about
+#: one field cannot be satisfied by another field being escaped. Each must
+#: arrive as text on every surface that shows it.
+HOSTILE_MESSAGE = '<img src=x onerror="alert(1)">'
+HOSTILE_TASK = '<svg onload="task()">'
+HOSTILE_CATEGORY = '<iframe src="javascript:0">'
+HOSTILE_PROFILE = '<object data="x">'
+
+
+def _escaped(value: str) -> str:
+    """*value* as Jinja's autoescaping renders it."""
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&#34;")
+        .replace("'", "&#39;")
+    )
 
 
 # -- fixtures --------------------------------------------------------------
@@ -548,8 +563,11 @@ def test_log_download_is_a_404_when_the_file_is_gone(client, store, app) -> None
 
 
 def test_run_page_offers_the_log_download(client, completed_run) -> None:
+    """A real GET form, so the control is a ``<button>`` the UI already styles
+    rather than a link wearing a class no stylesheet defines."""
     body = client.get(f"/runs/{completed_run.run_id}").text
-    assert f'href="/runs/{completed_run.run_id}/log"' in body
+    assert f'action="/runs/{completed_run.run_id}/log"' in body
+    assert 'method="get"' in body
 
 
 # -- stop ------------------------------------------------------------------
@@ -774,17 +792,87 @@ def test_force_finish_rejects_a_body_it_cannot_parse(
     assert store.get_run(active_run.run_id).status == STATUS_RUNNING
 
 
-def test_run_page_offers_force_finish_only_while_a_run_is_live(
-    client, completed_run: RunRecord, active_run: RunRecord
-) -> None:
-    live = client.get(f"/runs/{active_run.run_id}").text
-    assert f'action="/runs/{active_run.run_id}/force-finish"' in live
-    # The confirmation control is on the page, and nothing pre-fills it.
-    assert 'name="confirm"' in live
-    assert f'value="{FORCE_FINISH_CONFIRMATION}"' not in live
+def _offers_force_finish(client, run_id: str) -> bool:
+    return f'action="/runs/{run_id}/force-finish"' in client.get(f"/runs/{run_id}").text
 
-    done = client.get(f"/runs/{completed_run.run_id}").text
-    assert f'action="/runs/{completed_run.run_id}/force-finish"' not in done
+
+def test_force_finish_is_not_offered_for_a_healthy_run(
+    client, active_run: RunRecord
+) -> None:
+    """A visibly fine run must not be invited to abandon its own worker.
+
+    ``active_run`` heartbeat lands when ``run_started`` is appended, so this
+    run is running and reporting in. That is precisely the case where
+    force-finishing does the damage the page warns about, so the hatch is out
+    of sight -- the typed confirmation makes showing it harmless, not useful.
+    """
+    assert not _offers_force_finish(client, active_run.run_id)
+
+
+def test_force_finish_is_offered_for_a_run_that_will_not_stop(
+    client, store: RunStore, manager: MagicMock, active_run: RunRecord
+) -> None:
+    """Asked to stop and still going is the first wedged shape."""
+    manager.stop.return_value = False
+    client.post(f"/runs/{active_run.run_id}/stop")
+    assert store.get_run(active_run.run_id).status == STATUS_STOP_REQUESTED
+    assert _offers_force_finish(client, active_run.run_id)
+
+
+def test_force_finish_is_offered_for_a_run_with_a_stale_heartbeat(
+    client, store: RunStore, active_run: RunRecord
+) -> None:
+    """No heartbeat for longer than the supervisor's grace window is the other.
+
+    The heartbeat is written back into the row rather than waited for, so
+    nothing here sleeps.
+    """
+    stale = datetime.now(timezone.utc) - timedelta(
+        seconds=STALE_WORKER_GRACE_SECONDS * 4
+    )
+    _write_column(store, active_run.run_id, "heartbeat_at", stale.isoformat())
+    assert _offers_force_finish(client, active_run.run_id)
+
+
+def test_force_finish_is_not_offered_for_a_terminal_run(
+    client, completed_run: RunRecord
+) -> None:
+    assert not _offers_force_finish(client, completed_run.run_id)
+
+
+def test_the_confirmation_control_is_never_prefilled(
+    client, store: RunStore, active_run: RunRecord
+) -> None:
+    """The whole point of a typed word is that it is typed.
+
+    A ``value`` on the input would make the hatch a one-click twin of Stop
+    again, which is the thing its shape exists to prevent.
+    """
+    stale = datetime.now(timezone.utc) - timedelta(
+        seconds=STALE_WORKER_GRACE_SECONDS * 4
+    )
+    _write_column(store, active_run.run_id, "heartbeat_at", stale.isoformat())
+    body = client.get(f"/runs/{active_run.run_id}").text
+    assert 'name="confirm"' in body
+    assert f'value="{FORCE_FINISH_CONFIRMATION}"' not in body
+
+
+def test_force_finish_still_accepts_a_healthy_run(
+    client, store: RunStore, active_run: RunRecord
+) -> None:
+    """The gate is on the offer, not on the route.
+
+    A run can go from wedged to healthy between the render and the POST.
+    Refusing there would turn that race into the dead end this hatch exists
+    to escape, so the route stays open to any non-terminal run.
+    """
+    response = client.post(
+        f"/runs/{active_run.run_id}/force-finish",
+        data={"confirm": FORCE_FINISH_CONFIRMATION},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert store.get_run(active_run.run_id).status == STATUS_INTERRUPTED
 
 
 # -- interrupted runs ------------------------------------------------------
@@ -829,35 +917,64 @@ def test_history_shows_an_interrupted_run_as_interrupted(
 
 
 def _hostile_run(store: RunStore, project_root: Path) -> RunRecord:
-    """A finished run whose task name and warning message are both hostile."""
+    """A finished run whose task name, warning message, and warning category
+    are three *distinct* hostile strings.
+
+    Distinct on purpose: with one shared string, a test asserting "the task
+    name is escaped" passes on the strength of the message being escaped, and
+    the test's name stops being true.
+    """
     record = _seed_run(store, project_root)
-    store.append_event(record.run_id, "task_started", task_name=HOSTILE)
+    store.append_event(record.run_id, "task_started", task_name=HOSTILE_TASK)
     store.append_event(
         record.run_id,
         "warning",
-        task_name=HOSTILE,
-        payload={"message": HOSTILE, "category": HOSTILE},
+        task_name=HOSTILE_TASK,
+        payload={"message": HOSTILE_MESSAGE, "category": HOSTILE_CATEGORY},
     )
     store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
     return store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
 
-def test_summary_escapes_a_hostile_warning_and_task_name(
+def test_summary_escapes_a_hostile_warning_message(
     client, store: RunStore, app
 ) -> None:
     record = _hostile_run(store, app.state.project.root)
     summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
-    assert HOSTILE not in summary
-    assert "&lt;img src=x onerror=&#34;alert(1)&#34;&gt;" in summary
+    assert HOSTILE_MESSAGE not in summary
+    assert _escaped(HOSTILE_MESSAGE) in summary
 
 
-def test_history_escapes_a_hostile_warning_and_task_name(
+def test_summary_escapes_a_hostile_task_name(client, store: RunStore, app) -> None:
+    record = _hostile_run(store, app.state.project.root)
+    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
+    assert HOSTILE_TASK not in summary
+    assert _escaped(HOSTILE_TASK) in summary
+
+
+def test_summary_escapes_a_hostile_warning_category(
+    client, store: RunStore, app
+) -> None:
+    record = _hostile_run(store, app.state.project.root)
+    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
+    assert HOSTILE_CATEGORY not in summary
+    assert _escaped(HOSTILE_CATEGORY) in summary
+
+
+def test_history_escapes_a_hostile_warning_message(
     client, store: RunStore, app
 ) -> None:
     record = _hostile_run(store, app.state.project.root)
     row = _history_row(client.get("/runs").text, record.run_id)
-    assert HOSTILE not in row
-    assert "&lt;img src=x onerror=&#34;alert(1)&#34;&gt;" in row
+    assert HOSTILE_MESSAGE not in row
+    assert _escaped(HOSTILE_MESSAGE) in row
+
+
+def test_history_escapes_a_hostile_task_name(client, store: RunStore, app) -> None:
+    record = _hostile_run(store, app.state.project.root)
+    row = _history_row(client.get("/runs").text, record.run_id)
+    assert HOSTILE_TASK not in row
+    assert _escaped(HOSTILE_TASK) in row
 
 
 def test_history_escapes_a_hostile_profile_name(client, store: RunStore, app) -> None:
@@ -868,10 +985,305 @@ def test_history_escapes_a_hostile_profile_name(client, store: RunStore, app) ->
     """
     record = store.create_run(
         RunRequest(
-            project_root=app.state.project.root, pipeline="fixture", profile=HOSTILE
+            project_root=app.state.project.root,
+            pipeline="fixture",
+            profile=HOSTILE_PROFILE,
         )
     )
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
     row = _history_row(client.get("/runs").text, record.run_id)
-    assert HOSTILE not in row
-    assert "&lt;img" in row
+    assert HOSTILE_PROFILE not in row
+    assert _escaped(HOSTILE_PROFILE) in row
+
+
+# -- bounded work on the page a developer lands on ------------------------
+
+
+def test_history_does_not_hydrate_a_run_s_events(
+    client, store: RunStore, app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The history page must not read a run's events row by row.
+
+    A ``log`` event is one row per captured output span, so hydrating them
+    costs a dataclass construction and a ``json.loads`` per line of pipeline
+    output the project has ever produced -- on the page a developer lands on.
+    ``HISTORY_LIMIT`` bounds the run count, not the event count, so the counts
+    have to come from an aggregate.
+
+    The guard is structural: ``events_after`` is replaced with a spy that
+    fails on sight. It cannot pass against an implementation that hydrates,
+    however few events a test happens to seed.
+    """
+    record = _seed_run(store, app.state.project.root)
+    store.append_event(record.run_id, "task_started", task_name="alpha")
+    for index in range(300):
+        _seed_log_event(store, record, f"line {index}\n")
+    store.append_event(
+        record.run_id, "warning", task_name="alpha", payload={"message": "careful"}
+    )
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="alpha",
+        payload={"status": "succeeded"},
+    )
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    def refuse(*args: object, **kwargs: object):
+        raise AssertionError(
+            "GET /runs hydrated a run's events; it must use the SQL aggregate"
+        )
+
+    monkeypatch.setattr(store, "events_after", refuse)
+
+    row = _history_row(client.get("/runs").text, record.run_id)
+    # And the counts are still right, read out of the aggregate.
+    assert "tasks <b>1</b>" in row
+    assert "1 warning in 1 task" in row
+
+
+def test_history_counts_ignore_log_events(client, store: RunStore, app) -> None:
+    """Output volume must not move a single count.
+
+    The same run twice over, once with 200 log events and once with none: the
+    rendered counts have to be identical. This is the behavioural half of the
+    guard above -- it stays true even if the aggregate is one day replaced.
+    """
+
+    def seed(*, noisy: bool) -> RunRecord:
+        record = _seed_run(store, app.state.project.root)
+        store.append_event(record.run_id, "task_started", task_name="alpha")
+        if noisy:
+            for index in range(200):
+                _seed_log_event(store, record, f"line {index}\n")
+        store.append_event(
+            record.run_id,
+            "task_finished",
+            task_name="alpha",
+            payload={"status": "succeeded"},
+        )
+        store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+        return record
+
+    quiet = seed(noisy=False)
+    noisy = seed(noisy=True)
+
+    body = client.get("/runs").text
+    counts = _history_row(body, quiet.run_id)
+    assert "tasks <b>1</b>" in counts
+    assert "tasks <b>1</b>" in _history_row(body, noisy.run_id)
+
+    # And on the run page, where the events *are* hydrated for the console.
+    summary = _summary_section(client.get(f"/runs/{noisy.run_id}").text)
+    assert 'data-summary="tasks" data-count="1"' in summary
+    assert 'data-summary="succeeded" data-count="1"' in summary
+
+
+def test_history_truncates_to_the_limit_dropping_the_oldest(
+    client, store: RunStore, app
+) -> None:
+    """``HISTORY_LIMIT`` truncates, and truncates from the *old* end.
+
+    A limit that silently reordered -- or that kept the oldest runs -- would
+    hide the run the developer just finished, which is the only one they are
+    reliably looking for.
+    """
+    root = app.state.project.root
+    seeded = [
+        _seed_finished_run(
+            store,
+            root,
+            # Zero-padded so the text ordering matches the chronology.
+            created_at=f"2026-01-01T00:{index:02d}:00+00:00",
+            profile="success",
+        )
+        for index in range(HISTORY_LIMIT + 3)
+    ]
+
+    rendered = _run_ids_in_order(client.get("/runs").text)
+    assert len(rendered) == HISTORY_LIMIT
+    newest_first = [record.run_id for record in reversed(seeded)]
+    assert rendered == newest_first[:HISTORY_LIMIT]
+    # The three oldest are the ones dropped.
+    for record in seeded[:3]:
+        assert record.run_id not in rendered
+
+
+# -- project scoping ------------------------------------------------------
+
+
+@pytest.fixture
+def foreign_run(store: RunStore, tmp_path: Path) -> RunRecord:
+    """A run recorded in the same store for a *different* project root.
+
+    ``.kptn/ui.db`` holds one project today, but the store is keyed by project
+    root throughout -- ``create_run`` locks on it, ``list_runs`` filters on it
+    -- because nothing structurally stops two contexts from sharing a
+    database. ``get_run`` is keyed by run id alone, so every run-scoped route
+    has to filter for itself.
+    """
+    other_root = tmp_path / "elsewhere"
+    other_root.mkdir()
+    record = _seed_run(store, other_root)
+    _seed_log_event(store, record, "another project's output\n")
+    return record
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix"),
+    [
+        ("get", ""),
+        ("get", "/log"),
+        ("get", "/events"),
+        ("post", "/stop"),
+        ("post", "/force-finish"),
+    ],
+)
+def test_a_foreign_project_s_run_is_a_404_everywhere(
+    client,
+    store: RunStore,
+    manager: MagicMock,
+    foreign_run: RunRecord,
+    method: str,
+    suffix: str,
+) -> None:
+    """Every run-scoped route answers the same way, through one helper."""
+    url = f"/runs/{foreign_run.run_id}{suffix}"
+    response = (
+        client.get(url)
+        if method == "get"
+        else client.post(url, data={"confirm": FORCE_FINISH_CONFIRMATION})
+    )
+    assert response.status_code == 404
+    # Nothing about the other project's run leaked, and nothing acted on it.
+    assert "another project's output" not in response.text
+    manager.stop.assert_not_called()
+    assert store.get_run(foreign_run.run_id).status == STATUS_RUNNING
+
+
+def test_a_foreign_project_s_log_is_never_served(
+    client, foreign_run: RunRecord
+) -> None:
+    """The download in particular: a 404, not that project's captured output."""
+    response = client.get(f"/runs/{foreign_run.run_id}/log")
+    assert response.status_code == 404
+    assert "content-disposition" not in response.headers
+
+
+# -- warning attribution --------------------------------------------------
+
+
+def test_headline_counts_only_attributed_warnings_against_tasks(
+    client, store: RunStore, app
+) -> None:
+    """A mixed run must not claim outside-task warnings are "in" tasks.
+
+    Two warnings in two tasks plus one raised outside any task is four facts,
+    not "3 warnings in 2 tasks": the total would be counted against a task
+    list that does not account for all of it.
+    """
+    record = _seed_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id, "warning", task_name=None, payload={"message": "at import time"}
+    )
+    store.append_event(record.run_id, "task_started", task_name="alpha")
+    store.append_event(
+        record.run_id, "warning", task_name="alpha", payload={"message": "in alpha"}
+    )
+    store.append_event(record.run_id, "task_started", task_name="beta")
+    store.append_event(
+        record.run_id, "warning", task_name="beta", payload={"message": "in beta"}
+    )
+    store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
+    assert "2 warnings in 2 tasks, 1 outside any task" in summary
+    assert "3 warnings in 2 tasks" not in summary
+    # The total is still all three, and still linked.
+    assert 'data-warning-total="3"' in summary
+
+
+def test_headline_says_so_when_every_warning_is_outside_a_task(
+    client, store: RunStore, app
+) -> None:
+    record = _seed_run(store, app.state.project.root)
+    for _ in range(2):
+        store.append_event(
+            record.run_id,
+            "warning",
+            task_name=None,
+            payload={"message": "at import time"},
+        )
+    store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
+    assert "2 warnings outside any task" in summary
+    assert "in 0 tasks" not in summary
+
+
+def test_headline_omits_the_outside_clause_when_there_is_nothing_outside(
+    client, completed_run: RunRecord
+) -> None:
+    """The all-attributed wording is the brief's, and stays exact."""
+    summary = _summary_section(client.get(f"/runs/{completed_run.run_id}").text)
+    assert "3 warnings in 2 tasks" in summary
+    assert "outside any task" not in summary
+
+
+# -- the orphaned profile selector ----------------------------------------
+
+
+def test_pages_without_a_run_form_do_not_render_the_profile_selector(
+    client, store: RunStore, app
+) -> None:
+    """``<select form="run-form">`` on a page with no such form drives nothing.
+
+    It still renders and still takes input, which is worse than not being
+    there. The pages that own a ``run-form`` keep it; the ones that do not
+    drop it.
+    """
+    assert 'id="profile-select"' not in client.get("/runs").text
+    # The error shell has no run-form either.
+    assert 'id="profile-select"' not in client.get("/runs/nope").text
+    assert 'id="profile-select"' not in client.get("/runs/nope/log").text
+
+
+def test_pages_with_a_run_form_keep_the_profile_selector(
+    client, completed_run: RunRecord
+) -> None:
+    for body in (
+        client.get("/").text,
+        client.get(f"/runs/{completed_run.run_id}").text,
+    ):
+        assert 'id="profile-select"' in body
+        assert 'id="run-form"' in body
+
+
+def test_warning_payloads_with_a_status_are_still_counted(
+    client, store: RunStore, app
+) -> None:
+    """A grouped tally must be summed across statuses, not read at ``None``.
+
+    The aggregate groups by ``(kind, json_extract(payload, '$.status'))``.
+    Only ``task_finished`` carries a status today, but nothing stops another
+    kind's payload from growing one -- and the moment it does, reading a
+    kind's count at ``(kind, None)`` splits it across two rows and silently
+    undercounts. The console header is where that would show.
+    """
+    record = _seed_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "warning",
+        task_name="alpha",
+        payload={"message": "careful", "status": "advisory"},
+    )
+    store.append_event(
+        record.run_id, "warning", task_name="alpha", payload={"message": "also this"}
+    )
+    store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    body = client.get(f"/runs/{record.run_id}").text
+    assert '<b data-counter="warnings">2</b>' in body

@@ -40,6 +40,16 @@ STATUS_ERRORED = "errored"
 #: ever written, so the run's real fate is unknown.
 STATUS_INTERRUPTED = "interrupted"
 
+#: The event kinds :meth:`RunStore.event_counts` aggregates. Deliberately
+#: excludes ``log``, which is by far the most numerous kind and contributes
+#: nothing to a run's task or warning counts.
+COUNTED_EVENT_KINDS = (
+    "task_started",
+    "task_skipped",
+    "warning",
+    "task_finished",
+)
+
 TERMINAL_STATUSES = frozenset(
     {
         STATUS_SUCCEEDED,
@@ -705,6 +715,51 @@ class RunStore:
             conn.close()
         return [self._row_to_event(row) for row in rows]
 
+    def event_counts(self, run_id: str) -> dict[tuple[str, str | None], int]:
+        """Per-(kind, task status) event tallies for *run_id*, aggregated in SQL.
+
+        The raw facts only: how many events of each counted kind exist, and --
+        for ``task_finished``, whose outcome lives in the payload -- how many
+        carried each ``status``. What those tallies *mean* (which of them is a
+        "task", how many tasks never finished) is the caller's, so that the
+        derivation stays in one place above this layer.
+
+        This exists because the run-history page needs counts for every listed
+        run, and hydrating them was quadratic in the wrong thing: a ``log``
+        event is one row per captured output span, so a project with fifty
+        real runs of a few thousand output lines each turned one page load
+        into hundreds of thousands of dataclass constructions and JSON parses.
+        ``COUNT(*) ... GROUP BY`` returns a handful of rows per run instead,
+        and the filter on ``kind`` means the log rows are never even scanned
+        for their payloads.
+
+        ``json_extract`` is SQLite's own JSON1 function, so the status is read
+        by the database rather than by parsing every payload in Python. Kinds
+        with no status (everything but ``task_finished``) key on ``None``.
+
+        Read-only, so no transaction: a caller that wanted counts and events
+        to agree exactly would have to hold one, and nothing does -- a
+        counter that is one event stale on a live run is refreshed by the next
+        poll.
+        """
+        placeholders = ", ".join("?" for _ in COUNTED_EVENT_KINDS)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT kind,
+                       json_extract(payload_json, '$.status') AS status,
+                       COUNT(*) AS total
+                FROM run_events
+                WHERE run_id = ? AND kind IN ({placeholders})
+                GROUP BY kind, status
+                """,
+                (run_id, *COUNTED_EVENT_KINDS),
+            ).fetchall()
+        finally:
+            conn.close()
+        return {(row["kind"], row["status"]): row["total"] for row in rows}
+
     def warning_groups(self, run_id: str) -> list[WarningGroup]:
         conn = self._connect()
         try:
@@ -764,6 +819,7 @@ class RunStore:
 
 
 __all__ = [
+    "COUNTED_EVENT_KINDS",
     "ActiveRunError",
     "RunNotFoundError",
     "RunRecord",

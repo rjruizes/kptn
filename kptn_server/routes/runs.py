@@ -75,7 +75,7 @@ import json
 import logging
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping, Sequence
 
@@ -89,9 +89,11 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
+from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
 from kptn_server.run_store import (
     STATUS_FAILED,
     STATUS_INTERRUPTED,
+    STATUS_STOP_REQUESTED,
     TERMINAL_STATUSES,
     ActiveRunError,
     RunNotFoundError,
@@ -507,18 +509,50 @@ def _is_fragment_request(request: Request) -> bool:
 # -- GET /runs/{run_id} ----------------------------------------------------
 
 
+def project_run(request: Request, run_id: str) -> RunRecord | None:
+    """The run with this id *belonging to the project this app serves*.
+
+    ``get_run`` is keyed by run id alone and is therefore global to the
+    database. One ``.kptn/ui.db`` holds one project today, but the store is
+    keyed by project root throughout -- ``create_run`` locks on it,
+    ``list_runs`` filters on it -- precisely because nothing structurally
+    stops two contexts from sharing a database. Every run-scoped route goes
+    through here so they all agree on what "this project's run" means, and so
+    a foreign run id is a 404 rather than a page (or a log file) from a
+    project this server was not asked to serve.
+
+    Both paths are already resolved -- ``ProjectContext.load`` resolves the
+    root and ``create_run`` stores the resolved one -- so this is a value
+    comparison, not a filesystem one.
+    """
+    record = request.app.state.store.get_run(run_id)
+    if record is None or record.project_root != request.app.state.project.root:
+        return None
+    return record
+
+
+def _no_such_run(request: Request, run_id: str) -> HTMLResponse:
+    """The one 404 every run-scoped route returns.
+
+    Deliberately the same answer for "no such run" and "not this project's
+    run": the second is not a distinction a reader of this UI can act on, and
+    stating it would confirm the existence of a run they were not shown.
+    """
+    return _error_response(
+        request,
+        status_code=404,
+        title="No such run",
+        detail=f"There is no run {run_id!r} in this project's history.",
+    )
+
+
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
 def run_page(request: Request, run_id: str) -> HTMLResponse:
     """The run console for one run, with its whole history already rendered."""
     store: RunStore = request.app.state.store
-    record = store.get_run(run_id)
+    record = project_run(request, run_id)
     if record is None:
-        return _error_response(
-            request,
-            status_code=404,
-            title="No such run",
-            detail=f"There is no run {run_id!r} in this project's history.",
-        )
+        return _no_such_run(request, run_id)
 
     log_path = Path(record.log_path)
     stored = store.events_after(run_id, 0)
@@ -530,13 +564,49 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             "nav_active": "run",
             "run": record,
             "events": events,
-            "counters": counters(stored),
+            # From the same aggregate the history page uses, rather than from
+            # the events hydrated just above for the console: one counting
+            # path, so the two pages cannot disagree about one run.
+            "counters": counters(store.event_counts(run_id)),
             "warnings": warning_summary(store.warning_groups(run_id)),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
+            "force_finish_offered": looks_wedged(record),
             "is_terminal": record.status in TERMINAL_STATUSES,
             "last_sequence": events[-1]["sequence"] if events else 0,
         },
     )
+
+
+def looks_wedged(record: RunRecord, *, now: datetime | None = None) -> bool:
+    """Is this run stuck badly enough to *offer* the force-finish hatch?
+
+    True for a run that has been asked to stop and has not, and for one whose
+    worker has stopped reporting in for longer than the supervisor's grace
+    window -- the two shapes a wedged run actually takes.
+
+    False for a healthy run, which is the point. Force-finishing abandons a
+    possibly-live worker, and a run whose heartbeat landed a second ago is the
+    case where doing that does exactly the damage the page warns about. The
+    typed confirmation means showing the control anyway would not have been a
+    safety hole; keeping it out of sight means a developer is never invited to
+    reach for it while the pipeline is visibly fine.
+
+    This gates the *offer* only. The route stays open to any non-terminal run,
+    because a run can go from wedged to healthy (or the reverse) between the
+    render and the POST, and refusing there would turn that race into a dead
+    end -- the one thing this hatch exists to prevent.
+    """
+    if record.status in TERMINAL_STATUSES:
+        return False
+    if record.status == STATUS_STOP_REQUESTED:
+        return True
+    reference = record.heartbeat_at or record.started_at or record.created_at
+    if reference is None:
+        return False
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    elapsed = ((now or datetime.now(timezone.utc)) - reference).total_seconds()
+    return elapsed > STALE_WORKER_GRACE_SECONDS
 
 
 # -- counts and the warning summary ---------------------------------------
@@ -547,52 +617,59 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
 _TASK_OUTCOMES = ("succeeded", "failed")
 
 
-def counters(events: Sequence[StoredEvent]) -> dict[str, int]:
-    """Task and warning counts for one run, from its lifecycle events.
+def counters(tallies: Mapping[tuple[str, str | None], int]) -> dict[str, int]:
+    """Task and warning counts for one run, for a template.
 
-    Counted from the stored events -- ``task_started``, ``task_skipped``, and
-    the ``status`` on each ``task_finished`` -- and never from the console
-    text. A task that prints the words ``task_started`` is output, not a task,
-    and a summary that scraped the log would say otherwise.
+    *tallies* is what :meth:`~kptn_server.run_store.RunStore.event_counts`
+    returns: ``(kind, task status) -> count``, aggregated by SQLite. Counted
+    from lifecycle events and never from console text -- a task that *prints*
+    the words ``task_started`` is output, not a task, and neither this
+    function nor the query it reads can see console text at all.
 
-    ``unfinished`` is the interesting one: tasks that started and never
-    reported an outcome. That is the shape a stopped or interrupted run leaves
-    behind, and it is the number that tells a reader where the run stopped
-    being trustworthy. It is floored at zero rather than trusted to be
-    non-negative: the event log is written by a worker that can be killed
-    mid-sequence, so "more finishes than starts" is a corrupt log, not a
-    negative count to render.
+    The counting is in SQL because the history page needs these numbers for
+    every listed run, and a ``log`` event is one row per captured output span:
+    hydrating them turned one page load into a JSON parse per line of pipeline
+    output ever produced. The *derivation* stays here, which is the part worth
+    keeping in one place:
+
+    ``unfinished``
+        Tasks that started and never reported an outcome. That is the shape a
+        stopped or interrupted run leaves behind, and the number that tells a
+        reader where the run stopped being trustworthy. Floored at zero rather
+        than trusted to be non-negative: the event log is written by a worker
+        that can be killed mid-sequence, so "more finishes than starts" is a
+        corrupt log, not a negative count to render.
+
+    Only the two outcomes the executor emits are counted as outcomes. An
+    unrecognized ``status`` is left out of both rather than guessed at, so it
+    surfaces as ``unfinished`` -- the honest answer for a task whose outcome
+    this UI does not understand.
 
     ``tasks``, ``skipped`` and ``warnings`` are also the console header's
     counters, which ``app.js`` recounts off the DOM as events stream in. One
     function so the two can never disagree about what a task is.
     """
-    tallies = {
-        "tasks": 0,
-        "skipped": 0,
-        "warnings": 0,
-        "succeeded": 0,
-        "failed": 0,
+    counted = {
+        "tasks": _tally(tallies, EventKind.TASK_STARTED.value),
+        "skipped": _tally(tallies, EventKind.TASK_SKIPPED.value),
+        "warnings": _tally(tallies, EventKind.WARNING.value),
     }
-    for event in events:
-        if event.kind == EventKind.TASK_STARTED.value:
-            tallies["tasks"] += 1
-        elif event.kind == EventKind.TASK_SKIPPED.value:
-            tallies["skipped"] += 1
-        elif event.kind == EventKind.WARNING.value:
-            tallies["warnings"] += 1
-        elif event.kind == EventKind.TASK_FINISHED.value:
-            # Only the two outcomes the executor emits are counted. An
-            # unrecognized status is left out of both rather than guessed at,
-            # where it shows up as ``unfinished`` -- the honest answer for a
-            # task whose outcome this UI does not understand.
-            status = str(event.payload.get("status") or "")
-            if status in _TASK_OUTCOMES:
-                tallies[status] += 1
-    tallies["unfinished"] = max(
-        tallies["tasks"] - tallies["succeeded"] - tallies["failed"], 0
+    for outcome in _TASK_OUTCOMES:
+        counted[outcome] = tallies.get((EventKind.TASK_FINISHED.value, outcome), 0)
+    counted["unfinished"] = max(
+        counted["tasks"] - counted["succeeded"] - counted["failed"], 0
     )
-    return tallies
+    return counted
+
+
+def _tally(tallies: Mapping[tuple[str, str | None], int], kind: str) -> int:
+    """Every tally for *kind*, whatever status the rows happened to carry.
+
+    Summed rather than read at ``(kind, None)``: nothing stops a ``warning``
+    payload from growing a ``status`` field, which would split that kind
+    across two grouped rows and silently undercount it.
+    """
+    return sum(count for (row_kind, _), count in tallies.items() if row_kind == kind)
 
 
 def warning_summary(groups: Sequence[WarningGroup]) -> dict[str, Any]:
@@ -604,31 +681,47 @@ def warning_summary(groups: Sequence[WarningGroup]) -> dict[str, Any]:
     advertising.
 
     ``task_count`` counts the distinct tasks that warned. Warnings raised
-    outside any task (at pipeline import time, say) have no task to attribute
-    and are counted in ``total`` but not in ``task_count`` -- hence the
-    separate headline wording rather than a claim of "0 tasks".
+    outside any task (at pipeline import time, say, before any task exists)
+    have no task to attribute, so they are counted in ``total`` and in
+    ``unattributed`` but not against any task -- and the headline says so
+    rather than folding them into a count of warnings "in" tasks they were
+    never in.
 
     Wording is decided here rather than in the template so that pluralization
     lives in one testable place, and so the run page and the history row read
     identically.
     """
     total = sum(group.count for group in groups)
+    attributed = sum(group.count for group in groups if group.task_name)
     tasks = {group.task_name for group in groups if group.task_name}
     return {
         "total": total,
         "task_count": len(tasks),
-        "headline": _warning_headline(total, len(tasks)),
+        "attributed": attributed,
+        "unattributed": total - attributed,
+        "headline": _warning_headline(attributed, len(tasks), total - attributed),
         "groups": [_warning_group(group) for group in groups],
     }
 
 
-def _warning_headline(total: int, task_count: int) -> str:
-    if not total:
+def _warning_headline(attributed: int, task_count: int, unattributed: int) -> str:
+    """The headline for a run's warnings.
+
+    Three shapes, because a run can warn from inside tasks, from outside them,
+    or both, and the mixed case is the one that goes quietly wrong: counting
+    every warning as being "in" the tasks that warned reports a total against
+    a task list that does not account for all of it.
+    """
+    if not attributed and not unattributed:
         return "No warnings"
-    warnings = _plural(total, "warning")
-    if not task_count:
-        return f"{warnings} outside any task"
-    return f"{warnings} in {_plural(task_count, 'task')}"
+    outside = f"{unattributed} outside any task"
+    if not unattributed:
+        return f"{_plural(attributed, 'warning')} in {_plural(task_count, 'task')}"
+    if not attributed:
+        return f"{_plural(unattributed, 'warning')} outside any task"
+    return (
+        f"{_plural(attributed, 'warning')} in {_plural(task_count, 'task')}, {outside}"
+    )
 
 
 def _warning_group(group: WarningGroup) -> dict[str, Any]:
@@ -670,17 +763,18 @@ def run_history(request: Request) -> HTMLResponse:
     straight through -- neither this function nor the template re-sorts, so
     there is exactly one place the ordering can be wrong.
 
-    One summary query per listed run, bounded by :data:`HISTORY_LIMIT`. The
-    alternative -- one aggregate query in the store -- would put the "what
-    counts as a task" rule in a second place, which is the mistake
-    :func:`counters` exists to prevent.
+    Two aggregate queries per listed run, bounded by :data:`HISTORY_LIMIT`.
+    Neither hydrates the run's events: ``log`` events are one row per captured
+    output span, so counting them in Python would make this page -- the one a
+    developer lands on -- do a dataclass construction and a JSON parse per
+    line of pipeline output the project has ever produced.
     """
     project = request.app.state.project
     store: RunStore = request.app.state.store
     runs = [
         {
             "run": record,
-            "counters": counters(store.events_after(record.run_id, 0)),
+            "counters": counters(store.event_counts(record.run_id)),
             "warnings": warning_summary(store.warning_groups(record.run_id)),
         }
         for record in store.list_runs(project.root, limit=HISTORY_LIMIT)
@@ -709,15 +803,9 @@ def run_log(request: Request, run_id: str):
     can be deleted, rotated, or sitting on a volume that went away. That
     degrades the download; it does not break the server.
     """
-    store: RunStore = request.app.state.store
-    record = store.get_run(run_id)
+    record = project_run(request, run_id)
     if record is None:
-        return _error_response(
-            request,
-            status_code=404,
-            title="No such run",
-            detail=f"There is no run {run_id!r} in this project's history.",
-        )
+        return _no_such_run(request, run_id)
 
     log_path = Path(record.log_path)
     if not log_path.is_file():
@@ -774,15 +862,16 @@ def stop_run(request: Request, run_id: str):
     store: RunStore = request.app.state.store
     manager = request.app.state.processes
 
+    if project_run(request, run_id) is None:
+        # Scope first, and only then the atomic status gate below. This is a
+        # membership test, not a state test: it cannot go stale between the
+        # two, because a run never changes project.
+        return _no_such_run(request, run_id)
+
     try:
         store.request_stop(run_id)
     except RunNotFoundError:
-        return _error_response(
-            request,
-            status_code=404,
-            title="No such run",
-            detail=f"There is no run {run_id!r} in this project's history.",
-        )
+        return _no_such_run(request, run_id)
     except RunStateError:
         record = store.get_run(run_id)
         return _error_response(
@@ -834,6 +923,9 @@ async def force_finish_run(request: Request, run_id: str):
     """
     store: RunStore = request.app.state.store
 
+    if project_run(request, run_id) is None:
+        return _no_such_run(request, run_id)
+
     if not _is_form_encoded(request):
         return _error_response(
             request,
@@ -863,12 +955,7 @@ async def force_finish_run(request: Request, run_id: str):
     try:
         store.finish_run(run_id, STATUS_INTERRUPTED)
     except RunNotFoundError:
-        return _error_response(
-            request,
-            status_code=404,
-            title="No such run",
-            detail=f"There is no run {run_id!r} in this project's history.",
-        )
+        return _no_such_run(request, run_id)
     except RunStateError:
         return _error_response(
             request,
@@ -943,13 +1030,8 @@ async def event_frames(
 def run_events(request: Request, run_id: str, after: str | None = None):
     """Stream this run's events, resuming from a cursor the client supplies."""
     store: RunStore = request.app.state.store
-    if store.get_run(run_id) is None:
-        return _error_response(
-            request,
-            status_code=404,
-            title="No such run",
-            detail=f"There is no run {run_id!r} in this project's history.",
-        )
+    if project_run(request, run_id) is None:
+        return _no_such_run(request, run_id)
 
     return StreamingResponse(
         event_frames(
@@ -1010,10 +1092,10 @@ __all__ = [
     "POLL_INTERVAL_SECONDS",
     "STATUS_EVENT_NAME",
     "console_event",
-    "counters",
     "event_frames",
     "log_text",
+    "looks_wedged",
+    "project_run",
     "render_event",
     "router",
-    "warning_summary",
 ]

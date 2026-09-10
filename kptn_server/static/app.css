@@ -363,3 +363,211 @@ button:disabled {
   margin: 0;
   white-space: pre-wrap;
 }
+
+/* -- run actions -------------------------------------------------------- */
+
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/*
+ * The force-finish disclosure. Visually separated from the actions row above
+ * it because it is not one of them: it abandons a possibly-live worker, and
+ * the page has to read that way before it is opened.
+ */
+.run-actions__abandon {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  background: var(--surface-sunken);
+}
+
+.run-actions__abandon > summary {
+  cursor: pointer;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.run-actions__abandon[open] > summary {
+  margin-bottom: 6px;
+}
+
+.run-actions__abandon p {
+  margin: 6px 0;
+  max-width: 62ch;
+}
+
+.run-actions__abandon form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.run-actions__abandon input {
+  font: inherit;
+  color: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  width: 14ch;
+}
+
+/* -- completion summary ------------------------------------------------- */
+
+.summary-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-muted);
+}
+
+.summary-count b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-summary__log {
+  margin: 14px 0 0;
+}
+
+/* -- warnings ----------------------------------------------------------- */
+
+.warnings__headline {
+  margin: 0;
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.warnings__groups {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.warning-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-left: 3px solid var(--warning);
+  background: var(--surface-sunken);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.warning-group__category,
+.warning-group__count {
+  color: var(--ink-muted);
+  font-size: 0.92em;
+}
+
+.warning-group__message {
+  flex: 1 1 100%;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.warning-group__occurrences {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.warning-group__occurrence {
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  text-decoration: none;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.warning-group__occurrence:hover {
+  color: var(--ink);
+  border-color: var(--warning);
+}
+
+/* The compact form, on a history row. */
+.warnings--badge {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.warnings__sample {
+  color: var(--ink-muted);
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- run history -------------------------------------------------------- */
+
+.run-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-history__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.run-history__item:last-child {
+  border-bottom: 0;
+}
+
+.run-history__link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.run-history__when,
+.run-history__profile,
+.run-history__task,
+.run-history__exit,
+.run-history__counts {
+  color: var(--ink-muted);
+}
+
+.run-history__counts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.run-history__count b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-history__log {
+  margin-left: auto;
+  color: var(--ink-muted);
+}

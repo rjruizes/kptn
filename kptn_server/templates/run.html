@@ -58,7 +58,17 @@
     {% endif %}
   </div>
 
-  {% if not is_terminal %}
+  {#
+    Offered only for a run that looks wedged -- asked to stop and still
+    going, or no heartbeat for longer than the supervisor's grace window.
+    A visibly healthy run is exactly the case where abandoning its worker
+    does the damage the paragraphs below warn about, so the hatch stays out
+    of sight there. The route itself stays open to any non-terminal run: a
+    run can go from wedged to healthy between this render and the POST, and
+    refusing there would turn that race into the dead end this exists to
+    prevent.
+  #}
+  {% if force_finish_offered %}
   <details class="run-actions__abandon">
     <summary>This run is stuck and Stop is not helping</summary>
     <p class="muted">
@@ -118,9 +128,15 @@
 
   {{ warning_summary(warnings) }}
 
-  <p class="run-summary__log">
-    <a class="button" href="/runs/{{ run.run_id }}/log">Download raw log</a>
-  </p>
+  {#
+    A GET form rather than a styled link, so the control is a real
+    ``<button>``: it inherits the same rules as every other button in this UI
+    with no ``.button`` class to keep in sync, and it stays a plain GET that
+    works with JavaScript off.
+  #}
+  <form class="run-summary__log" method="get" action="/runs/{{ run.run_id }}/log">
+    <button type="submit">Download raw log</button>
+  </form>
 </section>
 
 {% include "_console.html" %}

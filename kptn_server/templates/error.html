@@ -2,6 +2,9 @@
 
 {% block title %}{{ error_title }} - kptn{% endblock %}
 
+{# No run-form on the error shell, so no orphaned profile selector either. #}
+{% block profile_selector %}{% endblock %}
+
 {% block content %}
 <section class="panel">
   {% include "_error.html" %}

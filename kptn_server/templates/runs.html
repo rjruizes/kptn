@@ -18,6 +18,13 @@
 
 {% block title %}Runs - {{ project.pipeline_name }} - kptn{% endblock %}
 
+{#
+  No profile selector: this page starts nothing, so the control would render,
+  accept input, and drive no form at all. The nav's Run link is the way to
+  start a run from here.
+#}
+{% block profile_selector %}{% endblock %}
+
 {% block content %}
 {% from "_warning_summary.html" import warning_badge %}
 <section class="panel" id="run-history">

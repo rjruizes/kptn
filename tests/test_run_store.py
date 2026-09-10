@@ -10,6 +10,7 @@ from types import MappingProxyType
 import pytest
 
 from kptn_server.run_store import (
+    COUNTED_EVENT_KINDS,
     ActiveRunError,
     RunNotFoundError,
     RunRequest,
@@ -410,3 +411,93 @@ def test_concurrent_first_creation_does_not_raise(tmp_path: Path) -> None:
     store = RunStore(db_path)
     run = store.create_run(request(tmp_path))
     assert store.get_run(run.run_id) == run
+
+
+# --- aggregated event counts -------------------------------------------- #
+
+
+def _counted_run(store: RunStore, tmp_path: Path) -> str:
+    record = store.create_run(request(tmp_path))
+    store.append_event(record.run_id, "run_started")
+    store.append_event(record.run_id, "task_started", task_name="alpha")
+    for index in range(5):
+        store.append_event(
+            record.run_id,
+            "log",
+            task_name="alpha",
+            payload={"stream": "stdout", "severity": "output"},
+            log_start=index,
+            log_end=index + 1,
+        )
+    store.append_event(
+        record.run_id, "warning", task_name="alpha", payload={"message": "careful"}
+    )
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="alpha",
+        payload={"status": "succeeded", "duration_seconds": 0.1},
+    )
+    store.append_event(record.run_id, "task_started", task_name="beta")
+    store.append_event(
+        record.run_id, "task_skipped", task_name="gamma", payload={"cached": True}
+    )
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="beta",
+        payload={"status": "failed", "error": "boom"},
+    )
+    return record.run_id
+
+
+def test_event_counts_tallies_by_kind_and_task_status(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "ui.db")
+    run_id = _counted_run(store, tmp_path)
+
+    assert store.event_counts(run_id) == {
+        ("task_started", None): 2,
+        ("task_skipped", None): 1,
+        ("warning", None): 1,
+        ("task_finished", "succeeded"): 1,
+        ("task_finished", "failed"): 1,
+    }
+
+
+def test_event_counts_excludes_log_events(tmp_path: Path) -> None:
+    """``log`` is by far the most numerous kind and contributes no counts.
+
+    Excluding it in SQL is why the run-history page can summarize fifty runs
+    without hydrating every line of output they ever produced.
+    """
+    store = RunStore(tmp_path / "ui.db")
+    run_id = _counted_run(store, tmp_path)
+
+    assert not [key for key in store.event_counts(run_id) if key[0] == "log"]
+    assert not [key for key in store.event_counts(run_id) if key[0] == "run_started"]
+
+
+def test_event_counts_agrees_with_the_hydrated_events(tmp_path: Path) -> None:
+    """The aggregate is a faster way to the same answer, not a different one."""
+    store = RunStore(tmp_path / "ui.db")
+    run_id = _counted_run(store, tmp_path)
+
+    expected: dict[tuple[str, str | None], int] = {}
+    for event in store.events_after(run_id):
+        if event.kind not in COUNTED_EVENT_KINDS:
+            continue
+        status = event.payload.get("status")
+        key = (event.kind, status if isinstance(status, str) else None)
+        expected[key] = expected.get(key, 0) + 1
+
+    assert store.event_counts(run_id) == expected
+
+
+def test_event_counts_is_empty_for_a_run_with_no_counted_events(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "ui.db")
+    record = store.create_run(request(tmp_path))
+    assert store.event_counts(record.run_id) == {}
+    # And for a run that does not exist at all: a count of nothing, not a raise.
+    assert store.event_counts("nope") == {}

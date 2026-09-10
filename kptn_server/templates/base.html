@@ -34,6 +34,14 @@
       <code class="app-bar__root" title="{{ project.root }}">{{ project.root }}</code>
     </div>
 
+    {#
+      The selector is inside a block of its own so that a page which owns no
+      ``run-form`` can drop it. A ``<select form="run-form">`` on a page with
+      no such form still renders and still takes input -- it just drives
+      nothing, which is worse than not being there. Pages that override this
+      to nothing: the history list and the error shell.
+    #}
+    {% block profile_selector %}
     <div class="app-bar__profile">
       <label for="profile-select">Profile</label>
       <select id="profile-select" name="profile" form="run-form">
@@ -45,6 +53,7 @@
         {% endblock %}
       </select>
     </div>
+    {% endblock %}
 
     <nav class="app-bar__nav" aria-label="Main">
       <a href="/" {% if nav_active == 'run' %}aria-current="page"{% endif %}>Run</a>
