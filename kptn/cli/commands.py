@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import threading
+import time
+import webbrowser
 from pathlib import Path
+from typing import Callable
+from urllib.parse import urljoin
 
 import typer
 
@@ -48,3 +53,126 @@ def plan(
         raise typer.Exit(code=1)
 
     runner_plan.plan(resolved, state_store)
+
+
+DEFAULT_UI_HOST = "127.0.0.1"
+DEFAULT_UI_PORT = 8000
+
+#: How long the launcher waits for the server to answer before giving up on
+#: opening a browser. The server itself keeps running either way.
+BROWSER_READY_TIMEOUT_SECONDS = 30.0
+BROWSER_POLL_INTERVAL_SECONDS = 0.1
+_HEALTH_PROBE_TIMEOUT_SECONDS = 1.0
+
+
+def _probe_health(health_url: str) -> bool:
+    """Has the server started answering yet?
+
+    Deliberately stdlib-only: the UI's HTTP client dependency is test-only,
+    and a launcher that cannot start because an extra is missing is worse than
+    a launcher that polls with ``urllib``.
+    """
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(  # noqa: S310 - loopback URL we just built
+            health_url, timeout=_HEALTH_PROBE_TIMEOUT_SECONDS
+        ) as response:
+            return 200 <= response.status < 300
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def _open_when_ready(
+    url: str,
+    *,
+    probe: Callable[[str], bool] = _probe_health,
+    opener: Callable[[str], bool] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    timeout: float = BROWSER_READY_TIMEOUT_SECONDS,
+    interval: float = BROWSER_POLL_INTERVAL_SECONDS,
+) -> bool:
+    """Open *url* in a browser once its health endpoint answers.
+
+    Polling is bounded by an attempt count derived from *timeout* and
+    *interval* rather than a wall-clock deadline, so a caller that injects
+    ``sleep`` (a test) gets exactly the same number of attempts as production
+    without any clock having to advance. Returns whether a browser was opened;
+    a server that never answers simply leaves the developer to click the URL
+    the command printed.
+    """
+    health_url = urljoin(url, "healthz")
+    attempts = max(1, int(timeout / interval))
+    # Resolved at call time, not captured as a default, so a test that
+    # forbids the real browser actually forbids it.
+    open_url = opener if opener is not None else webbrowser.open
+
+    for attempt in range(attempts):
+        if probe(health_url):
+            open_url(url)
+            return True
+        if attempt < attempts - 1:
+            sleep(interval)
+    return False
+
+
+def _start_browser_opener(url: str) -> threading.Thread:
+    """Poll for readiness on a daemon thread.
+
+    ``uvicorn.run`` blocks the calling thread for the life of the server, so
+    the readiness poll cannot happen inline. The thread is a daemon so it can
+    never keep the interpreter alive after the server stops.
+    """
+    thread = threading.Thread(
+        target=_open_when_ready,
+        args=(url,),
+        name="kptn-ui-browser-opener",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+@app.command()
+def ui(
+    host: str = typer.Option(
+        DEFAULT_UI_HOST, "--host", help="Interface to bind. Loopback by default."
+    ),
+    port: int = typer.Option(DEFAULT_UI_PORT, "--port", help="Port to bind."),
+    open_browser: bool = typer.Option(
+        True, "--open/--no-open", help="Open a browser once the server is ready."
+    ),
+) -> None:
+    """Serve the pipeline UI for the project in the current directory.
+
+    Loopback-bound with no authentication: this is a single developer's view
+    of their own project, and it must not become an unauthenticated remote
+    pipeline runner. Nothing here accepts a project path from the network --
+    the served project is always ``Path.cwd()``.
+    """
+    try:
+        import uvicorn
+
+        from kptn_server.app import create_app
+        from kptn_server.project import ProjectError
+    except ImportError as e:  # pragma: no cover - depends on install extras
+        typer.echo(
+            f"The kptn UI needs the 'web' extra: pip install 'kptn[web]' ({e})",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    project_root = Path.cwd()
+    try:
+        application = create_app(project_root)
+    except ProjectError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+
+    url = f"http://{host}:{port}/"
+    typer.echo(f"kptn UI for {project_root} on {url}")
+    if open_browser:
+        _start_browser_opener(url)
+
+    uvicorn.run(application, host=host, port=port, log_level="warning")

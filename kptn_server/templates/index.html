@@ -1,108 +1,52 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>kptn Lineage Viewer</title>
-    <script src="/static/alpine.min.js" defer></script>
-    <style>
-        :root { color-scheme: dark; }
-        body {
-            margin: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: radial-gradient(circle at 25% 25%, rgba(59, 130, 246, 0.08), transparent 30%),
-                        radial-gradient(circle at 75% 35%, rgba(16, 185, 129, 0.08), transparent 25%),
-                        radial-gradient(circle at 50% 80%, rgba(236, 72, 153, 0.08), transparent 20%),
-                        #0b1021;
-            color: #e2e8f0;
-        }
-        .page {
-            max-width: 1100px;
-            margin: 0 auto;
-            padding: 24px;
-        }
-        .card {
-            background: rgba(15, 23, 42, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.1);
-            border-radius: 16px;
-            padding: 20px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-        }
-        label { display: block; font-weight: 600; margin-bottom: 6px; }
-        input[type="text"], select {
-            width: 100%;
-            padding: 10px 12px;
-            border-radius: 10px;
-            border: 1px solid rgba(226,232,240,0.25);
-            background: rgba(15,23,42,0.8);
-            color: #e2e8f0;
-        }
-        input:focus, select:focus { outline: 2px solid #38bdf8; border-color: #38bdf8; }
-        #lineage-host { margin-top: 20px; }
-        .muted { color: #94a3b8; font-size: 13px; }
-    </style>
-</head>
-<body>
-    <div class="page">
-        <div class="card">
-            <form id="lineage-form">
-                <label for="configPath">kptn.yaml in {{ root }}</label>
-                {% if configs %}
-                <select id="configPath" name="configPath">
-                    {% for cfg in configs %}
-                    <option value="{{ cfg.path }}" {% if loop.first %}selected{% endif %}>{{ cfg.label }}</option>
-                    {% endfor %}
-                </select>
-                {% else %}
-                    <p class="muted">No kptn.yaml found under {{ root }}. Specify a path manually.</p>
-                    <input type="text" name="configPath" placeholder="/path/to/kptn.yaml" value="{{ config_path }}">
-                {% endif %}
-            </form>
-        </div>
-        <div id="lineage-host"></div>
-    </div>
-    <script>
-    (function() {
-        const form = document.getElementById('lineage-form');
-        const host = document.getElementById('lineage-host');
-        const select = document.getElementById('configPath');
+{#
+  The run console.
 
-        async function renderLineage() {
-            const formData = new FormData(form);
-            const configPath = formData.get('configPath') || '';
-            if (!configPath) {
-                host.innerHTML = '<p class="muted">Select a kptn.yaml first.</p>';
-                return;
-            }
-            const params = new URLSearchParams({ configPath: String(configPath) });
-            host.innerHTML = '<p class="muted">Loading lineage...</p>';
-            const iframe = document.createElement('iframe');
-            iframe.src = `/lineage-page?${params.toString()}`;
-            iframe.style.width = '100%';
-            iframe.style.height = '80vh';
-            iframe.style.border = '1px solid rgba(226,232,240,0.12)';
-            iframe.style.borderRadius = '12px';
-            iframe.onload = () => {
-                // allow the iframe content to size itself once loaded
-                try {
-                    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-                    if (doc?.body?.scrollHeight) {
-                        iframe.style.height = `${doc.body.scrollHeight + 40}px`;
-                    }
-                } catch {
-                    // ignore cross-origin protections; same-origin by default
-                }
-            };
-            host.innerHTML = '';
-            host.appendChild(iframe);
-        }
+  This page owns the `run-form` element that the base page's profile selector
+  associates with (via `form="run-form"`), so the selected profile posts along
+  with the run request. The live event stream, the Stop control, and the
+  warning summary are layered onto this shell by the run-console router; the
+  form target below is the durable, no-JavaScript path that must keep working
+  either way.
+#}
+{% extends "base.html" %}
 
-        if (select) {
-            select.addEventListener('change', renderLineage);
-            // Render on page load if a config is selected
-            renderLineage();
-        }
-    })();
-    </script>
-</body>
-</html>
+{% block content %}
+<section class="panel" id="run-console">
+  <h2>Run the pipeline</h2>
+
+  <form id="run-form" method="post" action="/runs">
+    {#
+      The profile <select> is rendered by base.html and bound to this form by
+      its `form` attribute, so it is intentionally absent here.
+    #}
+    <button type="submit" class="button button--primary">Run</button>
+  </form>
+
+  <dl class="project-facts">
+    <dt>Pipeline</dt>
+    <dd>{{ project.pipeline_name }}</dd>
+
+    <dt>Project</dt>
+    <dd><code>{{ project.root }}</code></dd>
+
+    <dt>Profiles</dt>
+    <dd>
+      {% if project.profiles %}
+      <ul class="profile-list">
+        {% for profile in project.profiles %}
+        <li><code>{{ profile }}</code></li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <span class="muted">none declared in <code>kptn.yaml</code></span>
+      {% endif %}
+    </dd>
+
+    <dt>Run history</dt>
+    <dd><code>{{ project.database_path }}</code></dd>
+
+    <dt>Run logs</dt>
+    <dd><code>{{ project.run_log_dir }}</code></dd>
+  </dl>
+</section>
+{% endblock %}

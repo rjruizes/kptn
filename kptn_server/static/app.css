@@ -1,0 +1,251 @@
+/*
+ * Styles for the shared pipeline UI.
+ *
+ * Vendored and self-contained: no @import, no web fonts, no CDN. The UI has
+ * to render correctly on a laptop with no network.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --ink: #16202b;
+  --ink-muted: #5c6b7a;
+  --surface: #ffffff;
+  --surface-sunken: #f4f6f8;
+  --line: #d6dde4;
+  --accent: #1f6feb;
+  --accent-ink: #ffffff;
+  --danger: #b42318;
+  --warning: #9a5b00;
+  --ok: #1a7f37;
+  --radius: 6px;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6edf3;
+    --ink-muted: #9aa7b2;
+    --surface: #161b22;
+    --surface-sunken: #0d1117;
+    --line: #30363d;
+    --accent: #4493f8;
+    --accent-ink: #0d1117;
+    --danger: #ff7b72;
+    --warning: #d29922;
+    --ok: #3fb950;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+/* -- app bar ------------------------------------------------------------ */
+
+.app-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.app-bar__identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.app-bar__product {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: var(--accent);
+}
+
+.app-bar__project {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.app-bar__root {
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40ch;
+}
+
+.app-bar__profile {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.app-bar__profile label {
+  color: var(--ink-muted);
+}
+
+.app-bar__nav {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.app-bar__nav a {
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.app-bar__nav a:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.app-bar__nav a[aria-current="page"] {
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* -- controls ----------------------------------------------------------- */
+
+select,
+button {
+  font: inherit;
+  color: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.button--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* -- layout ------------------------------------------------------------- */
+
+.app-main {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.panel {
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+
+.panel + .panel {
+  margin-top: 16px;
+}
+
+/* -- project facts ------------------------------------------------------ */
+
+.project-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 20px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.project-facts dt {
+  color: var(--ink-muted);
+}
+
+.project-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* -- status vocabulary -------------------------------------------------- */
+
+.status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status--succeeded {
+  color: var(--ok);
+}
+
+.status--failed,
+.status--errored {
+  color: var(--danger);
+}
+
+.status--stopped,
+.status--interrupted,
+.status--stop_requested {
+  color: var(--warning);
+}

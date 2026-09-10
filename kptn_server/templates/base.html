@@ -1,0 +1,63 @@
+{#
+  Shared shell for every UI page.
+
+  Blocks a page may override:
+    title           - browser tab title (defaults to the pipeline name)
+    profile_options - the profile <select>'s options, so a page can mark one
+                      selected (the run console marks the profile in play)
+    content         - the page body
+    scripts         - extra page-local script tags
+
+  The profile selector lives here because every page needs it, but it is
+  deliberately *outside* any form: it carries `form="run-form"`, so the run
+  console can own the form element in its own content block and still drive
+  this control. HTML form-owner association does the wiring, no JS required.
+
+  Assets are vendored only. There are no CDN references anywhere in this UI:
+  it has to work on a laptop with no network.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ project.pipeline_name }} - kptn{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="app-bar">
+    <div class="app-bar__identity">
+      <span class="app-bar__product">kptn</span>
+      <h1 class="app-bar__project">{{ project.pipeline_name }}</h1>
+      <code class="app-bar__root" title="{{ project.root }}">{{ project.root }}</code>
+    </div>
+
+    <div class="app-bar__profile">
+      <label for="profile-select">Profile</label>
+      <select id="profile-select" name="profile" form="run-form">
+        {% block profile_options %}
+        <option value="">(no profile)</option>
+        {% for profile in project.profiles %}
+        <option value="{{ profile }}">{{ profile }}</option>
+        {% endfor %}
+        {% endblock %}
+      </select>
+    </div>
+
+    <nav class="app-bar__nav" aria-label="Main">
+      <a href="/" {% if nav_active == 'run' %}aria-current="page"{% endif %}>Run</a>
+      <a href="/runs" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>Runs</a>
+      <a href="/plan" {% if nav_active == 'plan' %}aria-current="page"{% endif %}>Plan</a>
+      <a href="/how-it-works" {% if nav_active == 'docs' %}aria-current="page"{% endif %}>How it works</a>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
