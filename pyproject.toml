@@ -17,7 +17,8 @@ prefect = ["prefect"]
 web = [
     "watchfiles",
     "fastapi>=0.116.2",
-    "uvicorn>=0.35.0"]
+    "uvicorn>=0.35.0",
+    "psutil>=6.0"]
 
 [project.scripts]
 kptn = "kptn.cli:app"

@@ -35,9 +35,19 @@ STATUS_SUCCEEDED = "succeeded"
 STATUS_FAILED = "failed"
 STATUS_STOPPED = "stopped"
 STATUS_ERRORED = "errored"
+#: Recorded by the supervisor, never by a worker: the process executing the
+#: run is gone (a reboot, a SIGKILL, a container restart) and no outcome was
+#: ever written, so the run's real fate is unknown.
+STATUS_INTERRUPTED = "interrupted"
 
 TERMINAL_STATUSES = frozenset(
-    {STATUS_SUCCEEDED, STATUS_FAILED, STATUS_STOPPED, STATUS_ERRORED}
+    {
+        STATUS_SUCCEEDED,
+        STATUS_FAILED,
+        STATUS_STOPPED,
+        STATUS_ERRORED,
+        STATUS_INTERRUPTED,
+    }
 )
 
 
@@ -151,6 +161,11 @@ class RunStore:
         # never race on schema creation.
         conn = self._connect()
         conn.close()
+
+    @property
+    def path(self) -> Path:
+        """Filesystem location of the store, for passing to a worker."""
+        return self._path
 
     # -- connection management ------------------------------------------------
 
@@ -429,9 +444,11 @@ class RunStore:
     ) -> RunRecord:
         """Record the identity of the process executing *run_id*.
 
-        ``started_at`` is a wall-clock epoch timestamp for the worker process;
-        together with ``pid`` it lets a supervisor tell a live worker from a
-        recycled PID. Also seeds ``heartbeat_at`` so a freshly spawned worker
+        ``started_at`` is the worker process's OS creation timestamp (i.e.
+        ``psutil.Process(pid).create_time()``); together with ``pid`` it lets a
+        supervisor tell a live worker from a recycled PID. Callers must not
+        pass "when I got here" instead -- the supervisor compares this value
+        against the live process's creation time. Also seeds ``heartbeat_at`` so a freshly spawned worker
         is never mistaken for a stale one.
         """
         beat = timestamp or datetime.now(timezone.utc)
@@ -732,6 +749,7 @@ __all__ = [
     "RunStoreError",
     "STATUS_ERRORED",
     "STATUS_FAILED",
+    "STATUS_INTERRUPTED",
     "STATUS_QUEUED",
     "STATUS_RUNNING",
     "STATUS_STOP_REQUESTED",

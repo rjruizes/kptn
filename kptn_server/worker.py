@@ -35,9 +35,10 @@ import signal
 import sqlite3
 import sys
 import threading
-import time
 import traceback
 from pathlib import Path
+
+import psutil
 
 import kptn
 from kptn.project import load_pipeline
@@ -205,9 +206,16 @@ def execute_run(
 
     try:
         os.chdir(record.project_root)
+        # ``worker_started_at`` is the OS process-creation timestamp, NOT
+        # "when we got here": the supervisor compares it against
+        # ``psutil.Process(pid).create_time()`` before it signals anything, so
+        # both sides have to mean the same thing or PID-reuse safety degrades
+        # into "signal whatever holds this PID now".
         durable(
             lambda: store.record_worker_start(
-                run_id, pid=os.getpid(), started_at=time.time()
+                run_id,
+                pid=os.getpid(),
+                started_at=psutil.Process(os.getpid()).create_time(),
             )
         )
         previous_handlers = _install_termination_handlers()
