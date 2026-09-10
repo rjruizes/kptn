@@ -15,10 +15,14 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: uv sync --dev
+        # The `web` extra is not optional for the test suite: every
+        # kptn_server/pipeline-UI module imports fastapi, jinja2, psutil,
+        # markdown-it-py or sqlglot at module scope, so without it pytest
+        # cannot even collect them.
+        run: uv sync --dev --extra web
 
       - name: Test
-        run: uv run pytest
+        run: uv run --extra web pytest
 
       - name: Lint
         run: uv run ruff check kptn/exceptions.py kptn/graph kptn/profiles kptn/runner kptn/change_detector kptn/state_store kptn/quality

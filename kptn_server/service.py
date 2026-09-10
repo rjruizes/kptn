@@ -1,4 +1,20 @@
-"""Shared lineage and table preview helpers for the kptn backend surfaces."""
+"""Lineage and table-preview helpers, retained behind the shared pipeline UI.
+
+These are the surfaces the pipeline UI kept rather than replaced: a lineage
+graph rendered from ``kptn.yaml``'s SQL, and a few rows of a declared output
+read straight out of the project's DuckDB file. Their routes live in
+:mod:`kptn_server.routes.lineage` and are mounted on the one application
+:func:`kptn_server.app.create_app` builds -- there is no second server and no
+second frontend.
+
+The landing-page renderer that used to live here is gone with the React
+application it served: ``templates/index.html`` is now the UI's own run
+console, rendered by :mod:`kptn_server.routes` with the served project in its
+context.
+
+``kptn.lineage`` parses SQL with ``sqlglot``, so importing this module needs
+the ``web`` extra -- which declares it.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +38,6 @@ from kptn.read_config import read_config
 from kptn.util.runtime_config import RuntimeConfig, RuntimeConfigError
 
 _template_env: Optional[Environment] = None
-KPTN_CONFIG_EXCLUDE = {".git", "node_modules", "dist", "out", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
 
 
 def generate_lineage_html(
@@ -508,28 +523,3 @@ def render_table_preview_fragment(payload: dict[str, Any]) -> str:
     env = _get_template_env()
     template = env.get_template("table_preview.html")
     return template.render(payload=payload)
-
-
-def render_index_page(config_path: str = "", graph: str = "") -> str:
-    """Render a simple landing page with an HTMX form."""
-    env = _get_template_env()
-    template = env.get_template("index.html")
-    root = Path(os.environ.get("KPTN_SERVER_ROOT", Path.cwd()))
-    configs = discover_kptn_configs(root)
-    return template.render(config_path=config_path, graph=graph, configs=configs, root=root)
-
-
-def discover_kptn_configs(base_dir: Path, limit: int = 50) -> list[dict[str, str]]:
-    """Find kptn.yaml files under a base directory."""
-    results: list[dict[str, str]] = []
-    for current_root, dirs, files in os.walk(base_dir):
-        # prune excluded dirs
-        dirs[:] = [d for d in dirs if d not in KPTN_CONFIG_EXCLUDE]
-        if "kptn.yaml" in files:
-            full_path = Path(current_root) / "kptn.yaml"
-            relative = str(full_path.relative_to(base_dir)) if full_path.is_absolute() else str(full_path)
-            label = relative
-            results.append({"label": label, "path": str(full_path)})
-            if len(results) >= limit:
-                break
-    return results

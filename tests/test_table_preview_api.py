@@ -1,18 +1,60 @@
-"""Test kptn_server table-preview API with duckdb_example."""
+"""Test kptn_server table-preview API with duckdb_example.
 
-import subprocess
+No module-level skip. ``kptn_server.service`` imports the lineage analyzer,
+which needs ``sqlglot`` -- and the ``web`` extra now declares it, so these
+tests run rather than silently skipping and leaving ``get_duckdb_preview``
+unexercised, which is what happened for as long as no extra shipped the parser.
+
+The database these tests read is built by executing the example project's own
+task code against its own ``get_engine`` factory. It used to be built by
+running ``duckdb_example.py``, which is a kptn 0.1-era script
+(``kptn.caching.submit``, ``kptn.runner.cli_parser``) that no longer imports at
+all -- so once the module stopped skipping, every test here failed on the
+harness rather than on the API under test. Driving the task files directly
+keeps the fixture data identical and the subject of the test unchanged.
+"""
+
+import importlib.util
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
-# ``kptn_server.service`` imports the lineage analyzer at module scope, which
-# needs ``sqlglot``. Jinja2 now arrives with the ``web`` extra, so the old
-# blanket module skip is gone -- but nothing in this project declares
-# ``sqlglot`` in any extra, so the import can still be unavailable. Skip on
-# what is actually missing rather than on a dependency that is now present.
-pytest.importorskip("sqlglot", reason="kptn.lineage requires sqlglot")
+from kptn_server.service import get_duckdb_preview
 
-from kptn_server.service import get_duckdb_preview  # noqa: E402 - after the skip
+
+@pytest.fixture(autouse=True)
+def unshadow_the_examples_src_package():
+    """Drop any other project's ``src`` package from ``sys.modules``.
+
+    ``example/duckdb_example/kptn.yaml`` names its connection factory
+    ``src.utils:get_engine``, which ``RuntimeConfig`` resolves with a plain
+    ``importlib.import_module`` after putting the project directory on
+    ``sys.path``. ``src`` is a name several fixture projects in this suite also
+    use, and an already-imported ``src`` wins over any ``sys.path`` entry -- so
+    running after ``tests/test_cli_validate.py`` (whose tmp project has its own
+    ``src/utils.py`` with no ``get_engine``) made every test here report
+    "Runtime config has no DuckDB connection". The tests passed alone and
+    failed in the suite, which is the least useful failure mode there is.
+
+    Evicting the cached name, and restoring it afterwards, keeps this module
+    order-independent in both directions.
+    """
+    shadowed = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "src" or name.startswith("src.")
+    }
+    for name in shadowed:
+        del sys.modules[name]
+
+    yield
+
+    for name in list(sys.modules):
+        if name == "src" or name.startswith("src."):
+            del sys.modules[name]
+    sys.modules.update(shadowed)
 
 
 @pytest.fixture(scope="module")
@@ -21,20 +63,48 @@ def duckdb_example_dir():
     return Path(__file__).parent.parent / "example" / "duckdb_example"
 
 
+def _load_module(path: Path, name: str):
+    """Import a module from a file path without putting it on ``sys.path``."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        pytest.fail(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+    return module
+
+
 @pytest.fixture(scope="module")
 def run_pipeline(duckdb_example_dir):
-    """Run the duckdb_example pipeline to populate the database."""
-    # Run the pipeline from the duckdb_example directory so it creates
-    # example.ddb in the same place where the API will look for it
-    result = subprocess.run(
-        ["uv", "run", "duckdb_example.py", "--force"],
-        cwd=duckdb_example_dir,
-        capture_output=True,
-        text=True,
+    """Populate ``example.ddb`` where ``get_duckdb_preview`` will look for it.
+
+    The engine factory (``src/utils.py``) opens ``example.ddb`` *relative to
+    the process's working directory*, and so does the preview's own connection
+    -- both go through ``kptn.yaml``'s ``config.duckdb.function``. The database
+    therefore has to be created with the example directory as the cwd, exactly
+    as the old subprocess did.
+    """
+    utils = _load_module(duckdb_example_dir / "src" / "utils.py", "_ddb_example_utils")
+    fruit_tasks = _load_module(
+        duckdb_example_dir / "src" / "fruit_tasks.py", "_ddb_example_fruit_tasks"
     )
-    if result.returncode != 0:
-        pytest.fail(f"Failed to run duckdb_example: {result.stderr}")
-    return result
+
+    original_cwd = Path.cwd()
+    os.chdir(duckdb_example_dir)
+    try:
+        con = utils.get_engine()
+        try:
+            for sql_file in ("raw_numbers.sql", "fruit_metrics.sql"):
+                con.execute((duckdb_example_dir / "src" / sql_file).read_text())
+            fruit_tasks.fruit_summary(con, {})
+        finally:
+            con.close()
+    finally:
+        os.chdir(original_cwd)
+    return duckdb_example_dir / "example.ddb"
 
 
 def test_table_preview_raw_numbers(duckdb_example_dir, run_pipeline):

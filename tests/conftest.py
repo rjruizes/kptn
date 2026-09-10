@@ -40,6 +40,7 @@ import logging
 import os
 import shutil
 import sys
+import sysconfig
 import warnings
 from pathlib import Path
 
@@ -57,6 +58,49 @@ BROKEN_FIXTURE_PROJECT = Path(__file__).parent / "fixtures" / "ui_broken_project
 
 #: Modules opting into the UI hygiene fixtures carry this marker.
 UI_HYGIENE_MARKER = "ui_hygiene"
+
+#: Directories holding *installed* packages. Modules imported from here are
+#: never evicted by ``restore_process_state``.
+#:
+#: The eviction exists to unload the *project* modules ``load_pipeline``
+#: imported, so the next test's copy of the same fixture project is not
+#: shadowed. Installed dependencies are collateral damage, and for a library
+#: with lazy submodule imports the damage is real: ``sqlglot`` pulls in ~40
+#: submodules the first time lineage parses SQL, and dropping those from
+#: ``sys.modules`` leaves a later import with fresh dialect classes that its
+#: own already-held registry no longer recognizes ("Invalid dialect type for
+#: <sqlglot.dialects.duckdb.DuckDB object>"). The second test to render
+#: lineage in a session then failed, for reasons entirely internal to the
+#: harness. Scoping the eviction to non-installed modules fixes that class of
+#: bug rather than warming up one library.
+_INSTALLED_PACKAGE_DIRS = tuple(
+    sorted(
+        {
+            path
+            for path in (
+                sysconfig.get_paths().get("purelib"),
+                sysconfig.get_paths().get("platlib"),
+                sysconfig.get_paths().get("stdlib"),
+            )
+            if path
+        }
+    )
+)
+
+
+def _is_installed_module(name: str) -> bool:
+    """Was this module imported from an installed package directory?
+
+    A module with no ``__file__`` (builtin, namespace package, or one whose
+    import is still in flight) counts as installed: nothing about a fixture
+    project produces one, and evicting a half-initialized module is how import
+    machinery gets confused.
+    """
+    module = sys.modules.get(name)
+    origin = getattr(module, "__file__", None)
+    if origin is None:
+        return True
+    return origin.startswith(_INSTALLED_PACKAGE_DIRS)
 
 
 def _wants_ui_hygiene(request: pytest.FixtureRequest) -> bool:
@@ -82,6 +126,8 @@ def restore_process_state(request: pytest.FixtureRequest):
     os.chdir(original_cwd)
     sys.path[:] = original_path
     for name in set(sys.modules) - original_modules:
+        if _is_installed_module(name):
+            continue
         sys.modules.pop(name, None)
     warnings.showwarning = original_showwarning
     root.handlers[:] = original_handlers

@@ -819,14 +819,13 @@ tasks:
 def _stub_resolver(config_path_to_map: dict[str, str]):
     """Stand in for the retained lineage service's table-file mapping.
 
-    ``kptn_server.service`` imports the lineage analyzer at module scope and
-    that needs ``sqlglot``, which no extra of this project installs -- so in
-    this environment the real resolver is *never* importable, and every
-    "no links" assertion would pass for that reason alone. Patching the seam
-    makes resolution succeed, so what the tests below actually pin is the part
-    this task owns: whether a resolvable output is linked, whether an
-    unresolvable one is left alone, and whether a target this app does not
-    serve is offered at all.
+    The real resolver *is* importable now that the ``web`` extra declares
+    ``sqlglot`` -- see
+    :func:`test_the_resolver_seam_resolves_now_that_sqlglot_ships` -- but it
+    reads whatever ``kptn.yaml`` the project on disk happens to have. Patching
+    the seam pins the part these tests own: whether a resolvable output is
+    linked, whether an unresolvable one is left alone, and whether a target
+    this app does not serve is offered at all.
 
     The normalizer mirrors ``service._normalize_table_name`` for these inputs:
     last dotted segment, lowercased.
@@ -841,13 +840,41 @@ def _stub_resolver(config_path_to_map: dict[str, str]):
     return resolver
 
 
-def test_the_resolver_seam_is_absent_rather_than_fatal() -> None:
-    """A missing lineage stack costs this page its links, not the page.
+def test_the_resolver_seam_resolves_now_that_sqlglot_ships(tmp_path: Path) -> None:
+    """The retained service imports, and resolves a declared output.
 
-    ``sqlglot`` is not a dependency of any extra, so importing the retained
-    service raises. That must degrade to "no links".
+    This used to assert ``_resolver() is None``: ``sqlglot`` was in no extra,
+    so the lineage stack was unimportable and the walkthrough's two links were
+    dead code in every environment the UI shipped to. The ``web`` extra now
+    declares it, and this is the test that would fail if it were dropped
+    again.
     """
-    assert inspect_routes._resolver() is None
+    resolution = inspect_routes._resolver()
+
+    assert resolution is not None
+    build_table_file_map, normalize = resolution
+    config = tmp_path / "kptn.yaml"
+    config.write_text(LINKED_CONFIG, encoding="utf-8")
+
+    assert normalize("main.widgets") == "widgets"
+    assert "widgets" in build_table_file_map(config)
+
+
+def test_the_lineage_targets_are_served_by_the_shared_app(ui_project: Path) -> None:
+    """The link targets are real routes on the one application.
+
+    ``output_links`` refuses to render a link whose path this app does not
+    serve, so if the lineage router were dropped from ``register_routers`` the
+    UI would silently stop offering lineage and previews rather than fail.
+    """
+    served = {
+        route.path
+        for route in create_app(ui_project).router.routes
+        if isinstance(getattr(route, "path", None), str)
+    }
+
+    assert inspect_routes.LINEAGE_PATH in served
+    assert inspect_routes.TABLE_PREVIEW_PATH in served
 
 
 def test_output_links_are_omitted_when_nothing_resolves(
@@ -867,9 +894,10 @@ def test_output_links_are_omitted_when_the_app_does_not_serve_them(
 ) -> None:
     """A resolvable table is still not a link if nothing serves the target.
 
-    The lineage and table-preview surfaces are retained but not yet mounted on
-    this application. Rendering the link anyway would put a guaranteed 404 in
-    front of the reader.
+    Rendering the link anyway would put a guaranteed 404 in front of the
+    reader. The shared app does serve both targets, so this strips them off
+    the built app -- the condition under test is the served-path check itself,
+    not the current router list.
     """
     root = write_project(
         tmp_path, "unserved", module_source=LINKED_PROJECT, config=LINKED_CONFIG
@@ -877,8 +905,15 @@ def test_output_links_are_omitted_when_the_app_does_not_serve_them(
     monkeypatch.setattr(
         inspect_routes, "_resolver", _stub_resolver({"widgets": "build_widgets.sql"})
     )
+    app = create_app(root)
+    app.router.routes[:] = [
+        route
+        for route in app.router.routes
+        if getattr(route, "path", None)
+        not in {inspect_routes.LINEAGE_PATH, inspect_routes.TABLE_PREVIEW_PATH}
+    ]
 
-    body = project_client(root).get("/walkthrough/task/build_widgets").text
+    body = TestClient(app).get("/walkthrough/task/build_widgets").text
 
     assert "main.widgets" in body
     assert inspect_routes.LINEAGE_PATH not in body
@@ -894,15 +929,8 @@ def test_output_links_appear_when_resolvable_and_served(
     monkeypatch.setattr(
         inspect_routes, "_resolver", _stub_resolver({"widgets": "build_widgets.sql"})
     )
+    # No stand-in routes: the shared app serves both targets for real.
     app = create_app(root)
-
-    @app.get(inspect_routes.LINEAGE_PATH)
-    def _lineage() -> str:  # pragma: no cover - existence is the point
-        return "lineage"
-
-    @app.get(inspect_routes.TABLE_PREVIEW_PATH)
-    def _preview() -> str:  # pragma: no cover - existence is the point
-        return "preview"
 
     body = (
         TestClient(app)
@@ -938,10 +966,6 @@ def test_output_links_are_omitted_for_an_unmapped_output(
         inspect_routes, "_resolver", _stub_resolver({"widgets": "build_widgets.sql"})
     )
     app = create_app(root)
-
-    @app.get(inspect_routes.TABLE_PREVIEW_PATH)
-    def _preview() -> str:  # pragma: no cover - existence is the point
-        return "preview"
 
     body = (
         TestClient(app)

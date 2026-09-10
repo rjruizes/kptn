@@ -20,6 +20,7 @@ pip install kptn
 
 ```shell
 pip install kptn[duckdb]   # DuckDB state store and SQL tasks
+pip install kptn[web]      # the pipeline UI (`kptn ui`)
 pip install kptn[aws]      # AWS deployment (work in progress)
 ```
 
@@ -299,4 +300,142 @@ The `kptn` CLI discovers your pipeline from `[tool.kptn] pipeline = "..."` in `p
 ```shell
 kptn plan [--profile PROFILE]          # preview what will run or be skipped
 kptn run  [--profile PROFILE] [--force] # execute the pipeline
+kptn ui   [--port PORT] [--no-open]     # serve the pipeline UI for this project
 ```
+
+---
+
+## Pipeline UI
+
+`kptn ui` serves a small web UI for the project in the current directory: start
+a run, watch its console live, read the plan, and walk the resolved pipeline
+with its documentation. It is the **only** supported UI, and the VS Code
+extension launches this same command rather than embedding a second one.
+
+```shell
+uv sync --extra web                    # or: pip install 'kptn[web]'
+uv run kptn ui                         # serve ./ and open a browser
+uv run kptn ui --no-open --port 8000   # serve ./ and just print the URL
+```
+
+The command serves `Path.cwd()` and takes no project path — the project is
+never something a request can choose.
+
+### Loopback only, by design
+
+The server binds `127.0.0.1` by default. There is **no authentication and no
+remote-execution mode**, because the UI can start a pipeline: exposing it on a
+routable interface would be an unauthenticated remote runner for anyone who can
+reach the port. To use it from another machine, forward the port over SSH
+instead of binding a public interface:
+
+```shell
+ssh -N -L 8000:127.0.0.1:8000 you@build-host
+# then open http://127.0.0.1:8000 locally
+```
+
+`--host` exists for containers and similar, and nothing about a wider bind is
+made safe by it. Treat it as your own responsibility.
+
+### Where the UI keeps its state
+
+Two paths inside the project, and nothing else:
+
+| Path | Contents |
+|------|----------|
+| `.kptn/ui.db` | Run history: one row per run, plus every captured console event |
+| `.kptn/runs/<run_id>.log` | The run's raw captured output, streamed and downloadable |
+
+Both are inside the project on purpose, so run history travels with a checkout
+and is removed by deleting `.kptn/`. `.kptn/ui.db` is separate from kptn's own
+task-state database (`.kptn/kptn.db` by default): clearing UI history never
+invalidates the cache, and `kptn run --force` never erases history.
+
+### One active run per project
+
+A project has at most one active run. Starting a second one is refused with a
+409 that names the run holding the lock, so two runs can never write the same
+task state at the same time — including a run started from the terminal while
+the UI is open, since both take the same project lock.
+
+### The run survives the server
+
+A run is a **detached child process**, not a request handler. It is launched
+into its own session and writes to `.kptn/ui.db` and its log file directly, so
+the run keeps going when you:
+
+- close the browser tab, or navigate away, or lose the SSE connection
+- quit VS Code
+- stop and restart `kptn ui` — including the automatic restart on a file save
+
+Reopening the run page picks the console back up where it left off. The stream
+is resumable: the page asks for events after the last sequence number it has,
+so nothing is missed and nothing is shown twice.
+
+What does *not* survive is the machine. A host reboot, an OOM kill, or a
+`kill -9` takes the worker with it, and there is no way to resume a
+half-finished pipeline. The server therefore reconciles on startup and on a
+fixed interval: a run whose worker is provably gone is marked
+**interrupted**, which releases the project lock and says plainly that the run
+did not finish rather than leaving it "running" forever. Re-run it when you are
+ready — kptn's cache means completed tasks are skipped.
+
+If a run is wedged in a state the supervisor cannot prove is dead (an
+un-inspectable process, say), the run page offers **Stop**, and then a
+confirmed force-finish as an escape hatch — you type `abandon`, because the
+worker may still be alive. It records the run as **interrupted**; it never
+pretends the pipeline succeeded.
+
+### Warnings
+
+Every `warnings.warn` call and every log record at `WARNING` or above is captured,
+attributed to the task that emitted it, and grouped on the run page by task and
+category. Each group lists every occurrence as a link into the exact console
+row that produced it, so a repeated warning is still individually reachable.
+Warnings raised outside any task — at import time, for instance — are grouped
+as "outside any task" rather than blamed on whichever task ran next. The run
+history shows the same headline per run, so a run that warned is visible
+without opening it.
+
+### Plan and walkthrough
+
+`/plan` renders the same entries `kptn plan` prints, from the same
+`build_plan` — the page cannot develop its own opinion about what is stale.
+Opening it never writes to the project: on a project that has never run, a
+read-only stand-in answers "nothing cached" instead of creating a state
+database as a side effect of a page view.
+
+`/walkthrough` lists every node of the profile-resolved graph in the runner's
+order, with bypassed tasks shown and marked rather than hidden. Task metadata
+is a pure read model — `description`, `inputs`, `outputs`, and `docs` on a
+task, `Stage`, or `Pipeline` — and declaring it changes nothing about
+scheduling or execution:
+
+```python
+@kptn.task(
+    outputs=["main.widgets"],
+    inputs=["raw_widgets"],
+    description="Aggregate widgets by region.",
+    docs="docs/widgets.md#aggregation",
+)
+def build_widgets(): ...
+```
+
+A `docs` reference is **project-relative and read-only**. It is resolved
+against the project root and refused if it escapes it, the Markdown is rendered
+with raw HTML disabled, and no page in this UI edits a documentation file.
+Where a declared output can be resolved to a file through `kptn.yaml`, the task
+panel also links to its lineage graph and a preview of its rows.
+
+### VS Code
+
+The extension contributes one command, **`kptn: Open Pipeline UI`**
+(`kptn.openUI`). It runs `kptn ui --no-open` for the workspace folder, waits
+for `/healthz`, and opens the served URL in a webview — the same UI a browser
+gets, from the same server. Reusing the command focuses the existing view
+rather than starting a second server.
+
+### Terminal output is unchanged
+
+`kptn run` and `kptn plan` print exactly what they always did. The UI is an
+additional surface over the same runner, not a replacement for it.

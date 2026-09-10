@@ -39,13 +39,16 @@ database already exists; otherwise a read-only stand-in answers "nothing is
 cached", which is what an unrun project's plan says anyway.
 
 **A link is only offered when it resolves.** The lineage and table-preview
-surfaces are retained in :mod:`kptn_server.service` but are not mounted on
-this application yet. A link is rendered only when the service can resolve the
-declared output to a file *and* this app actually serves the target path, so
-the reader is never handed a guaranteed 404. The service module is imported
-lazily for the same reason: it pulls in the lineage analyzer, whose ``sqlglot``
-dependency the ``web`` extra does not install, and its absence must cost this
-page two links rather than every page.
+surfaces are retained in :mod:`kptn_server.service` and served by
+:mod:`kptn_server.routes.lineage` on this same application. A link is still
+rendered only when the service can resolve the declared output to a file *and*
+this app actually serves the target path, so the reader is never handed a
+guaranteed 404 -- the served-path check is what makes the two conditions
+independent, and it is why an app assembled without the lineage router simply
+shows no links. The service module is imported lazily for a narrower reason:
+it pulls in the lineage analyzer and its ``sqlglot`` dependency, and a broken
+install must cost this page two links rather than cost every page its ability
+to start.
 """
 
 from __future__ import annotations
@@ -400,13 +403,14 @@ def _resolver() -> tuple[Any, Any] | None:
 
     Imported here rather than at module scope because
     :mod:`kptn_server.service` pulls in the lineage analyzer, which imports
-    ``sqlglot`` -- a package no extra of this project installs. A missing
-    lineage stack must therefore cost the walkthrough its two links, never
-    cost the whole UI its ability to start.
+    ``sqlglot``. The ``web`` extra declares ``sqlglot``, so this normally
+    succeeds; the guard is for an install that lacks it, where a missing
+    lineage stack must cost the walkthrough its two links rather than cost the
+    whole UI its ability to start.
 
-    Returns ``None`` when the service cannot be imported. This is also the
-    seam the link tests replace, since the real one cannot resolve anything in
-    an environment without ``sqlglot``.
+    Returns ``None`` when the service cannot be imported. It is also the seam
+    the link tests replace, so that a test about *linking* does not depend on
+    a real project having a built DuckDB file.
     """
     try:
         from kptn_server.service import (  # noqa: PLC0415 - see docstring

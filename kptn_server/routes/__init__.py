@@ -8,7 +8,9 @@ The router in this module holds only the two things that exist before any
 feature page does: the health endpoint the standalone launcher polls before it
 opens a browser, and the shell of the run console at ``/``. The run console's
 behaviour and the run history live in :mod:`kptn_server.routes.runs`; the plan
-view and the pipeline walkthrough live in :mod:`kptn_server.routes.inspect`.
+view and the pipeline walkthrough live in
+:mod:`kptn_server.routes.inspect`; the retained lineage and table-preview
+surfaces live in :mod:`kptn_server.routes.lineage`.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from __future__ import annotations
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from kptn_server.routes import inspect, runs
+from kptn_server.routes import inspect, lineage, runs
 
 router = APIRouter()
 
@@ -44,6 +46,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(router)
     app.include_router(runs.router)
     app.include_router(inspect.router)
+    app.include_router(lineage.router)
 
 
 __all__ = ["register_routers", "router"]
