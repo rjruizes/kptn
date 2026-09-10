@@ -23,7 +23,7 @@ from kptn.graph.nodes import (
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.schema import KptnConfig
-from kptn.runner.plan import PlanAction, PlanEntry, build_plan, plan, render_plan
+from kptn.runner.plan import PlanAction, PlanEntry, build_plan, emit_map_plan, emit_run, emit_skip, plan, render_plan
 from tests.fakes import FakeStateStore
 
 
@@ -260,6 +260,58 @@ def test_render_plan_preserves_exact_cli_output(capsys: pytest.CaptureFixture) -
     assert captured.out == "[SKIP] task_name — cached\n"
 
 
+@pytest.mark.parametrize(
+    ("emitter", "kwargs", "action", "task_name", "provider"),
+    [
+        (emit_run, {"task_name": "task_name"}, PlanAction.RUN, "task_name", None),
+        (emit_skip, {"task_name": "task_name"}, PlanAction.SKIP, "task_name", None),
+        (
+            emit_map_plan,
+            {"task_name": "task_name", "provider": "provider_task"},
+            PlanAction.MAP,
+            "task_name",
+            "provider_task",
+        ),
+    ],
+)
+def test_status_emitters_use_shared_formatter(
+    capsys: pytest.CaptureFixture,
+    emitter,
+    kwargs: dict[str, str],
+    action: PlanAction,
+    task_name: str,
+    provider: str | None,
+) -> None:
+    """Status emitters delegate to one shared formatter for exact output."""
+    with patch(
+        "kptn.runner.plan._format_plan_status_line",
+        return_value=f"[{action.name}] {task_name}",
+    ) as mock_format:
+        emitter(**kwargs)
+
+    captured = capsys.readouterr()
+    assert captured.out == f"[{action.name}] {task_name}\n"
+    mock_format.assert_called_once_with(action, task_name, provider=provider, timestamp=False)
+
+
+def test_render_plan_uses_shared_formatter(capsys: pytest.CaptureFixture) -> None:
+    """render_plan uses the same formatter as the live status emitters."""
+    with patch(
+        "kptn.runner.plan._format_plan_status_line",
+        return_value="[SKIP] task_name — cached",
+    ) as mock_format:
+        render_plan([PlanEntry("task_name", PlanAction.SKIP, reason="cached")])
+
+    captured = capsys.readouterr()
+    assert captured.out == "[SKIP] task_name — cached\n"
+    mock_format.assert_called_once_with(
+        PlanAction.SKIP,
+        "task_name",
+        provider=None,
+        timestamp=False,
+    )
+
+
 # ─── AC-4: ProfileError exits non-zero with stderr, no partial output ─────────
 
 
@@ -278,6 +330,21 @@ def test_plan_profile_error_exits_nonzero_stderr_no_partial_output() -> None:
     assert result.exit_code == 1
     assert "stale ref: 'missing_branch'" in result.stderr
     assert result.stdout == ""
+
+
+def test_plan_command_translates_pipeline_import_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """plan command reports pipeline import failures as a BadParameter error."""
+    (tmp_path / "pyproject.toml").write_text('[tool.kptn]\npipeline = "demo_pkg.pipeline"\n')
+    (tmp_path / "demo_pkg").mkdir()
+    (tmp_path / "demo_pkg" / "__init__.py").write_text("")
+    (tmp_path / "demo_pkg" / "pipeline.py").write_text("from .missing import PIPELINE_NAME\n")
+    monkeypatch.chdir(tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["plan"])
+
+    assert result.exit_code == 2
+    assert "Could not import pipeline module 'demo_pkg.pipeline'" in result.stderr
 
 
 # ─── P1 guard: MapNode.over = "" raises ValueError ────────────────────────────

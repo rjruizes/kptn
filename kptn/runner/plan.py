@@ -38,12 +38,38 @@ class PlanEntry:
     provider: str | None = None
 
 
+def _format_plan_status_line(
+    action: PlanAction,
+    task_name: str,
+    *,
+    provider: str | None = None,
+    timestamp: bool = False,
+) -> str:
+    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
+
+    if action is PlanAction.RUN:
+        return f"[RUN]{ts} {task_name}"
+    if action is PlanAction.SKIP:
+        return f"[SKIP]{ts} {task_name} — cached"
+    if provider is None:
+        raise ValueError(f"Map plan status for '{task_name}' is missing a provider.")
+    return f"[MAP]{ts} {task_name} — dynamic, expands after {provider}"
+
+
 def emit_map(task_name: str, count: int) -> None:
     print(f"[MAP] {task_name} — expanding over {count} items", flush=True)
 
 
 def emit_map_plan(task_name: str, provider: str) -> None:
-    print(f"[MAP] {task_name} \u2014 dynamic, expands after {provider}", flush=True)
+    print(
+        _format_plan_status_line(
+            PlanAction.MAP,
+            task_name,
+            provider=provider,
+            timestamp=False,
+        ),
+        flush=True,
+    )
 
 
 def emit_fail(task_name: str, reason: str, timestamp: bool = False) -> None:
@@ -52,13 +78,27 @@ def emit_fail(task_name: str, reason: str, timestamp: bool = False) -> None:
 
 
 def emit_skip(task_name: str, timestamp: bool = False) -> None:
-    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
-    print(f"[SKIP]{ts} {task_name} \u2014 cached", flush=True)
+    print(
+        _format_plan_status_line(
+            PlanAction.SKIP,
+            task_name,
+            provider=None,
+            timestamp=timestamp,
+        ),
+        flush=True,
+    )
 
 
 def emit_run(task_name: str, timestamp: bool = False) -> None:
-    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
-    print(f"[RUN]{ts} {task_name}", flush=True)
+    print(
+        _format_plan_status_line(
+            PlanAction.RUN,
+            task_name,
+            provider=None,
+            timestamp=timestamp,
+        ),
+        flush=True,
+    )
 
 
 def emit_backup_start(task_name: str, dest: str, timestamp: bool = False) -> None:
@@ -131,11 +171,38 @@ def render_plan(entries: Iterable[PlanEntry], stream: TextIO = sys.stdout) -> No
         if entry.action is PlanAction.MAP:
             if entry.provider is None:
                 raise ValueError(f"PlanEntry for map task '{entry.task_name}' is missing a provider.")
-            print(f"[MAP] {entry.task_name} — dynamic, expands after {entry.provider}", file=stream, flush=True)
+            print(
+                _format_plan_status_line(
+                    PlanAction.MAP,
+                    entry.task_name,
+                    provider=entry.provider,
+                    timestamp=False,
+                ),
+                file=stream,
+                flush=True,
+            )
         elif entry.action is PlanAction.SKIP:
-            print(f"[SKIP] {entry.task_name} — cached", file=stream, flush=True)
+            print(
+                _format_plan_status_line(
+                    PlanAction.SKIP,
+                    entry.task_name,
+                    provider=None,
+                    timestamp=False,
+                ),
+                file=stream,
+                flush=True,
+            )
         else:
-            print(f"[RUN] {entry.task_name}", file=stream, flush=True)
+            print(
+                _format_plan_status_line(
+                    PlanAction.RUN,
+                    entry.task_name,
+                    provider=None,
+                    timestamp=False,
+                ),
+                file=stream,
+                flush=True,
+            )
 
 
 def plan(resolved: ResolvedGraph, state_store: StateStoreBackend) -> None:

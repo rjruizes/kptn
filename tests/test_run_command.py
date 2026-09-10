@@ -6,6 +6,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import kptn
+from typer.testing import CliRunner
+
+from kptn.cli.commands import app
 from kptn.exceptions import ProjectConfigError
 from kptn.graph.graph import Graph
 from kptn.graph.pipeline import Pipeline
@@ -97,3 +100,30 @@ def test_load_pipeline_missing_setting_raises_project_config_error(tmp_path: Pat
 
     with pytest.raises(ProjectConfigError, match="Missing \\[tool.kptn\\] pipeline"):
         load_pipeline(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("project_files", "expected_message"),
+    [
+        ({}, "Missing pyproject.toml"),
+        ({"pyproject.toml": '[tool.kptn]\npipeline = "broken"\ninvalid = [\n'}, "Invalid pyproject.toml"),
+    ],
+)
+def test_run_command_translates_project_config_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    project_files: dict[str, str],
+    expected_message: str,
+) -> None:
+    """run command renders loader failures through Typer's BadParameter path."""
+    for relative_path, contents in project_files.items():
+        target_path = tmp_path / relative_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(contents)
+
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(app, ["run"])
+
+    assert result.exit_code == 2
+    assert expected_message in result.stderr
