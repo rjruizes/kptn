@@ -1325,3 +1325,64 @@ def test_run_page_and_stream_render_one_run_summary(
     )
 
     assert fragment.strip() in page
+
+
+def test_history_carrying_a_profile_still_lists_every_run(
+    client, store: RunStore, ui_project: Path
+) -> None:
+    """Carrying a profile must not quietly filter the list.
+
+    The profile rides through this page so the *next* one keeps it. The
+    history itself is still every run of every profile, which is the whole
+    reason it shows each row's profile individually.
+    """
+    # Finished one at a time: the store allows a project only one active run.
+    mine = _seed_run(store, ui_project, profile="success")
+    store.finish_run(mine.run_id, STATUS_SUCCEEDED, exit_code=0)
+    other = _seed_run(store, ui_project, profile="failure")
+    store.finish_run(other.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    body = client.get("/runs?profile=success").text
+
+    assert mine.run_id in body
+    assert other.run_id in body, "the history filtered itself by the carried profile"
+
+
+def test_log_download_sits_in_the_console_bar_after_follow_output(
+    client, completed_run: RunRecord
+) -> None:
+    """The two console controls belong together, in that order.
+
+    "Follow output" and "Download raw log" both act on the console's output,
+    so the download lives in the console's own bar to the right of the
+    toggle -- not down in the summary panel, a section away from the thing
+    it downloads.
+    """
+    body = client.get(f"/runs/{completed_run.run_id}").text
+
+    bar = re.search(r'<header class="console__bar">(.*?)</header>', body, re.S)
+    assert bar, "the console bar is gone"
+    inside = bar.group(1)
+
+    follow_at = inside.find('id="follow-output"')
+    download_at = inside.find(f'action="/runs/{completed_run.run_id}/log"')
+
+    assert follow_at != -1, "the follow toggle left the console bar"
+    assert download_at != -1, "the log download is not in the console bar"
+    assert follow_at < download_at, (
+        "the log download renders before the follow toggle, not to its right"
+    )
+
+
+def test_run_summary_no_longer_carries_the_log_download(
+    client, completed_run: RunRecord
+) -> None:
+    """Moved, not duplicated -- two download buttons would be a regression."""
+    body = client.get(f"/runs/{completed_run.run_id}").text
+
+    assert body.count(f'action="/runs/{completed_run.run_id}/log"') == 1
+    summary = re.search(
+        r'<section class="panel" id="run-summary">(.*?)</section>', body, re.S
+    )
+    assert summary, "the summary panel is gone"
+    assert "/log" not in summary.group(1)

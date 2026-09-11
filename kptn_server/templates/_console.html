@@ -30,6 +30,19 @@
     <label class="console__follow">
       <input type="checkbox" id="follow-output" checked> Follow output
     </label>
+
+    {#
+      Both console controls in one place: "Follow output" decides where the
+      output goes on screen, this takes the same output away with you.
+
+      A GET form rather than a styled link, so the control is a real
+      ``<button>``: it inherits the same rules as every other button in this
+      UI with no ``.button`` class to keep in sync, and it stays a plain GET
+      that works with JavaScript off.
+    #}
+    <form class="console__log" method="get" action="/runs/{{ run.run_id }}/log">
+      <button type="submit">Download raw log</button>
+    </form>
   </header>
 
   <ol class="console__events" id="console-events">
