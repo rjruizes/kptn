@@ -55,11 +55,32 @@
     </div>
     {% endblock %}
 
+    {#
+      The profile travels with the reader.
+
+      The links carry ``selected_profile``, which each route that accepts a
+      ``?profile=`` passes after validating it -- the run page's comes from
+      the run row rather than the URL. So choosing a profile and clicking
+      Plan shows the plan for *that* profile, with no JavaScript involved.
+
+      Deliberately the route's value and not the request's query string: a
+      page that *refused* a profile (the unknown-profile 400) must not hand
+      it to the next page, or every link on that error page is another 400.
+      A page that passes nothing gets a clean nav, which is the right answer
+      for the run history and for every error shell.
+
+      ``data-profile-link`` holds each link's bare path, and is the contract
+      app.js rebuilds these hrefs from when the selector changes without a
+      submit -- the one case no server render can know. Only the three pages
+      that take a ``?profile=`` carry it: the run history lists every run of
+      every profile, so the parameter would be a lie there.
+    #}
+    {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
     <nav class="app-bar__nav" aria-label="Main">
-      <a href="/" {% if nav_active == 'run' %}aria-current="page"{% endif %}>Run</a>
+      <a href="/{{ profile_query }}" data-profile-link="/" {% if nav_active == 'run' %}aria-current="page"{% endif %}>Run</a>
       <a href="/runs" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>Runs</a>
-      <a href="/plan" {% if nav_active == 'plan' %}aria-current="page"{% endif %}>Plan</a>
-      <a href="/walkthrough" {% if nav_active == 'docs' %}aria-current="page"{% endif %}>How it works</a>
+      <a href="/plan{{ profile_query }}" data-profile-link="/plan" {% if nav_active == 'plan' %}aria-current="page"{% endif %}>Plan</a>
+      <a href="/walkthrough{{ profile_query }}" data-profile-link="/walkthrough" {% if nav_active == 'docs' %}aria-current="page"{% endif %}>How it works</a>
     </nav>
   </header>
 

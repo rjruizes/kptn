@@ -18,7 +18,9 @@ from __future__ import annotations
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import HTMLResponse
 
+from kptn_server.project import ProjectContext
 from kptn_server.routes import inspect, lineage, runs
+from kptn_server.routes.support import requested_profile, unknown_profile
 
 router = APIRouter()
 
@@ -34,10 +36,22 @@ def health() -> dict[str, str]:
 
 
 @router.get("/", response_class=HTMLResponse)
-def index(request: Request) -> HTMLResponse:
-    """The run console shell: which project, which profiles, and a Run form."""
+def index(request: Request, profile: str | None = None) -> HTMLResponse:
+    """The run console shell: which project, which profiles, and a Run form.
+
+    It accepts ``?profile=`` for the same reason the plan and walkthrough
+    pages do: the profile travels with the reader through the app bar's nav,
+    and arriving back here it has to be *visible* -- a selector reading
+    "(no profile)" while the URL says otherwise would start the next run on
+    the wrong one.
+    """
+    project: ProjectContext = request.app.state.project
+    if profile and profile not in project.profiles:
+        return unknown_profile(request, profile, nav_active="run")
     return request.app.state.templates.TemplateResponse(
-        request, "index.html", {"nav_active": "run"}
+        request,
+        "index.html",
+        {"nav_active": "run", "selected_profile": requested_profile(profile)},
     )
 
 

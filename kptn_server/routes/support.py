@@ -20,6 +20,7 @@ from __future__ import annotations
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 
+from kptn_server.project import ProjectContext
 from kptn_server.run_store import TERMINAL_STATUSES, RunRecord
 
 
@@ -69,3 +70,34 @@ def error_response(
 
 
 __all__ = ["error_response", "is_fragment_request"]
+
+
+def requested_profile(profile: str | None) -> str | None:
+    """Normalize the query parameter: a blank selection means no profile.
+
+    The profile ``<select>`` submits ``profile=`` for its ``(no profile)``
+    option, and "no profile" is a legitimate, documented way to inspect a
+    pipeline -- the raw graph, unpruned.
+    """
+    return profile or None
+
+
+def unknown_profile(request: Request, profile: str, *, nav_active: str) -> HTMLResponse:
+    """The one answer for a profile this project does not declare.
+
+    Shared by every page that takes a ``?profile=``, because the profile now
+    travels between them in the nav: a renamed profile turns a stale link
+    into this error on whichever page the reader lands, and one wording that
+    names the real profiles is the difference between a dead end and a fix.
+    """
+    project: ProjectContext = request.app.state.project
+    return error_response(
+        request,
+        status_code=400,
+        title="Unknown profile",
+        detail=(
+            f"{profile!r} is not a profile of this project. "
+            f"Declared profiles: {', '.join(project.profiles) or 'none'}."
+        ),
+        nav_active=nav_active,
+    )

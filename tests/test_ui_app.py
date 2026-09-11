@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,7 +34,7 @@ from fastapi.testclient import TestClient
 
 from kptn_server import app as app_module
 from kptn_server import processes as processes_module
-from kptn_server.app import create_app
+from kptn_server.app import STATIC_DIR, create_app
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
 from kptn_server.project import ProjectContext, ProjectError
 from kptn_server.run_store import (
@@ -505,3 +506,120 @@ def test_base_page_shows_the_project_and_a_profile_selector(ui_project: Path) ->
     assert 'name="profile"' in body
     for profile in ("success", "slow", "failure", "db_error"):
         assert f'value="{profile}"' in body, f"{profile} is not selectable"
+
+
+# -- the profile follows the reader across pages ---------------------------
+#
+# The selector is in the app bar of every page, but the nav used to be four
+# bare links: choosing a profile and then clicking Plan landed on a plan for
+# no profile at all. The profile now travels in the nav's own hrefs, which is
+# what makes it survive a navigation with no JavaScript involved.
+
+
+def _nav_href(body: str, base: str) -> str:
+    """The nav's href for the link whose base path is *base*."""
+    match = re.search(
+        r'<a href="([^"]*)"[^>]*data-profile-link="' + re.escape(base) + r'"', body
+    )
+    assert match, f"no nav link for {base!r} in the page"
+    return match.group(1)
+
+
+@pytest.mark.parametrize("base", ["/", "/plan", "/walkthrough"])
+def test_nav_carries_the_selected_profile_between_pages(
+    ui_project: Path, base: str
+) -> None:
+    """Reached with a profile, every profile-aware nav link keeps it."""
+    body = TestClient(create_app(ui_project)).get("/plan?profile=slow").text
+
+    assert _nav_href(body, base) == f"{base}?profile=slow"
+
+
+@pytest.mark.parametrize("base", ["/", "/plan", "/walkthrough"])
+def test_nav_omits_the_profile_when_none_is_selected(
+    ui_project: Path, base: str
+) -> None:
+    """No profile must mean a clean URL, not ``?profile=``.
+
+    A bare ``?profile=`` is the "(no profile)" selection spelled the long
+    way, and it would turn every link in the app bar into one.
+    """
+    body = TestClient(create_app(ui_project)).get("/").text
+
+    assert _nav_href(body, base) == base
+
+
+def test_nav_does_not_put_a_profile_on_the_run_history(ui_project: Path) -> None:
+    """The history lists every run, of every profile; the parameter is a lie."""
+    body = TestClient(create_app(ui_project)).get("/plan?profile=slow").text
+
+    assert 'data-profile-link="/runs"' not in body
+
+
+def test_index_accepts_a_profile_and_marks_it_selected(ui_project: Path) -> None:
+    """The run console has to be able to *show* a profile it is handed.
+
+    Without this the profile could travel to Plan and back and arrive home
+    invisible -- the selector would say "(no profile)" while the URL said
+    otherwise, and the next Run would use the wrong one.
+    """
+    body = TestClient(create_app(ui_project)).get("/?profile=slow").text
+
+    assert '<option value="slow" selected>slow</option>' in body
+
+
+def test_index_refuses_an_unknown_profile(ui_project: Path) -> None:
+    """Same answer the plan and walkthrough pages already give."""
+    response = TestClient(create_app(ui_project)).get("/?profile=nope")
+
+    assert response.status_code == 400
+    assert "nope" in response.text
+    assert "success" in response.text, "the error does not name the real profiles"
+
+
+def test_run_page_nav_carries_that_runs_profile(ui_project: Path) -> None:
+    """A run knows its profile without one being in the URL.
+
+    From a finished run, "show me the plan for this" is the obvious next
+    move, so the nav offers it rather than making the reader re-pick.
+    """
+    app = create_app(ui_project)
+    store = app.state.store
+    record = store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+
+    body = TestClient(app).get(f"/runs/{record.run_id}").text
+
+    assert _nav_href(body, "/plan") == "/plan?profile=slow"
+
+
+def test_app_js_syncs_the_nav_with_the_live_selector() -> None:
+    """The unsubmitted selection is the case HTML cannot express.
+
+    On the run console the selector is an input for ``run-form``, so its
+    value reaches the server only on submit. Nothing server-rendered can know
+    it, which is exactly the bug: pick a profile, click Plan, get no profile.
+    This is the one piece that needs script, so assert it is wired to the
+    same ``data-profile-link`` contract the templates render.
+    """
+    source = (STATIC_DIR / "app.js").read_text()
+
+    assert "data-profile-link" in source, "app.js does not target the nav links"
+    assert "profile-select" in source, "app.js does not read the selector"
+
+
+def test_unknown_profile_error_page_offers_a_way_out(ui_project: Path) -> None:
+    """The error page's nav must not carry the profile that caused it.
+
+    The whole point of naming the declared profiles is that the reader can
+    get somewhere useful. A nav that propagated the bad profile would make
+    every link on the page another 400 -- the dead end this error exists to
+    replace.
+    """
+    body = TestClient(create_app(ui_project)).get("/?profile=nope").text
+
+    for base in ("/", "/plan", "/walkthrough"):
+        assert _nav_href(body, base) == base, (
+            f"the {base!r} link carries the profile that was just refused"
+        )

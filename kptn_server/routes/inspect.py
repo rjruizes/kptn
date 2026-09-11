@@ -74,7 +74,12 @@ from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
 from kptn_server.markdown import DocumentationError, render_project_markdown
 from kptn_server.project import PROFILE_CONFIG_FILENAME, ProjectContext
-from kptn_server.routes.support import error_response, is_fragment_request
+from kptn_server.routes.support import (
+    error_response,
+    is_fragment_request,
+    requested_profile,
+    unknown_profile,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,32 +112,6 @@ TABLE_PREVIEW_PATH = "/table-preview-fragment"
 
 
 # -- profiles --------------------------------------------------------------
-
-
-def _requested_profile(profile: str | None) -> str | None:
-    """Normalize the query parameter: a blank selection means no profile.
-
-    The profile ``<select>`` on these pages submits ``profile=`` for its
-    ``(no profile)`` option, and "no profile" is a legitimate, documented way
-    to inspect a pipeline -- the raw graph, unpruned.
-    """
-    return profile or None
-
-
-def _unknown_profile(
-    request: Request, profile: str, *, nav_active: str
-) -> HTMLResponse:
-    project: ProjectContext = request.app.state.project
-    return error_response(
-        request,
-        status_code=400,
-        title="Unknown profile",
-        detail=(
-            f"{profile!r} is not a profile of this project. "
-            f"Declared profiles: {', '.join(project.profiles) or 'none'}."
-        ),
-        nav_active=nav_active,
-    )
 
 
 # -- the resolved graph and its state store --------------------------------
@@ -260,8 +239,8 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
     """What ``kptn run`` would do next, without doing any of it."""
     project: ProjectContext = request.app.state.project
     if profile and profile not in project.profiles:
-        return _unknown_profile(request, profile, nav_active="plan")
-    selected = _requested_profile(profile)
+        return unknown_profile(request, profile, nav_active="plan")
+    selected = requested_profile(profile)
 
     try:
         resolved = _resolved_graph(project, selected)
@@ -309,8 +288,8 @@ def walkthrough(request: Request, profile: str | None = None) -> HTMLResponse:
     """The resolved pipeline, in order, as a reader would walk it."""
     project: ProjectContext = request.app.state.project
     if profile and profile not in project.profiles:
-        return _unknown_profile(request, profile, nav_active="docs")
-    selected = _requested_profile(profile)
+        return unknown_profile(request, profile, nav_active="docs")
+    selected = requested_profile(profile)
 
     try:
         inspection = _inspection(project, selected)
@@ -503,8 +482,8 @@ def task_detail(
     """One task, in full: metadata, declared data, source, documentation."""
     project: ProjectContext = request.app.state.project
     if profile and profile not in project.profiles:
-        return _unknown_profile(request, profile, nav_active="docs")
-    selected = _requested_profile(profile)
+        return unknown_profile(request, profile, nav_active="docs")
+    selected = requested_profile(profile)
 
     try:
         inspection = _inspection(project, selected)

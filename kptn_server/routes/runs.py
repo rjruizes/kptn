@@ -668,6 +668,9 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
         {
             "nav_active": "run",
             "run": record,
+            # Not from the URL: a run knows its own profile, and "show me the
+            # plan for this run" is the obvious move from a finished one.
+            "selected_profile": record.profile,
             "events": events,
             # From the same aggregate the history page uses, rather than from
             # the events hydrated just above for the console: one counting

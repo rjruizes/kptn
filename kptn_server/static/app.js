@@ -218,6 +218,40 @@
     });
   }
 
+  function initProfileNav() {
+    /* The app bar's nav links already carry the profile the server rendered
+     * the page with. On the run console the selector is an input for
+     * `run-form`, so a fresh choice reaches the server only on submit --
+     * nothing server-rendered can know it, and clicking Plan would navigate
+     * to the profile the page loaded with rather than the one on screen.
+     * Keeping the hrefs in step is the whole job.
+     *
+     * With JavaScript off the links keep their rendered profile, which is
+     * the no-JS behaviour the nav is built for; this only ever improves on
+     * it. */
+    var select = document.getElementById("profile-select");
+    var links = document.querySelectorAll("[data-profile-link]");
+    if (!select || !links.length) {
+      return;
+    }
+
+    function sync() {
+      for (var i = 0; i < links.length; i += 1) {
+        var base = links[i].getAttribute("data-profile-link");
+        links[i].setAttribute(
+          "href",
+          select.value
+            ? base + "?profile=" + encodeURIComponent(select.value)
+            : base
+        );
+      }
+    }
+
+    select.addEventListener("change", sync);
+  }
+
   window.kptn.initConsole = initConsole;
+  window.kptn.initProfileNav = initProfileNav;
   initConsole();
+  initProfileNav();
 })();
