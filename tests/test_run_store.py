@@ -521,7 +521,10 @@ def test_the_stores_event_vocabulary_comes_from_the_runner() -> None:
 
     source = Path(run_store.__file__).read_text(encoding="utf-8")
     for kind in EventKind:
-        assert f'"{kind.value}"' not in source, (
-            f"{kind.value!r} is spelled as a literal in run_store.py; "
-            "derive it from EventKind instead"
-        )
+        # Both quotings: a kind spelled single-quoted inside an SQL string is
+        # exactly as much of a rename hazard as a double-quoted Python one.
+        for literal in (f'"{kind.value}"', f"'{kind.value}'"):
+            assert literal not in source, (
+                f"{kind.value!r} is spelled as a literal in run_store.py; "
+                "derive it from EventKind instead"
+            )

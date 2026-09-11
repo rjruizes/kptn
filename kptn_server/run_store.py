@@ -804,10 +804,10 @@ class RunStore:
             rows = conn.execute(
                 """
                 SELECT * FROM run_events
-                WHERE run_id = ? AND kind = 'warning'
+                WHERE run_id = ? AND kind = ?
                 ORDER BY sequence ASC
                 """,
-                (run_id,),
+                (run_id, EventKind.WARNING.value),
             ).fetchall()
         finally:
             conn.close()
