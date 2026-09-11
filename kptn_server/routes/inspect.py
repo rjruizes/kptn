@@ -263,7 +263,6 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
         "plan.html",
         {
             "nav_active": "plan",
-            "profile_action": "/plan",
             "selected_profile": selected,
             "rows": [_plan_row(entry) for entry in entries],
         },
@@ -307,7 +306,6 @@ def walkthrough(request: Request, profile: str | None = None) -> HTMLResponse:
         "walkthrough.html",
         {
             "nav_active": "docs",
-            "profile_action": "/walkthrough",
             "selected_profile": selected,
             "inspection": inspection,
             "rows": [
@@ -518,7 +516,6 @@ def task_detail(
         template,
         {
             "nav_active": "docs",
-            "profile_action": "/walkthrough",
             "selected_profile": selected,
             "item": item,
             "source_reference": _source_reference(item),

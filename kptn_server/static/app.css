@@ -19,6 +19,8 @@
   --warning: #9a5b00;
   --ok: #1a7f37;
   --radius: 6px;
+  --control-height: 32px;
+  --control-gap: 8px;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -104,16 +106,56 @@ pre {
 
 .app-bar__profile {
   display: flex;
-  gap: 6px;
+  gap: var(--control-gap);
   align-items: center;
 }
 
-/* The run history's carried-profile indicator is text, not a control, so it
- * has a <span> where the other pages have a <label>. Same muted treatment:
- * the app bar has one way of labelling this field. */
-.app-bar__profile label,
-.app-bar__profile-label {
+.app-bar__profile label {
   color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+/* Profile, Run, Plan: one group, so they read as three steps on the same
+ * subject rather than three unrelated controls. The forms are layout-neutral
+ * wrappers -- each exists only to give its button a method and an action. */
+.app-bar__controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--control-gap);
+}
+
+.app-bar__run,
+.app-bar__plan {
+  margin: 0;
+}
+
+/* A <select> and a <button> with identical padding still come out different
+ * heights -- the select is sized by the platform's own control metrics, the
+ * button by its content box -- which left the buttons overhanging the select
+ * by 2px. An explicit height on all three is the only thing that makes them
+ * one crisp row, so it is set here rather than on the global control rules:
+ * the buttons elsewhere in the UI (Stop, Force-finish, Download raw log) are
+ * sized by their content and should stay that way.
+ *
+ * ``flex-shrink: 0`` on the buttons keeps their labels on one line when the
+ * bar gets tight; the select is the element that gives up width instead. */
+.app-bar__controls select,
+.app-bar__controls button {
+  height: var(--control-height);
+  padding-block: 0;
+}
+
+.app-bar__controls button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Long profile names (``asa24_validate_ingest``) would otherwise let the
+ * selector push the nav off the bar. */
+.app-bar__controls select {
+  min-width: 0;
+  max-width: 220px;
 }
 
 .app-bar__nav {

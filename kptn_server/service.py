@@ -8,9 +8,8 @@ read straight out of the project's DuckDB file. Their routes live in
 second frontend.
 
 The landing-page renderer that used to live here is gone with the React
-application it served: ``templates/index.html`` is now the UI's own run
-console, rendered by :mod:`kptn_server.routes` with the served project in its
-context.
+application it served. The UI's landing page is now the run history, rendered
+by :mod:`kptn_server.routes.runs` with the served project in its context.
 
 ``kptn.lineage`` parses SQL with ``sqlglot``, so importing this module needs
 the ``web`` extra -- which declares it.

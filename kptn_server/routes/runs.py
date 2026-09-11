@@ -863,9 +863,16 @@ def _plural(count: int, noun: str) -> str:
 # -- GET /runs -------------------------------------------------------------
 
 
+@router.get("/", response_class=HTMLResponse)
 @router.get("/runs", response_class=HTMLResponse)
 def run_history(request: Request, profile: str | None = None) -> HTMLResponse:
-    """This project's run history, newest first.
+    """This project's run history, newest first -- and the UI's landing page.
+
+    Served at ``/`` as well as ``/runs``: there is no separate run console
+    page any more. Starting a run is a control in the app bar rather than a
+    destination, so the page you land on is the one that tells you what has
+    been run. ``/runs`` stays a route because links and bookmarks point at
+    it.
 
     It accepts ``?profile=`` but does not filter by it. The profile is
     carried so the *next* page keeps it -- without this the history was

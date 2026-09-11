@@ -489,14 +489,21 @@ def test_base_page_loads_only_vendored_assets(ui_project: Path) -> None:
 
 
 def test_base_page_offers_the_shared_navigation(ui_project: Path) -> None:
-    body = TestClient(create_app(ui_project)).get("/").text
+    """Two nav destinations, and the two actions that live in the bar.
 
-    for label in ("Run", "Runs", "Plan", "How it works"):
-        assert label in body, f"the base page is missing the {label!r} link"
-    # ``/walkthrough`` is the route the walkthrough router actually serves;
-    # the nav's label for it is still "How it works".
-    for href in ("/runs", "/plan", "/walkthrough"):
-        assert href in body, f"the base page is missing a link to {href}"
+    Asserted against the nav and the bar separately, because "Run" and
+    "Plan" appear in both as words: checking the whole document for the
+    string would pass no matter which side they were on.
+    """
+    body = TestClient(create_app(ui_project)).get("/").text
+    nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S).group(0)
+    bar = _app_bar(body)
+
+    # ``/walkthrough`` is the route the walkthrough router serves; the nav's
+    # label for it is still "How it works".
+    assert ">Runs<" in nav and "How it works" in nav
+    assert "/walkthrough" in nav
+    assert ">Run<" in bar and ">Plan<" in bar
 
 
 def test_base_page_shows_the_project_and_a_profile_selector(ui_project: Path) -> None:
@@ -525,7 +532,7 @@ def _nav_href(body: str, base: str) -> str:
     return match.group(1)
 
 
-@pytest.mark.parametrize("base", ["/", "/runs", "/plan", "/walkthrough"])
+@pytest.mark.parametrize("base", ["/", "/walkthrough"])
 def test_nav_carries_the_selected_profile_between_pages(
     ui_project: Path, base: str
 ) -> None:
@@ -535,7 +542,7 @@ def test_nav_carries_the_selected_profile_between_pages(
     assert _nav_href(body, base) == f"{base}?profile=slow"
 
 
-@pytest.mark.parametrize("base", ["/", "/runs", "/plan", "/walkthrough"])
+@pytest.mark.parametrize("base", ["/", "/walkthrough"])
 def test_nav_omits_the_profile_when_none_is_selected(
     ui_project: Path, base: str
 ) -> None:
@@ -560,7 +567,7 @@ def test_nav_link_to_the_history_carries_the_profile(ui_project: Path) -> None:
     """
     body = TestClient(create_app(ui_project)).get("/plan?profile=slow").text
 
-    assert _nav_href(body, "/runs") == "/runs?profile=slow"
+    assert _nav_href(body, "/") == "/?profile=slow"
 
 
 def test_index_accepts_a_profile_and_marks_it_selected(ui_project: Path) -> None:
@@ -596,9 +603,12 @@ def test_run_page_nav_carries_that_runs_profile(ui_project: Path) -> None:
         RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
     )
 
-    body = TestClient(app).get(f"/runs/{record.run_id}").text
+    bar = _app_bar(TestClient(app).get(f"/runs/{record.run_id}").text)
 
-    assert _nav_href(body, "/plan") == "/plan?profile=slow"
+    assert re.search(r'<input[^>]*name="profile"[^>]*value="slow"', bar), (
+        "the Plan button does not offer this run's profile"
+    )
+    assert '<option value="slow" selected>' in bar, "the selector does not show it"
 
 
 def test_app_js_syncs_the_nav_with_the_live_selector() -> None:
@@ -626,49 +636,17 @@ def test_unknown_profile_error_page_offers_a_way_out(ui_project: Path) -> None:
     """
     body = TestClient(create_app(ui_project)).get("/?profile=nope").text
 
-    for base in ("/", "/runs", "/plan", "/walkthrough"):
+    for base in ("/", "/walkthrough"):
         assert _nav_href(body, base) == base, (
             f"the {base!r} link carries the profile that was just refused"
         )
+    hidden = re.search(r'<input[^>]*name="profile"[^>]*>', _app_bar(body))
+    assert hidden and "disabled" in hidden.group(0), (
+        "the Plan button still carries the profile that was just refused"
+    )
 
 
 # -- the run history keeps the profile without claiming to filter by it ----
-
-
-@pytest.mark.parametrize("base", ["/", "/runs", "/plan", "/walkthrough"])
-def test_run_history_nav_passes_the_profile_on(ui_project: Path, base: str) -> None:
-    """The history used to be where a profile went to die.
-
-    It starts nothing and filters nothing, so it had no profile of its own
-    and its nav carried none -- which broke the chain for every page after
-    it: Run -> Runs -> Plan arrived with no profile at all.
-    """
-    body = TestClient(create_app(ui_project)).get("/runs?profile=slow").text
-
-    assert _nav_href(body, base) == f"{base}?profile=slow"
-
-
-def test_run_history_shows_the_profile_without_offering_a_control(
-    ui_project: Path,
-) -> None:
-    """Read-only text, not a ``<select>``.
-
-    A dropdown here would render, take input, and drive nothing -- this page
-    neither starts a run nor filters its list. Showing the profile as text
-    says "this is what you carried in" and promises nothing else.
-    """
-    body = TestClient(create_app(ui_project)).get("/runs?profile=slow").text
-
-    assert "slow" in body
-    assert 'name="profile"' not in body, "the history is offering a profile control"
-    assert "<select" not in body, "the history is offering a profile control"
-
-
-def test_run_history_shows_no_profile_indicator_without_one(ui_project: Path) -> None:
-    """The default bar stays as clean as it is today."""
-    body = TestClient(create_app(ui_project)).get("/runs").text
-
-    assert 'data-role="carried-profile"' not in body
 
 
 def test_run_history_refuses_an_unknown_profile(ui_project: Path) -> None:
@@ -677,3 +655,123 @@ def test_run_history_refuses_an_unknown_profile(ui_project: Path) -> None:
 
     assert response.status_code == 400
     assert "success" in response.text, "the error does not name the real profiles"
+
+
+# -- the app bar is the one place a run starts -----------------------------
+#
+# There is no separate "Run" page any more: "/" is the run history, and the
+# controls that used to live on that page -- the profile, the Run button --
+# are in the app bar, on every page. Plan joins them there and leaves the
+# nav, because it acts on the selected profile exactly as Run does.
+
+
+def _app_bar(body: str) -> str:
+    match = re.search(r'<header class="app-bar">(.*?)</header>', body, re.S)
+    assert match, "the app bar is gone"
+    return match.group(1)
+
+
+def test_root_serves_the_run_history(ui_project: Path) -> None:
+    """ "/" is the history now, not a console shell."""
+    app = create_app(ui_project)
+    record = app.state.store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+
+    body = TestClient(app).get("/").text
+
+    assert record.run_id in body
+
+
+def test_app_bar_orders_profile_then_run_then_plan(ui_project: Path) -> None:
+    """The order is the request: profile, then Run, then Plan."""
+    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
+
+    profile_at = bar.find('id="profile-select"')
+    run_at = bar.find('id="run-form"')
+    plan_at = bar.find('action="/plan"')
+
+    assert -1 not in (profile_at, run_at, plan_at), "a control is missing from the bar"
+    assert profile_at < run_at < plan_at
+
+
+def test_app_bar_run_button_posts_the_selected_profile(ui_project: Path) -> None:
+    """The select carries ``form="run-form"``, so the bar's form takes it.
+
+    That association is the whole reason the selector can sit outside the
+    form it drives, and it is what makes Run work from any page.
+    """
+    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
+
+    assert '<form id="run-form"' in bar
+    assert 'method="post"' in bar and 'action="/runs"' in bar
+    assert 'form="run-form"' in bar, "the selector is not bound to the run form"
+    assert "button--primary" in bar, "Run is not the primary action"
+
+
+def test_app_bar_plan_button_carries_the_selected_profile(ui_project: Path) -> None:
+    """Plan is a GET to the plan page for whatever profile is selected."""
+    bar = _app_bar(TestClient(create_app(ui_project)).get("/?profile=slow").text)
+
+    assert 'action="/plan"' in bar
+    assert re.search(r'<input[^>]*name="profile"[^>]*value="slow"', bar), (
+        "the Plan button does not carry the profile"
+    )
+
+
+def test_app_bar_plan_button_sends_nothing_when_no_profile_is_selected(
+    ui_project: Path,
+) -> None:
+    """A disabled input is not submitted, so Plan stays a clean ``/plan``."""
+    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
+
+    hidden = re.search(r'<input[^>]*name="profile"[^>]*>', bar)
+    assert hidden, "the Plan form has no profile input"
+    assert "disabled" in hidden.group(0)
+
+
+def test_nav_no_longer_offers_a_plan_link(ui_project: Path) -> None:
+    """Plan is a button in the bar; a second one in the nav is the duplicate
+    the restructure removes."""
+    body = TestClient(create_app(ui_project)).get("/").text
+    nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S)
+    assert nav, "the nav is gone"
+
+    assert ">Plan<" not in nav.group(0)
+
+
+def test_nav_offers_the_history_and_the_walkthrough(ui_project: Path) -> None:
+    """Two destinations left, and no "Run" page to link to."""
+    body = TestClient(create_app(ui_project)).get("/").text
+    nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S).group(0)
+
+    assert _nav_href(nav, "/") == "/"
+    assert _nav_href(nav, "/walkthrough") == "/walkthrough"
+    assert ">Run<" not in nav, "the nav still links to a run page that is gone"
+
+
+def test_the_old_runs_url_still_reaches_the_history(ui_project: Path) -> None:
+    """Bookmarks and the VS Code webview's links must not 404."""
+    app = create_app(ui_project)
+    record = app.state.store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+
+    response = TestClient(app).get("/runs")
+
+    assert response.status_code == 200
+    assert record.run_id in response.text
+
+
+@pytest.mark.parametrize("page", ["/", "/plan", "/walkthrough"])
+def test_every_page_can_start_a_run(ui_project: Path, page: str) -> None:
+    """The point of moving Run into the bar.
+
+    The read-only pages used to replace the selector with a GET form of
+    their own, which meant the bar's select belonged to a different form --
+    a Run button beside it would have posted no profile at all.
+    """
+    bar = _app_bar(TestClient(create_app(ui_project)).get(page).text)
+
+    assert '<form id="run-form"' in bar
+    assert 'form="run-form"' in bar, f"{page}'s selector is not bound to the run form"

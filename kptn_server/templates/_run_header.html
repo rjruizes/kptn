@@ -11,14 +11,11 @@
   the closing frame swaps this whole section for the one the server would
   render now.
 
-  Three controls, and the difference between them is the point:
+  Two controls, and the difference between them is the point:
 
   ``Stop``          asks the worker to wind down. It records intent and
                     signals; it never writes an outcome, because only the
                     worker knows whether cleanup finished.
-  ``Run again``     the obvious next action from a finished run. It owns a
-                    ``run-form`` so the base page's profile selector (which
-                    carries ``form="run-form"``) keeps working here.
   ``Force-finish``  the escape hatch for a worker whose liveness can never be
                     determined, and which reconciliation therefore cannot
                     settle. It abandons a possibly-live process, so it is
@@ -37,11 +34,13 @@
     <dd><code>{{ run.log_path }}</code></dd>
   </dl>
 
+  {#
+    No Run button here: the app bar has one, and on this page its selector is
+    already set to this run's profile, so it *is* "run this again". A second
+    ``id="run-form"`` would also be a duplicate id, and the selector would
+    bind to whichever came first.
+  #}
   <div class="run-actions">
-    <form id="run-form" method="post" action="/runs">
-      <button type="submit" class="button button--primary">Run again</button>
-    </form>
-
     {% if not is_terminal %}
     <form class="run-actions__stop" method="post" action="/runs/{{ run.run_id }}/stop">
       <button type="submit" class="button button--danger">Stop</button>

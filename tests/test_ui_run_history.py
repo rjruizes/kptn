@@ -1236,33 +1236,40 @@ def test_headline_omits_the_outside_clause_when_there_is_nothing_outside(
     assert "outside any task" not in summary
 
 
-# -- the orphaned profile selector ----------------------------------------
+# -- the selector is never orphaned ---------------------------------------
 
 
-def test_pages_without_a_run_form_do_not_render_the_profile_selector(
-    client, store: RunStore, app
-) -> None:
-    """``<select form="run-form">`` on a page with no such form drives nothing.
-
-    It still renders and still takes input, which is worse than not being
-    there. The pages that own a ``run-form`` keep it; the ones that do not
-    drop it.
-    """
-    assert 'id="profile-select"' not in client.get("/runs").text
-    # The error shell has no run-form either.
-    assert 'id="profile-select"' not in client.get("/runs/nope").text
-    assert 'id="profile-select"' not in client.get("/runs/nope/log").text
-
-
-def test_pages_with_a_run_form_keep_the_profile_selector(
+def test_every_page_pairs_the_selector_with_its_run_form(
     client, completed_run: RunRecord
 ) -> None:
-    for body in (
-        client.get("/").text,
-        client.get(f"/runs/{completed_run.run_id}").text,
+    """``<select form="run-form">`` must never outlive the form it names.
+
+    A selector with no matching form still renders and still takes input,
+    driving nothing -- worse than not being there. The old answer was to drop
+    the selector on pages that owned no form; now the app bar carries both
+    together, so the pairing holds everywhere, error shells included.
+    """
+    for path in (
+        "/",
+        "/runs",
+        f"/runs/{completed_run.run_id}",
+        "/runs/nope",
+        "/runs/nope/log",
     ):
-        assert 'id="profile-select"' in body
-        assert 'id="run-form"' in body
+        body = client.get(path).text
+        has_select = 'id="profile-select"' in body
+        has_form = 'id="run-form"' in body
+        assert has_select == has_form, (
+            f"{path} renders one of the selector/run-form pair without the other"
+        )
+
+
+def test_the_error_shell_still_offers_the_bar(client) -> None:
+    """An error page is a place you need a way out of, not a dead end."""
+    body = client.get("/runs/nope").text
+
+    assert 'id="profile-select"' in body
+    assert 'id="run-form"' in body
 
 
 def test_warning_payloads_with_a_status_are_still_counted(

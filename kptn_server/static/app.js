@@ -231,9 +231,11 @@
      * it. */
     var select = document.getElementById("profile-select");
     var links = document.querySelectorAll("[data-profile-link]");
-    if (!select || !links.length) {
+    if (!select) {
       return;
     }
+
+    var planInputs = document.querySelectorAll("[data-profile-input]");
 
     function sync() {
       for (var i = 0; i < links.length; i += 1) {
@@ -244,6 +246,14 @@
             ? base + "?profile=" + encodeURIComponent(select.value)
             : base
         );
+      }
+      /* The Plan button submits a form rather than following a link, so its
+       * profile rides in a hidden input. Disabled when there is none: a
+       * disabled control is not submitted, which keeps the URL a clean
+       * "/plan" instead of "/plan?profile=". */
+      for (var k = 0; k < planInputs.length; k += 1) {
+        planInputs[k].value = select.value;
+        planInputs[k].disabled = !select.value;
       }
     }
 

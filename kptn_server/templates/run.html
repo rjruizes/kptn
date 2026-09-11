@@ -18,12 +18,6 @@
 
 {% block title %}{{ run.status }} - {{ project.pipeline_name }} - kptn{% endblock %}
 
-{% block profile_options %}
-<option value="" {% if not run.profile %}selected{% endif %}>(no profile)</option>
-{% for profile in project.profiles %}
-<option value="{{ profile }}" {% if profile == run.profile %}selected{% endif %}>{{ profile }}</option>
-{% endfor %}
-{% endblock %}
 
 {% block content %}
 {% include "_run_header.html" %}

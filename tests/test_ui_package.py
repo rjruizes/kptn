@@ -120,10 +120,10 @@ def test_the_web_extra_makes_the_retained_lineage_service_importable() -> None:
 def test_the_superseded_render_index_page_helper_is_gone() -> None:
     """The React-era landing page renderer must not come back.
 
-    ``templates/index.html`` is now the run console, rendered by
-    :mod:`kptn_server.routes` with a ``project`` in its context.
-    ``render_index_page`` rendered the same filename with no project and would
-    raise on every request.
+    The UI's landing page is the run history, rendered by
+    :mod:`kptn_server.routes.runs` with a ``project`` in its context.
+    ``render_index_page`` rendered an ``index.html`` of its own with no
+    project and would raise on every request.
     """
     from kptn_server import service
 

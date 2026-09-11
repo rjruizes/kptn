@@ -8,10 +8,16 @@
     content         - the page body
     scripts         - extra page-local script tags
 
-  The profile selector lives here because every page needs it, but it is
-  deliberately *outside* any form: it carries `form="run-form"`, so the run
-  console can own the form element in its own content block and still drive
-  this control. HTML form-owner association does the wiring, no JS required.
+  The app bar holds the three controls that act on "the selected profile":
+  the selector, Run, and Plan. There is no separate run console page for
+  them to live on -- "/" is the run history -- so they are here, on every
+  page, and a run can be started from wherever you are.
+
+  The selector sits *outside* the run form and carries `form="run-form"`,
+  which is what lets one `<select>` drive a form it is not nested in. HTML
+  form-owner association does the wiring, no JS required. That association
+  is also why there is exactly one selector: a page that swapped in a
+  selector of its own would leave Run posting no profile at all.
 
   Assets are vendored only. There are no CDN references anywhere in this UI:
   it has to work on a laptop with no network.
@@ -35,25 +41,46 @@
     </div>
 
     {#
-      The selector is inside a block of its own so that a page which owns no
-      ``run-form`` can drop it. A ``<select form="run-form">`` on a page with
-      no such form still renders and still takes input -- it just drives
-      nothing, which is worse than not being there. Pages that override this
-      to nothing: the history list and the error shell.
+      One selector, every page, always bound to the run form below. It marks
+      ``selected_profile``, which each route that accepts a ``?profile=``
+      passes after validating it -- so a profile carried here through the nav
+      arrives visible, and is the one Run and Plan will use.
     #}
-    {% block profile_selector %}
-    <div class="app-bar__profile">
-      <label for="profile-select">Profile</label>
-      <select id="profile-select" name="profile" form="run-form">
-        {% block profile_options %}
-        <option value="">(no profile)</option>
-        {% for profile in project.profiles %}
-        <option value="{{ profile }}">{{ profile }}</option>
-        {% endfor %}
-        {% endblock %}
-      </select>
+    <div class="app-bar__controls">
+      <div class="app-bar__profile">
+        <label for="profile-select">Profile</label>
+        <select id="profile-select" name="profile" form="run-form">
+          {% block profile_options %}
+          <option value="" {% if not selected_profile %}selected{% endif %}>(no profile)</option>
+          {% for profile in project.profiles %}
+          <option value="{{ profile }}" {% if profile == selected_profile %}selected{% endif %}>{{ profile }}</option>
+          {% endfor %}
+          {% endblock %}
+        </select>
+      </div>
+
+      {# The form the selector above belongs to. POST, because it starts work. #}
+      <form id="run-form" class="app-bar__run" method="post" action="/runs">
+        <button type="submit" class="button button--primary">Run</button>
+      </form>
+
+      {#
+        Plan reads rather than starts, so it is a plain GET -- and a real
+        ``<form>`` with a real ``<button>``, not a link wearing a class, so
+        it inherits the same rules as every other button here.
+
+        The select cannot drive two forms, so the profile rides in a hidden
+        input. Disabled when there is none, because a disabled control is not
+        submitted and the URL stays a clean ``/plan``; app.js keeps both the
+        value and the disabled flag in step with an unsubmitted selection.
+      #}
+      <form class="app-bar__plan" method="get" action="/plan">
+        <input type="hidden" name="profile" data-profile-input
+               value="{{ selected_profile or '' }}"
+               {% if not selected_profile %}disabled{% endif %}>
+        <button type="submit">Plan</button>
+      </form>
     </div>
-    {% endblock %}
 
     {#
       The profile travels with the reader.
@@ -73,16 +100,15 @@
       app.js rebuilds these hrefs from when the selector changes without a
       submit -- the one case no server render can know.
 
-      All four links carry it, the history's included. The history does not
-      filter by profile, but it does carry one to the page after it, so a
-      bare link here would break the chain at the click -- one step before
-      anything server-side could help.
+      Both links carry it. The history does not filter by profile, but it
+      does carry one to the page after it, so a bare link here would break
+      the chain at the click -- one step before anything server-side could
+      help. Plan is not among them: it is a button in the controls above,
+      and takes the profile in its own hidden input.
     #}
     {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
     <nav class="app-bar__nav" aria-label="Main">
-      <a href="/{{ profile_query }}" data-profile-link="/" {% if nav_active == 'run' %}aria-current="page"{% endif %}>Run</a>
-      <a href="/runs{{ profile_query }}" data-profile-link="/runs" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>Runs</a>
-      <a href="/plan{{ profile_query }}" data-profile-link="/plan" {% if nav_active == 'plan' %}aria-current="page"{% endif %}>Plan</a>
+      <a href="/{{ profile_query }}" data-profile-link="/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>Runs</a>
       <a href="/walkthrough{{ profile_query }}" data-profile-link="/walkthrough" {% if nav_active == 'docs' %}aria-current="page"{% endif %}>How it works</a>
     </nav>
   </header>

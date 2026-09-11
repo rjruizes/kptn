@@ -18,29 +18,6 @@
 
 {% block title %}Runs - {{ project.pipeline_name }} - kptn{% endblock %}
 
-{#
-  No profile selector: this page starts nothing, so the control would render,
-  accept input, and drive no form at all. The nav's Run link is the way to
-  start a run from here.
-#}
-{% block profile_selector %}
-{#
-  Text, not a control. A ``<select>`` here would render, take input, and
-  drive nothing: this page starts no run and filters no list. But the
-  profile does travel through -- the nav hands it to the next page -- so
-  showing it read-only says what is carried without promising more.
-
-  Absent entirely when there is no profile, which keeps the default bar as
-  clean as it was when this block rendered nothing at all.
-#}
-{% if selected_profile %}
-<div class="app-bar__profile">
-  <span class="app-bar__profile-label">Profile</span>
-  <code data-role="carried-profile">{{ selected_profile }}</code>
-</div>
-{% endif %}
-{% endblock %}
-
 {% block content %}
 {% from "_warning_summary.html" import warning_badge %}
 <section class="panel" id="run-history">
