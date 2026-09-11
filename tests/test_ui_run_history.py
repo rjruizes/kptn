@@ -43,7 +43,11 @@ from fastapi.testclient import TestClient
 
 from kptn_server.app import create_app
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS, RunProcessManager
-from kptn_server.routes.runs import FORCE_FINISH_CONFIRMATION, HISTORY_LIMIT
+from kptn_server.routes.runs import (
+    FORCE_FINISH_CONFIRMATION,
+    HISTORY_LIMIT,
+    render_region,
+)
 from kptn_server.run_store import (
     STATUS_FAILED,
     STATUS_INTERRUPTED,
@@ -1287,3 +1291,37 @@ def test_warning_payloads_with_a_status_are_still_counted(
 
     body = client.get(f"/runs/{record.run_id}").text
     assert '<b data-counter="warnings">2</b>' in body
+
+
+# -- the page and the stream render the same regions -----------------------
+
+
+def test_run_page_and_stream_render_one_run_header(
+    client, store: RunStore, completed_run: RunRecord, app
+) -> None:
+    """The header the stream settles must be the header the page renders.
+
+    Two copies of this markup is the failure mode worth guarding: the page
+    would keep a Stop control the stream's fragment had already learned to
+    drop, and nobody would notice until a run went terminal under an open
+    stream -- which is the bug this pair exists to fix. So both render the
+    same partial, and this asserts they agree on the header's whole body.
+    """
+    page = client.get(f"/runs/{completed_run.run_id}").text
+    fragment = render_region(
+        app.state.templates, store, "run_header", store.get_run(completed_run.run_id)
+    )
+
+    assert fragment.strip() in page
+
+
+def test_run_page_and_stream_render_one_run_summary(
+    client, store: RunStore, completed_run: RunRecord, app
+) -> None:
+    """Same contract for the summary panel: one partial, both surfaces."""
+    page = client.get(f"/runs/{completed_run.run_id}").text
+    fragment = render_region(
+        app.state.templates, store, "run_summary", store.get_run(completed_run.run_id)
+    )
+
+    assert fragment.strip() in page

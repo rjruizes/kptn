@@ -1,0 +1,93 @@
+{#
+  A run's header, as a replaceable fragment.
+
+  Rendered in two places: on the run page, and as the ``run_header`` SSE frame
+  that closes a stream. It therefore takes only the run and the three flags
+  below -- never the request -- so it can be rendered straight from Python.
+
+  Everything here comes from the run *row*, which is why it has to be
+  replaceable at all. A run that goes terminal under an open stream leaves the
+  page showing "still running" and offering Stop for a process that is gone;
+  the closing frame swaps this whole section for the one the server would
+  render now.
+
+  Three controls, and the difference between them is the point:
+
+  ``Stop``          asks the worker to wind down. It records intent and
+                    signals; it never writes an outcome, because only the
+                    worker knows whether cleanup finished.
+  ``Run again``     the obvious next action from a finished run. It owns a
+                    ``run-form`` so the base page's profile selector (which
+                    carries ``form="run-form"``) keeps working here.
+  ``Force-finish``  the escape hatch for a worker whose liveness can never be
+                    determined, and which reconciliation therefore cannot
+                    settle. It abandons a possibly-live process, so it is
+                    behind a disclosure *and* a typed confirmation -- never
+                    one click away from Stop.
+#}
+<section class="panel" id="run-header">
+  <h2>Run</h2>
+  {% include "_run_status.html" %}
+  <dl class="project-facts">
+    <dt>Started</dt>
+    <dd>{{ run.started_at or run.created_at }}</dd>
+    <dt>Finished</dt>
+    <dd>{% if run.finished_at %}{{ run.finished_at }}{% else %}<span class="muted">still running</span>{% endif %}</dd>
+    <dt>Log</dt>
+    <dd><code>{{ run.log_path }}</code></dd>
+  </dl>
+
+  <div class="run-actions">
+    <form id="run-form" method="post" action="/runs">
+      <button type="submit" class="button button--primary">Run again</button>
+    </form>
+
+    {% if not is_terminal %}
+    <form class="run-actions__stop" method="post" action="/runs/{{ run.run_id }}/stop">
+      <button type="submit" class="button button--danger">Stop</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {#
+    Offered only for a run that looks wedged -- asked to stop and still
+    going, or no heartbeat for longer than the supervisor's grace window.
+    A visibly healthy run is exactly the case where abandoning its worker
+    does the damage the paragraphs below warn about, so the hatch stays out
+    of sight there. The route itself stays open to any non-terminal run: a
+    run can go from wedged to healthy between this render and the POST, and
+    refusing there would turn that race into the dead end this exists to
+    prevent.
+  #}
+  {% if force_finish_offered %}
+  <details class="run-actions__abandon">
+    <summary>This run is stuck and Stop is not helping</summary>
+    <p class="muted">
+      A worker this machine will not let the supervisor inspect can never be
+      proven gone, so the run stays unfinished and keeps this project's
+      active-run lock -- and no new run can start. Force-finishing records
+      <code>interrupted</code> (the status that already means "this run's real
+      fate is unknown") and releases the lock.
+    </p>
+    <p class="muted">
+      It does <b>not</b> stop the worker. If that process is still alive it
+      keeps running, keeps writing to the log, and may still be touching this
+      project's outputs. Check for it yourself before starting another run.
+    </p>
+    <form method="post" action="/runs/{{ run.run_id }}/force-finish">
+      <label for="force-finish-confirm">
+        Type <code>{{ force_finish_confirmation }}</code> to confirm
+      </label>
+      <input id="force-finish-confirm" name="confirm" type="text" required
+             autocomplete="off" spellcheck="false"
+             aria-describedby="force-finish-confirm-hint">
+      <span id="force-finish-confirm-hint" class="muted">
+        the exact word, so this cannot be a mis-click
+      </span>
+      <button type="submit" class="button button--danger">
+        Force-finish and release the lock
+      </button>
+    </form>
+  </details>
+  {% endif %}
+</section>

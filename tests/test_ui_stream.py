@@ -520,3 +520,119 @@ def test_app_js_listens_for_every_event_kind() -> None:
     assert listed == [kind.value for kind in EventKind], (
         "app.js and kptn.runner.events.EventKind have diverged"
     )
+
+
+# -- the regions the stream settles at terminal ----------------------------
+#
+# The status pill is not the only thing on the run page that comes from the
+# run *row* rather than from the event list. The header's "Finished" fact, its
+# Stop control, the force-finish hatch, and the whole summary panel do too, and
+# a run that goes terminal under an open stream leaves every one of them
+# showing what was true when the page was rendered -- "still running", with a
+# Stop button for a process that is gone -- until somebody reloads. So the
+# closing pass sends those regions as rendered fragments, the same way it
+# sends the status.
+
+
+def _region_frame(text: str, name: str) -> dict:
+    frames = [frame for frame in _frames(text) if f"event: {name}" in frame]
+    assert frames, f"no {name} frame in {text!r}"
+    assert len(frames) == 1, f"{len(frames)} {name} frames; expected exactly one"
+    for line in frames[0].splitlines():
+        if line.startswith("data: "):
+            return json.loads(line[len("data: ") :])
+    raise AssertionError(f"the {name} frame carries no data: {frames[0]!r}")
+
+
+def test_event_stream_settles_the_run_header_on_a_terminal_run(
+    client: TestClient, seeded_events: RunRecord
+) -> None:
+    """The closing header fragment has no Stop control and no "still running".
+
+    Both are correct for the page that opened the stream and wrong the moment
+    the run ends, and neither lives inside the status fragment.
+    """
+    payload = _region_frame(
+        client.get(f"/runs/{seeded_events.run_id}/events").text, "run_header"
+    )
+
+    assert payload["target"] == "run-header"
+    assert "still running" not in payload["html"]
+    assert f'action="/runs/{seeded_events.run_id}/stop"' not in payload["html"]
+    assert "/force-finish" not in payload["html"]
+
+
+def test_event_stream_run_header_carries_the_finished_time(
+    client: TestClient, store: RunStore, seeded_events: RunRecord
+) -> None:
+    """Replacing "still running" with nothing would also pass the test above."""
+    finished_at = store.get_run(seeded_events.run_id).finished_at
+    assert finished_at, "the seeded run has no finish time to render"
+
+    payload = _region_frame(
+        client.get(f"/runs/{seeded_events.run_id}/events").text, "run_header"
+    )
+
+    assert str(finished_at) in payload["html"]
+
+
+def test_event_stream_settles_the_run_summary_on_a_terminal_run(
+    client: TestClient, store: RunStore, seeded_events: RunRecord
+) -> None:
+    """The summary's counts come from the store's aggregate, not the console.
+
+    The seeded run started one task and finished it, so a summary rendered
+    from the store says one task started -- where the page that opened the
+    stream was rendered before any of it had happened and says none.
+    """
+    expected = runs_module.counters(store.event_counts(seeded_events.run_id))
+
+    payload = _region_frame(
+        client.get(f"/runs/{seeded_events.run_id}/events").text, "run_summary"
+    )
+
+    assert payload["target"] == "run-summary"
+    assert f'data-summary="tasks" data-count="{expected["tasks"]}"' in payload["html"]
+    assert (
+        f'data-summary="succeeded" data-count="{expected["succeeded"]}"'
+        in payload["html"]
+    )
+
+
+def test_event_stream_region_frames_carry_no_id(
+    client: TestClient, seeded_events: RunRecord
+) -> None:
+    """Same reason the status frame carries none: these are not stored events.
+
+    An ``id:`` here would set ``Last-Event-ID`` to a number that matches no
+    row, and the next reconnect would resume from it -- skipping or replaying
+    real events.
+    """
+    text = client.get(f"/runs/{seeded_events.run_id}/events").text
+
+    for name in ("run_header", "run_summary"):
+        frames = [frame for frame in _frames(text) if f"event: {name}" in frame]
+        assert frames, f"no {name} frame in {text!r}"
+        for frame in frames:
+            assert not any(line.startswith("id:") for line in frame.splitlines()), (
+                f"the {name} frame carries a resume id: {frame!r}"
+            )
+
+
+def test_app_js_swaps_every_region_the_server_sends() -> None:
+    """The JS region map must match the server's region list exactly.
+
+    ``EventSource`` dispatches by name, so a region the server settles and the
+    browser does not listen for arrives and is dropped in silence -- which is
+    precisely the stale "still running" header this pair of frames exists to
+    fix, back again with no symptom to notice it by.
+    """
+    source = (STATIC_DIR / "app.js").read_text()
+
+    match = re.search(r"var REGION_EVENTS = \{(.*?)\};", source, re.S)
+    assert match, "REGION_EVENTS is no longer a literal object in app.js"
+    listed = dict(re.findall(r'(\w+):\s*"([a-z-]+)"', match.group(1)))
+
+    assert listed == dict(runs_module.REGION_EVENT_TARGETS), (
+        "app.js and runs.REGION_EVENT_TARGETS have diverged"
+    )

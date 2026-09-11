@@ -77,6 +77,7 @@ import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, AsyncIterator, Mapping, Sequence
 
 from fastapi import APIRouter, Request
@@ -134,6 +135,19 @@ _TRUNCATION_NOTE = "\n[... truncated by the console ...]"
 #: anything). Sent with no ``id:`` field, so it never becomes the client's
 #: resume cursor.
 STATUS_EVENT_NAME = "run_status"
+
+#: The run page's replaceable regions, as SSE event name -> element id.
+#:
+#: Both are rendered from the run row and the store rather than from the
+#: event list, so a run that goes terminal under an open stream leaves both
+#: stale -- a "still running" finish time, a Stop button for a process that
+#: is gone, counts from before the run did anything. The closing pass sends
+#: each one as the fragment the server would render now, and ``app.js``
+#: swaps it in by id. Adding a region here without teaching app.js about it
+#: is caught by a test, because the failure has no symptom of its own.
+REGION_EVENT_TARGETS: Mapping[str, str] = MappingProxyType(
+    {"run_header": "run-header", "run_summary": "run-summary"}
+)
 
 #: How many runs ``GET /runs`` renders. The history is unbounded on disk and
 #: deliberately not paginated in the UI: a developer wants the last few runs,
@@ -324,6 +338,52 @@ def _status_frame(templates: Jinja2Templates, record: RunRecord) -> str:
         f"event: {STATUS_EVENT_NAME}\n"
         f"data: {json.dumps(_status_payload(templates, record))}\n\n"
     )
+
+
+def render_region(
+    templates: Jinja2Templates,
+    store: RunStore,
+    name: str,
+    record: RunRecord,
+) -> str:
+    """Render one of the run page's replaceable regions from the store.
+
+    The same partial the page includes, with the same context, so the
+    fragment that closes a stream and the section a reload would render are
+    one definition. The alternative -- fragment markup of its own -- drifts
+    the moment either surface changes, and drifts invisibly: the symptom is a
+    header that is merely out of date, which is the bug these frames exist to
+    fix.
+    """
+    if name == "run_header":
+        context: dict[str, Any] = {
+            "run": record,
+            "is_terminal": record.status in TERMINAL_STATUSES,
+            "force_finish_offered": looks_wedged(record),
+            "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
+        }
+    elif name == "run_summary":
+        context = {
+            "run": record,
+            "counters": counters(store.event_counts(record.run_id)),
+            "warnings": warning_summary(store.warning_groups(record.run_id)),
+        }
+    else:
+        raise ValueError(f"no such run-page region: {name!r}")
+    return templates.get_template(f"_{name}.html").render(**context)
+
+
+def _region_frame(
+    templates: Jinja2Templates, store: RunStore, name: str, record: RunRecord
+) -> str:
+    # No ``id:`` field, for the same reason the status frame carries none:
+    # this is not a stored event, and letting it set ``Last-Event-ID`` would
+    # corrupt the client's resume cursor.
+    payload = {
+        "target": REGION_EVENT_TARGETS[name],
+        "html": render_region(templates, store, name, record),
+    }
+    return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
 
 
 # -- POST /runs ------------------------------------------------------------
@@ -1059,6 +1119,14 @@ async def event_frames(
             # Status, not ``run_finished``: an interrupted run has no finish
             # event at all, and waiting for one would hang this connection
             # for as long as the browser keeps it open.
+            #
+            # The regions go first and the status last, so the frame that
+            # tells the client to stop reconnecting is also the last thing it
+            # has to act on.
+            for name in REGION_EVENT_TARGETS:
+                yield await asyncio.to_thread(
+                    _region_frame, templates, store, name, record
+                )
             yield _status_frame(templates, record)
             return
 

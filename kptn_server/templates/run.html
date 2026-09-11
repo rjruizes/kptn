@@ -1,25 +1,18 @@
 {#
   One run's page.
 
-  It owns a ``run-form`` of its own so the base page's profile selector (which
-  carries ``form="run-form"``) keeps working here: from a finished run, the
-  obvious next action is to run it again.
+  Three sections, and which of them can go stale is the organizing idea.
 
-  Three controls beyond that, and the difference between them is the point:
+  ``_run_header``   the run row's own state -- status, times, Stop,
+                    force-finish.
+  ``_run_summary``  the store's aggregate counts and warning groups.
+  ``_console``      the event list, which ``app.js`` appends to live.
 
-  ``Stop``          asks the worker to wind down. It records intent and
-                    signals; it never writes an outcome, because only the
-                    worker knows whether cleanup finished.
-  ``Download log``  the raw captured output, served from the path stored on
-                    the run row.
-  ``Force-finish``  the escape hatch for a worker whose liveness can never be
-                    determined, and which reconciliation therefore cannot
-                    settle. It abandons a possibly-live process, so it is
-                    behind a disclosure *and* a typed confirmation -- never
-                    one click away from Stop.
-
-  Everything pipeline-authored here (task names, warning messages, categories)
-  is autoescaped, including through the warning-summary macros.
+  The first two are rendered from the run row and the store, so a run that
+  ends under an open stream leaves both showing what was true when the page
+  was rendered. They are partials rather than markup inlined here precisely so
+  the stream's closing frames can re-render them: one definition, two
+  surfaces, and no way for the fragment to drift from the page.
 #}
 {% extends "base.html" %}
 
@@ -33,111 +26,7 @@
 {% endblock %}
 
 {% block content %}
-{% from "_warning_summary.html" import warning_summary %}
-<section class="panel" id="run-header">
-  <h2>Run</h2>
-  {% include "_run_status.html" %}
-  <dl class="project-facts">
-    <dt>Started</dt>
-    <dd>{{ run.started_at or run.created_at }}</dd>
-    <dt>Finished</dt>
-    <dd>{% if run.finished_at %}{{ run.finished_at }}{% else %}<span class="muted">still running</span>{% endif %}</dd>
-    <dt>Log</dt>
-    <dd><code>{{ run.log_path }}</code></dd>
-  </dl>
-
-  <div class="run-actions">
-    <form id="run-form" method="post" action="/runs">
-      <button type="submit" class="button button--primary">Run again</button>
-    </form>
-
-    {% if not is_terminal %}
-    <form class="run-actions__stop" method="post" action="/runs/{{ run.run_id }}/stop">
-      <button type="submit" class="button button--danger">Stop</button>
-    </form>
-    {% endif %}
-  </div>
-
-  {#
-    Offered only for a run that looks wedged -- asked to stop and still
-    going, or no heartbeat for longer than the supervisor's grace window.
-    A visibly healthy run is exactly the case where abandoning its worker
-    does the damage the paragraphs below warn about, so the hatch stays out
-    of sight there. The route itself stays open to any non-terminal run: a
-    run can go from wedged to healthy between this render and the POST, and
-    refusing there would turn that race into the dead end this exists to
-    prevent.
-  #}
-  {% if force_finish_offered %}
-  <details class="run-actions__abandon">
-    <summary>This run is stuck and Stop is not helping</summary>
-    <p class="muted">
-      A worker this machine will not let the supervisor inspect can never be
-      proven gone, so the run stays unfinished and keeps this project's
-      active-run lock -- and no new run can start. Force-finishing records
-      <code>interrupted</code> (the status that already means "this run's real
-      fate is unknown") and releases the lock.
-    </p>
-    <p class="muted">
-      It does <b>not</b> stop the worker. If that process is still alive it
-      keeps running, keeps writing to the log, and may still be touching this
-      project's outputs. Check for it yourself before starting another run.
-    </p>
-    <form method="post" action="/runs/{{ run.run_id }}/force-finish">
-      <label for="force-finish-confirm">
-        Type <code>{{ force_finish_confirmation }}</code> to confirm
-      </label>
-      <input id="force-finish-confirm" name="confirm" type="text" required
-             autocomplete="off" spellcheck="false"
-             aria-describedby="force-finish-confirm-hint">
-      <span id="force-finish-confirm-hint" class="muted">
-        the exact word, so this cannot be a mis-click
-      </span>
-      <button type="submit" class="button button--danger">
-        Force-finish and release the lock
-      </button>
-    </form>
-  </details>
-  {% endif %}
-</section>
-
-<section class="panel" id="run-summary">
-  <h2>Summary</h2>
-  {#
-    Every number below is counted from the run's lifecycle events, read back
-    out of the store. None of it comes from the console text: a task that
-    prints the word "task_started" is output, not a task.
-  #}
-  <ul class="summary-counts">
-    <li class="summary-count" data-summary="tasks" data-count="{{ counters.tasks }}">
-      <b>{{ counters.tasks }}</b> tasks started
-    </li>
-    <li class="summary-count" data-summary="succeeded" data-count="{{ counters.succeeded }}">
-      <b>{{ counters.succeeded }}</b> succeeded
-    </li>
-    <li class="summary-count" data-summary="failed" data-count="{{ counters.failed }}">
-      <b>{{ counters.failed }}</b> failed
-    </li>
-    <li class="summary-count" data-summary="skipped" data-count="{{ counters.skipped }}">
-      <b>{{ counters.skipped }}</b> skipped (cached)
-    </li>
-    <li class="summary-count" data-summary="unfinished" data-count="{{ counters.unfinished }}">
-      <b>{{ counters.unfinished }}</b> never finished
-    </li>
-  </ul>
-
-  {{ warning_summary(warnings) }}
-
-  {#
-    A GET form rather than a styled link, so the control is a real
-    ``<button>``: it inherits the same rules as every other button in this UI
-    with no ``.button`` class to keep in sync, and it stays a plain GET that
-    works with JavaScript off.
-  #}
-  <form class="run-summary__log" method="get" action="/runs/{{ run.run_id }}/log">
-    <button type="submit">Download raw log</button>
-  </form>
-</section>
-
+{% include "_run_header.html" %}
+{% include "_run_summary.html" %}
 {% include "_console.html" %}
 {% endblock %}

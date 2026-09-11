@@ -42,6 +42,15 @@
   ];
   var STATUS_EVENT = "run_status";
 
+  /* Regions of the run page the server re-renders and this file swaps in by
+   * id. Everything in them comes from the run row or the store rather than
+   * from the event list, so a run that ends under an open stream leaves them
+   * showing what was true when the page was rendered -- a "still running"
+   * finish time, a Stop button for a process that is gone. Must stay in step
+   * with kptn_server.routes.runs.REGION_EVENT_TARGETS; a test enforces it,
+   * because a region nobody listens for is dropped in silence. */
+  var REGION_EVENTS = { run_header: "run-header", run_summary: "run-summary" };
+
   function highestSequence(list) {
     var rows = list.querySelectorAll("[data-sequence]");
     var highest = 0;
@@ -145,6 +154,16 @@
       }
     }
 
+    function applyRegion(event) {
+      /* Server-rendered and already escaped, like every other frame: the
+       * region is swapped wholesale, never assembled here. */
+      var frame = JSON.parse(event.data);
+      var current = document.getElementById(frame.target);
+      if (current) {
+        current.replaceWith(fragmentFrom(frame.html));
+      }
+    }
+
     function applyStatus(event) {
       var frame = JSON.parse(event.data);
       var current = document.getElementById("run-status");
@@ -173,6 +192,11 @@
       );
       for (var i = 0; i < EVENT_KINDS.length; i += 1) {
         source.addEventListener(EVENT_KINDS[i], appendEvent);
+      }
+      for (var name in REGION_EVENTS) {
+        if (Object.prototype.hasOwnProperty.call(REGION_EVENTS, name)) {
+          source.addEventListener(name, applyRegion);
+        }
       }
       source.addEventListener(STATUS_EVENT, applyStatus);
       source.addEventListener("error", function () {
