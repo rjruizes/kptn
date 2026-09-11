@@ -120,3 +120,97 @@ def test_load_pipeline_isolates_same_named_modules_across_projects(tmp_path: Pat
 
     assert load_pipeline(first_project).name == "first"
     assert load_pipeline(second_project).name == "second"
+
+
+# -- the project's own virtualenv ------------------------------------------
+#
+# `uv` puts it at `<project>/.venv` by default, so every installed package
+# lives *under* the project root. A purge that asks only "is this file under
+# the root?" therefore evicts the whole dependency tree along with the
+# project's own source -- and some of it does not survive being evicted.
+
+
+def _install_into_project_venv(project_root: Path, module_name: str, source: str) -> Path:
+    """Write *source* as an installed package in the project's in-tree venv."""
+    site_packages = project_root / ".venv" / "lib" / "python3.11" / "site-packages"
+    site_packages.mkdir(parents=True, exist_ok=True)
+    (site_packages / f"{module_name}.py").write_text(source)
+    return site_packages
+
+
+#: A single-file module that registers a submodule in ``sys.modules`` itself,
+#: attributing it to the parent's own file.
+#:
+#: This is the shape of a compiled extension -- ``duckdb``'s ``_duckdb`` is
+#: exactly this, and registers ``_duckdb.functional`` and ``_duckdb.typing``
+#: the same way -- and it is the shape that makes the purge unrecoverable
+#: rather than merely wasteful. The parent has no ``__path__``, so once the
+#: submodule is dropped from ``sys.modules`` no finder can locate it again
+#: and the next import fails with "'_duckdb' is not a package". The
+#: ``__file__`` is what puts it in the purge's sights, exactly as the real
+#: extension's does.
+_EXTENSION_SHAPED_SOURCE = (
+    "import sys, types\n"
+    "_sub = types.ModuleType('vendor_ext.functional')\n"
+    "_sub.__file__ = __file__\n"
+    "sys.modules['vendor_ext.functional'] = _sub\n"
+)
+
+
+def test_load_pipeline_keeps_packages_installed_in_the_projects_venv(
+    tmp_path: Path,
+) -> None:
+    """An installed dependency must survive a load, submodules included.
+
+    The purge exists to re-import the project's *own* source between loads.
+    A dependency in `<project>/.venv` is not that, and evicting one whose
+    submodules only exist because its initializer registered them leaves it
+    permanently unimportable in this process.
+    """
+    _write_pyproject(tmp_path, "demo_pkg.pipeline")
+    _write_module(tmp_path, "demo_pkg.pipeline", _pipeline_source('"demo"'))
+    site_packages = _install_into_project_venv(
+        tmp_path, "vendor_ext", _EXTENSION_SHAPED_SOURCE
+    )
+
+    sys.path.insert(0, str(site_packages))
+    import vendor_ext  # noqa: F401
+
+    installed = sys.modules["vendor_ext"]
+    submodule = sys.modules["vendor_ext.functional"]
+
+    load_pipeline(tmp_path)
+
+    assert sys.modules.get("vendor_ext") is installed, (
+        "the project's venv was purged along with its own source"
+    )
+    assert sys.modules.get("vendor_ext.functional") is submodule, (
+        "an extension's registered submodule was evicted and cannot be re-found"
+    )
+
+
+def test_load_pipeline_still_reloads_project_source_beside_a_venv(
+    tmp_path: Path,
+) -> None:
+    """Sparing the venv must not spare the project's own modules.
+
+    The exclusion above is easy to write too broadly -- skip anything under a
+    directory that looks installed, and a project laid out beside its venv
+    stops reloading at all. This is the same reload contract as
+    ``test_load_pipeline_reloads_changed_project_modules``, asserted with a
+    venv present.
+    """
+    _write_pyproject(tmp_path, "demo_pkg.pipeline")
+    _install_into_project_venv(tmp_path, "vendor_ext", _EXTENSION_SHAPED_SOURCE)
+    _write_module(tmp_path, "demo_pkg.helper", 'PIPELINE_NAME = "first"\n')
+    _write_module(
+        tmp_path,
+        "demo_pkg.pipeline",
+        "from .helper import PIPELINE_NAME\n" + _pipeline_source("PIPELINE_NAME"),
+    )
+
+    assert load_pipeline(tmp_path).name == "first"
+
+    _write_module(tmp_path, "demo_pkg.helper", 'PIPELINE_NAME = "second"\n')
+
+    assert load_pipeline(tmp_path).name == "second"

@@ -13,6 +13,25 @@ from kptn.graph.pipeline import Pipeline
 
 _PROJECT_IMPORT_ROOTS: set[str] = set()
 
+#: Directory names that mark installed packages rather than project source.
+_INSTALLED_DIR_NAMES = frozenset({"site-packages", "dist-packages"})
+
+
+def _is_installed_location(location: Path) -> bool:
+    """Is *location* inside an installed-packages directory?
+
+    A project's virtualenv normally sits *inside* its root -- ``uv`` puts it
+    at ``<project>/.venv`` -- so "under the project root" is not the same
+    question as "part of the project's own source". Every dependency is under
+    there too, and purging one from ``sys.modules`` is at best wasted work
+    and at worst irreversible: a compiled extension registers its submodules
+    itself, at first load, and once those are evicted the parent has no
+    ``__path__`` left for any finder to search. ``duckdb`` is the example
+    that found this -- dropping ``_duckdb.functional`` makes every later
+    ``import duckdb`` fail with "'_duckdb' is not a package".
+    """
+    return any(part in _INSTALLED_DIR_NAMES for part in location.parts)
+
 
 def _iter_module_locations(module: ModuleType) -> Iterable[Path]:
     file_path = getattr(module, "__file__", None)
@@ -37,10 +56,18 @@ def _iter_module_locations(module: ModuleType) -> Iterable[Path]:
 
 
 def _module_belongs_to_project(module: ModuleType, project_roots: set[Path]) -> bool:
+    """Is *module* the project's own source, and so due for re-import?
+
+    Installed packages are excluded even when they live under a project root,
+    which they usually do -- see :func:`_is_installed_location`.
+    """
     for location in _iter_module_locations(module):
         try:
             resolved_location = location.resolve()
         except OSError:
+            continue
+
+        if _is_installed_location(resolved_location):
             continue
 
         if any(resolved_location.is_relative_to(project_root) for project_root in project_roots):
