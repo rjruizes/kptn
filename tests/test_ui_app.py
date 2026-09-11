@@ -525,7 +525,7 @@ def _nav_href(body: str, base: str) -> str:
     return match.group(1)
 
 
-@pytest.mark.parametrize("base", ["/", "/plan", "/walkthrough"])
+@pytest.mark.parametrize("base", ["/", "/runs", "/plan", "/walkthrough"])
 def test_nav_carries_the_selected_profile_between_pages(
     ui_project: Path, base: str
 ) -> None:
@@ -535,7 +535,7 @@ def test_nav_carries_the_selected_profile_between_pages(
     assert _nav_href(body, base) == f"{base}?profile=slow"
 
 
-@pytest.mark.parametrize("base", ["/", "/plan", "/walkthrough"])
+@pytest.mark.parametrize("base", ["/", "/runs", "/plan", "/walkthrough"])
 def test_nav_omits_the_profile_when_none_is_selected(
     ui_project: Path, base: str
 ) -> None:
@@ -549,11 +549,18 @@ def test_nav_omits_the_profile_when_none_is_selected(
     assert _nav_href(body, base) == base
 
 
-def test_nav_does_not_put_a_profile_on_the_run_history(ui_project: Path) -> None:
-    """The history lists every run, of every profile; the parameter is a lie."""
+def test_nav_link_to_the_history_carries_the_profile(ui_project: Path) -> None:
+    """Every nav link carries it, the history's included.
+
+    The history does not *filter* by profile, but it does carry one through
+    to the next page -- so the link that gets you there has to hand it over.
+    Leaving this one bare is what made "Run -> Runs" drop the profile even
+    after the history learned to pass it on: the chain broke at the click,
+    one step before anything server-side could help.
+    """
     body = TestClient(create_app(ui_project)).get("/plan?profile=slow").text
 
-    assert 'data-profile-link="/runs"' not in body
+    assert _nav_href(body, "/runs") == "/runs?profile=slow"
 
 
 def test_index_accepts_a_profile_and_marks_it_selected(ui_project: Path) -> None:
@@ -619,7 +626,54 @@ def test_unknown_profile_error_page_offers_a_way_out(ui_project: Path) -> None:
     """
     body = TestClient(create_app(ui_project)).get("/?profile=nope").text
 
-    for base in ("/", "/plan", "/walkthrough"):
+    for base in ("/", "/runs", "/plan", "/walkthrough"):
         assert _nav_href(body, base) == base, (
             f"the {base!r} link carries the profile that was just refused"
         )
+
+
+# -- the run history keeps the profile without claiming to filter by it ----
+
+
+@pytest.mark.parametrize("base", ["/", "/runs", "/plan", "/walkthrough"])
+def test_run_history_nav_passes_the_profile_on(ui_project: Path, base: str) -> None:
+    """The history used to be where a profile went to die.
+
+    It starts nothing and filters nothing, so it had no profile of its own
+    and its nav carried none -- which broke the chain for every page after
+    it: Run -> Runs -> Plan arrived with no profile at all.
+    """
+    body = TestClient(create_app(ui_project)).get("/runs?profile=slow").text
+
+    assert _nav_href(body, base) == f"{base}?profile=slow"
+
+
+def test_run_history_shows_the_profile_without_offering_a_control(
+    ui_project: Path,
+) -> None:
+    """Read-only text, not a ``<select>``.
+
+    A dropdown here would render, take input, and drive nothing -- this page
+    neither starts a run nor filters its list. Showing the profile as text
+    says "this is what you carried in" and promises nothing else.
+    """
+    body = TestClient(create_app(ui_project)).get("/runs?profile=slow").text
+
+    assert "slow" in body
+    assert 'name="profile"' not in body, "the history is offering a profile control"
+    assert "<select" not in body, "the history is offering a profile control"
+
+
+def test_run_history_shows_no_profile_indicator_without_one(ui_project: Path) -> None:
+    """The default bar stays as clean as it is today."""
+    body = TestClient(create_app(ui_project)).get("/runs").text
+
+    assert 'data-role="carried-profile"' not in body
+
+
+def test_run_history_refuses_an_unknown_profile(ui_project: Path) -> None:
+    """Same answer every other profile-aware page gives."""
+    response = TestClient(create_app(ui_project)).get("/runs?profile=nope")
+
+    assert response.status_code == 400
+    assert "success" in response.text, "the error does not name the real profiles"

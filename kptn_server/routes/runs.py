@@ -91,7 +91,12 @@ from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
-from kptn_server.routes.support import error_response, is_fragment_request
+from kptn_server.routes.support import (
+    error_response,
+    is_fragment_request,
+    requested_profile,
+    unknown_profile,
+)
 from kptn_server.run_store import (
     STATUS_FAILED,
     STATUS_INTERRUPTED,
@@ -859,8 +864,15 @@ def _plural(count: int, noun: str) -> str:
 
 
 @router.get("/runs", response_class=HTMLResponse)
-def run_history(request: Request) -> HTMLResponse:
+def run_history(request: Request, profile: str | None = None) -> HTMLResponse:
     """This project's run history, newest first.
+
+    It accepts ``?profile=`` but does not filter by it. The profile is
+    carried so the *next* page keeps it -- without this the history was
+    where a profile went to die, and Run -> Runs -> Plan arrived with none.
+    The list stays every run of every profile, which is why each row shows
+    its own, and the app bar says so in text rather than offering a control
+    this page could not honour.
 
     Read out of the store on every request, which is what makes the page
     durable rather than remembered: a run recorded by a server that has since
@@ -878,6 +890,8 @@ def run_history(request: Request) -> HTMLResponse:
     line of pipeline output the project has ever produced.
     """
     project = request.app.state.project
+    if profile and profile not in project.profiles:
+        return unknown_profile(request, profile, nav_active="runs")
     store: RunStore = request.app.state.store
     runs = [
         {
@@ -888,7 +902,13 @@ def run_history(request: Request) -> HTMLResponse:
         for record in store.list_runs(project.root, limit=HISTORY_LIMIT)
     ]
     return request.app.state.templates.TemplateResponse(
-        request, "runs.html", {"nav_active": "runs", "runs": runs}
+        request,
+        "runs.html",
+        {
+            "nav_active": "runs",
+            "runs": runs,
+            "selected_profile": requested_profile(profile),
+        },
     )
 
 

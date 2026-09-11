@@ -71,14 +71,17 @@
 
       ``data-profile-link`` holds each link's bare path, and is the contract
       app.js rebuilds these hrefs from when the selector changes without a
-      submit -- the one case no server render can know. Only the three pages
-      that take a ``?profile=`` carry it: the run history lists every run of
-      every profile, so the parameter would be a lie there.
+      submit -- the one case no server render can know.
+
+      All four links carry it, the history's included. The history does not
+      filter by profile, but it does carry one to the page after it, so a
+      bare link here would break the chain at the click -- one step before
+      anything server-side could help.
     #}
     {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
     <nav class="app-bar__nav" aria-label="Main">
       <a href="/{{ profile_query }}" data-profile-link="/" {% if nav_active == 'run' %}aria-current="page"{% endif %}>Run</a>
-      <a href="/runs" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>Runs</a>
+      <a href="/runs{{ profile_query }}" data-profile-link="/runs" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>Runs</a>
       <a href="/plan{{ profile_query }}" data-profile-link="/plan" {% if nav_active == 'plan' %}aria-current="page"{% endif %}>Plan</a>
       <a href="/walkthrough{{ profile_query }}" data-profile-link="/walkthrough" {% if nav_active == 'docs' %}aria-current="page"{% endif %}>How it works</a>
     </nav>

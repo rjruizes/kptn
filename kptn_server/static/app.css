@@ -108,7 +108,11 @@ pre {
   align-items: center;
 }
 
-.app-bar__profile label {
+/* The run history's carried-profile indicator is text, not a control, so it
+ * has a <span> where the other pages have a <label>. Same muted treatment:
+ * the app bar has one way of labelling this field. */
+.app-bar__profile label,
+.app-bar__profile-label {
   color: var(--ink-muted);
 }
 
@@ -437,8 +441,11 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
-.run-summary__log {
-  margin: 14px 0 0;
+/* Sits in the console bar beside the follow toggle, which carries the
+ * ``margin-left: auto`` that pushes the pair to the right. No margin of its
+ * own: the bar's own ``gap`` does the spacing. */
+.console__log {
+  margin: 0;
 }
 
 /* -- warnings ----------------------------------------------------------- */
