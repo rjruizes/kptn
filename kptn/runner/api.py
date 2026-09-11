@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def find_duckdb_factory(pipeline: Pipeline):
+def _find_duckdb_factory(pipeline: Pipeline):
     """Return ``(factory, alias)`` if the pipeline declares ``kptn.config(duckdb=...)``.
 
     *factory* is the callable; *alias* is the kwarg name tasks use (e.g. ``"engine"``).
@@ -74,7 +74,7 @@ def resolve_pipeline(
 
     resolved = _gate(resolved)
 
-    duckdb_factory, _ = find_duckdb_factory(pipeline)
+    duckdb_factory, _ = _find_duckdb_factory(pipeline)
     state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
     return resolved, state_store
 
@@ -156,7 +156,7 @@ def run(
 
     resolved = _gate(resolved)
 
-    duckdb_factory, duckdb_alias = find_duckdb_factory(pipeline)
+    duckdb_factory, duckdb_alias = _find_duckdb_factory(pipeline)
 
     # no_cache without a profile: skip the state store entirely.
     # When a profile IS specified the config system is needed, so the

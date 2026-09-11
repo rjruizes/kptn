@@ -36,11 +36,10 @@ path is usually relative -- so building one per page view would leave a
 database behind, possibly outside the project, just because someone opened
 ``/plan``. The store is therefore opened only when the project's state
 database already exists; otherwise a read-only stand-in answers "nothing is
-cached", which is what an unrun project's plan says anyway. The exception is
-a pipeline that declares ``kptn.config(duckdb=...)``: there the factory *is*
-the state store, exactly as in :func:`kptn.runner.api.resolve_pipeline`, and
-the page has to go through it or it reports every task RUN while ``kptn
-plan`` reads real hashes out of the same project.
+cached", which is what an unrun project's plan says anyway. Reading through
+the pipeline's own ``kptn.config(duckdb=...)`` factory instead -- for exact
+parity with ``kptn plan`` -- was tried and reverted: it left the ``kptn ui``
+process holding the project's DuckDB file lock forever.
 
 **A link is only offered when it resolves.** The lineage and table-preview
 surfaces are retained in :mod:`kptn_server.service` and served by
@@ -59,9 +58,8 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterable, Sequence
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
@@ -71,7 +69,6 @@ from kptn.graph.requires import gate_disjunctive
 from kptn.inspection import InspectionItem, PipelineInspection, inspect_pipeline
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.resolver import ProfileResolver
-from kptn.runner.api import find_duckdb_factory
 from kptn.runner.plan import PlanAction, PlanEntry, build_plan
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
@@ -197,43 +194,26 @@ def state_database_path(project: ProjectContext) -> Path:
     return configured if configured.is_absolute() else project.root / configured
 
 
-@contextmanager
-def _state_store(project: ProjectContext) -> Iterator[StateStoreBackend]:
-    """The store ``kptn plan`` would read, for the length of one request.
+def _open_state_store(project: ProjectContext) -> StateStoreBackend:
+    """The project's state store if it exists, else a read-only stand-in.
 
-    Built the way :func:`kptn.runner.api.resolve_pipeline` builds it, because
-    the two have to answer the same question the same way. When the pipeline
-    declares ``kptn.config(duckdb=...)`` the factory *is* the state store:
-    hashes live in the pipeline's own analytical database, and the configured
-    ``db_path`` may name a file that does not exist at all. A page that
-    ignored the factory would find no file, fall back to "nothing cached",
-    and report every task RUN while ``kptn plan``, one terminal away, read
-    real hashes.
+    The project's own connection factory (``kptn.config(duckdb=...)``) is
+    deliberately *not* invoked: it is the pipeline's live analytical
+    connection, and a page render is not a reason to open -- or create -- it.
+    Reading the state file directly is what this page needs and all it needs.
 
-    Only the pathwise case keeps the stand-in: opening ``/plan`` on a project
-    that has never run must not *create* a state database as a side effect of
-    rendering a page, and "nothing recorded" is what an unrun project's plan
-    says anyway.
-
-    The connection is closed on the way out unless it came from the project's
-    factory, whose connection this module borrows and does not own.
+    Going through the factory was tried, so that the page's actions would
+    match ``kptn plan`` exactly; it was reverted because a factory that caches
+    its connection in a module global -- the idiomatic pattern -- hands this
+    page a connection it never gets back, and the ``kptn ui`` process then
+    holds DuckDB's exclusive file lock for the rest of its life, killing every
+    later run of the project. Do not re-apply it without solving that.
     """
-    factory, _ = find_duckdb_factory(project.pipeline)
-    if factory is not None:
-        yield init_state_store(project.config.settings, duckdb_factory=factory)
-        return
-
     path = state_database_path(project)
     if not path.exists():
-        yield _NeverRunStateStore()
-        return
-
+        return _NeverRunStateStore()
     settings = project.config.settings.model_copy(update={"db_path": str(path)})
-    store = init_state_store(settings)
-    try:
-        yield store
-    finally:
-        _release(store)
+    return init_state_store(settings)
 
 
 def _release(store: StateStoreBackend) -> None:
@@ -285,8 +265,11 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
 
     try:
         resolved = _resolved_graph(project, selected)
-        with _state_store(project) as store:
+        store = _open_state_store(project)
+        try:
             entries = build_plan(resolved, store)
+        finally:
+            _release(store)
     except (KptnError, ValueError, OSError) as exc:
         return error_response(
             request,

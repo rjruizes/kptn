@@ -411,12 +411,9 @@ without opening it.
 
 `/plan` renders the same entries `kptn plan` prints, from the same
 `build_plan` — the page cannot develop its own opinion about what is stale.
-Opening it does not create a state database as a side effect: on a project
-that has never run, a read-only stand-in answers "nothing cached". The one
-exception is a pipeline that declares `kptn.config(duckdb=...)`, where task
-state lives in the pipeline's own DuckDB database and the page reads it
-through that same factory — exactly as `kptn plan` does, which is the point:
-the two must not disagree about what is cached.
+Opening it never writes to the project: on a project that has never run, a
+read-only stand-in answers "nothing cached" instead of creating a state
+database as a side effect of a page view.
 
 `/walkthrough` lists every node of the profile-resolved graph in the runner's
 order, with bypassed tasks shown and marked rather than hidden. Task metadata
