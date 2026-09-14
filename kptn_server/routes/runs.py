@@ -259,10 +259,9 @@ def _summary(event: StoredEvent) -> str:
     if event.kind == EventKind.TASK_SKIPPED.value:
         return "cached"
     if event.kind == EventKind.RUN_FINISHED.value:
-        # Status only. ``kptn.run`` finishes a failed run with the very
-        # exception that propagated out of the task, so the error here is the
-        # same sentence the task's own row printed immediately above -- said
-        # twice, in consecutive rows.
+        # Nothing. The outcome is in the label ("run failed"), and the error
+        # is the very exception that propagated out of the task, so repeating
+        # it here said the same sentence twice in consecutive rows.
         #
         # Suppressing it only when it *does* duplicate would be the precise
         # rule and the wrong one: that needs the neighbouring event, and the
@@ -272,9 +271,10 @@ def _summary(event: StoredEvent) -> str:
         # Nothing becomes unexplained. A failure outside any task has no task
         # row to have shown it, but the worker prints the traceback into the
         # captured log either way, so the reason is always on screen.
-        return str(payload.get("status", ""))
+        return ""
     if event.kind == EventKind.TASK_FINISHED.value:
-        parts = [str(payload[key]) for key in ("status", "error") if payload.get(key)]
+        # No status: the label carries it.
+        parts = [str(payload["error"])] if payload.get("error") else []
         duration = payload.get("duration_seconds")
         if isinstance(duration, (int, float)):
             parts.append(f"{duration:.2f}s")
@@ -282,6 +282,27 @@ def _summary(event: StoredEvent) -> str:
     if event.kind == EventKind.TASK_STARTED.value and payload.get("mode"):
         return str(payload["mode"])
     return ""
+
+
+_FINISHED_KINDS = (EventKind.TASK_FINISHED.value, EventKind.RUN_FINISHED.value)
+
+
+def _label(event: StoredEvent) -> str:
+    """What the row calls itself.
+
+    A finished event names its outcome -- "task failed", "run succeeded" --
+    rather than "task finished" with the status leading the summary beside
+    it. The kind and the outcome are one fact about the row, and splitting
+    them left the reader joining them back up.
+
+    Without a status in the payload there is nothing to fold in, and the
+    label stays the kind: better "task finished" than a bare "task".
+    """
+    kind = event.kind.replace("_", " ")
+    if event.kind not in _FINISHED_KINDS:
+        return kind
+    status = str(event.payload.get("status") or "")
+    return f"{kind.split(' ')[0]} {status}" if status else kind
 
 
 def console_event(event: StoredEvent, log_path: Path) -> dict[str, Any]:
@@ -295,7 +316,7 @@ def console_event(event: StoredEvent, log_path: Path) -> dict[str, Any]:
     return {
         "sequence": event.sequence,
         "kind": event.kind,
-        "label": event.kind.replace("_", " "),
+        "label": _label(event),
         "task": event.task_name,
         # The instant, unambiguous, for the ``datetime`` attribute...
         "timestamp": _isoformat(event.timestamp),

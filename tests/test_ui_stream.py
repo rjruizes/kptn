@@ -808,3 +808,64 @@ def test_the_stylesheet_colours_failure_apart_from_success() -> None:
     assert "var(--danger)" in source
     # The success colour must no longer apply to every finished event.
     assert ".event--task_finished .event__kind" not in source
+
+
+def test_finished_rows_name_the_outcome_in_the_label(
+    app, store: RunStore, client
+) -> None:
+    """A finished row names its outcome: "task failed", not "task finished".
+
+    The kind and the outcome are one fact about the row, and splitting them
+    across a label and the start of a summary made the reader join them back
+    up. The status leaves the summary, which for a run leaves nothing behind
+    -- "run failed" is the whole of it.
+    """
+    record = _start_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="qa_omop_person",
+        payload={
+            "mode": "python",
+            "status": "failed",
+            "error": "QC failed. Check person.",
+            "duration_seconds": 1.72,
+        },
+    )
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="load_ref",
+        payload={"mode": "python", "status": "succeeded", "duration_seconds": 0.5},
+    )
+    store.append_event(record.run_id, "run_finished", payload={"status": "failed"})
+    store.finish_run(record.run_id, STATUS_FAILED, exit_code=1)
+
+    body = client.get(f"/runs/{record.run_id}").text
+    failed, succeeded, run = (_row_for(body, n) for n in (2, 3, 4))
+
+    assert '<span class="event__kind">task failed</span>' in failed
+    assert "QC failed. Check person. 1.72s" in failed
+    # The visible label loses "finished"; the machine-readable hooks keep it,
+    # because the CSS and app.js key on the kind.
+    assert ">failed QC failed" not in failed
+    assert 'data-kind="task_finished"' in failed
+
+    assert '<span class="event__kind">task succeeded</span>' in succeeded
+    assert '<span class="event__summary">0.50s</span>' in succeeded
+
+    assert '<span class="event__kind">run failed</span>' in run
+    assert "event__summary" not in run
+
+
+def test_a_finished_event_without_a_status_keeps_its_kind(
+    app, store: RunStore, client
+) -> None:
+    """No status in the payload must not render a bare "task"."""
+    record = _start_run(store, app.state.project.root)
+    store.append_event(record.run_id, "task_finished", task_name="alpha", payload={})
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    row = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
+
+    assert '<span class="event__kind">task finished</span>' in row
