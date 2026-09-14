@@ -21,51 +21,43 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 
 ## Languages
 - Python 3.11+ — Core CLI tool (`kptn/`), backend server (`kptn_server/`), AWS Lambda handlers, pipeline execution engine
-- TypeScript ~5.6 — React UI (`ui/`), VS Code extension (`kptn-vscode/`)
+- TypeScript ^5.9 — VS Code extension (`kptn-vscode/`). The only TypeScript in the repo; the web UI is server-rendered HTML with vendored htmx/Alpine and has no build step
 - R — Pipeline task execution via `Rscript` subprocess calls (supported through `RTaskNode` and `kptn/util/rscript.py`)
 - SQL — Pipeline tasks parsed for lineage analysis (`kptn/lineage/sql_lineage.py`)
 ## Runtime
 - Python ≥ 3.11 (required by `pyproject.toml`)
-- Node.js (for UI and VS Code extension builds; exact version not pinned)
+- Node.js (for the VS Code extension build only; exact version not pinned)
 - Python: `uv` — lockfile `uv.lock` present and committed
-- JavaScript: `npm` — `package-lock.json` present at root and `ui/package-lock.json`
+- JavaScript: `npm` — one lockfile, `kptn-vscode/package-lock.json` (there is no root Node project)
 ## Frameworks
 - `typer` ≥ 0.12.5 — CLI interface (`kptn/cli/commands.py`, `kptn/cli/__init__.py`)
 - `pydantic` — Config schema validation (`kptn/profiles/schema.py`, throughout)
 - `pyyaml` — YAML config parsing (`kptn.yaml` files)
-- `fastapi` 0.120.3 — HTTP server for web app and headless testing (`kptn_server/api_http.py`), installed via `kptn[web]` extra
+- `fastapi` 0.120.3 — the pipeline UI's one application (`kptn_server/app.py`), installed via `kptn[web]` extra
 - `uvicorn` 0.38.0 — ASGI server for FastAPI, installed via `kptn[web]` extra
 - `watchfiles` 1.1.1 — File watching for dev mode (`kptn/filewatcher/`), installed via `kptn[web]` extra
-- `jinja2` 3.1.6 — HTML template rendering for lineage pages (`kptn_server/service.py`, `kptn/lineage/html_renderer.py`)
+- `jinja2` 3.1.6 — server-side HTML rendering for every UI page (`kptn_server/templates/`, `kptn_server/service.py`, `kptn/lineage/html_renderer.py`)
 - `boto3` — AWS SDK for DynamoDB, ECR, S3; installed via `kptn[aws]` extra
 - `prefect` 3.4.25 — Workflow orchestration engine; installed via `kptn[prefect]` extra
 - `duckdb` 1.4.1 — Embedded analytics database for state store and table previews; installed via `kptn[duckdb]` extra
 - `requests` — HTTP client for authproxy and ECR interactions (`kptn/deploy/push.py`, `kptn/deploy/ecr_image.py`)
-- React 18.3.1 — Component framework
-- `@tanstack/react-router` 1.76.1 — Client-side routing
-- `zustand` 5.0.0 — State management
-- `zod` 3.23.8 — Runtime schema validation
-- `ag-grid-react` 32.3.0 — Data grid for table previews
-- Radix UI primitives (`@radix-ui/react-*`) — Accessible headless UI components
-- `tailwindcss` 3.4.14 — Utility CSS framework
-- `lucide-react` / Font Awesome — Icons
-- `react-use-websocket` 4.10.1 — WebSocket client
-- `mande` 2.0.9 — HTTP client wrapper
-- `vite` 5.4.9 — Frontend build tool and dev server (`ui/vite.config.ts`)
-- `@vitejs/plugin-react` 4.3.3 — React fast refresh
-- `typescript` ~5.6.2 (UI) / ^5.9.3 (root) — Static typing
+- `markdown-it-py` — read-only Markdown rendering for the walkthrough's docs panel (`kptn_server/markdown.py`), installed via `kptn[web]` extra
+- `psutil` — inspecting and reconciling detached run workers (`kptn_server/processes.py`), installed via `kptn[web]` extra
+- `sqlglot` — SQL parsing behind lineage and table preview (`kptn/lineage/sql_lineage.py`), installed via `kptn[web]` extra
+- htmx and Alpine.js — vendored in `kptn_server/static/`, never loaded from a CDN. There is no frontend build step and no client framework: every page is server-rendered HTML
+- `typescript` ^5.9.3 — Static typing for the VS Code extension (`kptn-vscode/tsconfig.json`)
 - `ruff` 0.14.6 — Python linter and formatter (`[dependency-groups] dev`)
 - `ty` — Python type checker (Astral's type checker; dev dependency)
 - `pytest` 8.4.2 — Python test runner (`[dependency-groups] dev`)
-- `cypress` 15.7.0 — End-to-end browser testing (root `package.json`)
-- `eslint` 9.13.0 — JavaScript/TypeScript linter (`ui/eslint.config.js`)
+- `eslint` 9.13.0 — TypeScript linter for the VS Code extension (`kptn-vscode/eslint.config.mjs`)
+- `mocha` — Test runner for the VS Code extension (`npm test` in `kptn-vscode/`)
 ## Key Dependencies
 - `kptn/graph/` — Core pipeline graph model; `Graph`, `Pipeline`, `TaskNode`, `RTaskNode`, `SqlTaskNode` etc. define the execution DAG
 - `kptn/state_store/` — Pluggable state backend; SQLite (default) or DuckDB (`kptn/state_store/factory.py`)
 - `kptn/caching/` — Legacy task state cache; DynamoDB, SQLite, and DuckDB clients for cloud/local execution
 - `kptn/runner/executor.py` — Local pipeline execution engine; dispatches Python tasks, R scripts, map tasks
-- `kptn_server/api_http.py` — FastAPI web server; lineage visualization, table preview, healthcheck
-- `kptn_server/api_jsonrpc.py` — JSON-RPC 2.0 server over stdin/stdout; consumed by VS Code extension
+- `kptn_server/app.py` — the pipeline UI's FastAPI factory; one app per served project, plus the run-reconciliation loop
+- `kptn_server/routes/` — every UI page: `runs.py` (console, history, SSE, log, stop), `inspect.py` (plan, walkthrough), `lineage.py` (lineage, table preview)
 - `hatchling` — Python wheel build backend (`[build-system]` in `pyproject.toml`)
 - `amazon/dynamodb-local:latest` — Local DynamoDB emulator via Docker (`docker-compose-ddb.yml`)
 ## Configuration
@@ -79,12 +71,12 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Alternative: DuckDB (set `db: duckdb` in `kptn.yaml settings`)
 - Cloud: DynamoDB (table name via `DYNAMODB_TABLE_NAME` env var)
 - Python wheel: `hatchling` (packages `kptn/` and `kptn_server/`)
-- UI: `vite build` outputs to `dist/` (Dockerfile in `ui/Dockerfile`)
+- UI assets: no build. `kptn_server/templates`, `static`, and `migrations` are force-included into the wheel (`[tool.hatch.build.targets.wheel.force-include]`)
 - VS Code extension: TypeScript compiled to `kptn-vscode/out/`
 ## Platform Requirements
 - Python ≥ 3.11
 - `uv` for Python dependency management
-- Node.js + npm for UI and VS Code extension
+- Node.js + npm for the VS Code extension only
 - Docker (for local DynamoDB via `docker-compose-ddb.yml`)
 - R (optional, only required if running R pipeline tasks via `Rscript`)
 - AWS (optional): DynamoDB for task state caching, ECR for Docker images, ECS/Batch via Step Functions
@@ -113,10 +105,8 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Tool: `ruff` (configured in `pyproject.toml`)
 - No explicit line-length config detected; ruff defaults apply
 - Trailing commas present in multi-line structures
-- Tool: `eslint` with `typescript-eslint` + `eslint-plugin-react-hooks` + `eslint-plugin-react-refresh`
-- Config: `ui/eslint.config.js`
-- Rule: `react-refresh/only-export-components` at `warn` level
-- React hooks rules enforced (`eslint-plugin-react-hooks`)
+- Tool: `eslint` with `typescript-eslint` (VS Code extension only)
+- Config: `kptn-vscode/eslint.config.mjs`
 - All Python public functions have return type annotations (e.g., `-> None`, `-> str | None`, `-> list[AnyNode]`)
 - `from __future__ import annotations` present in ~38% of Python files — used in files with complex forward references (especially `kptn/runner/`, `kptn/graph/`, test files)
 - Union syntax: modern `X | Y` style (Python 3.10+) in new code
@@ -124,15 +114,12 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - `@dataclass` is the preferred way to define data-holding classes — e.g., `TaskNode`, `TaskSpec`, `Graph`, `RTaskSpec`
 - `field(default_factory=list)` used for mutable defaults
 ## Import Organization
-- `@` → `./src` (configured in `ui/vite.config.ts` and `ui/tsconfig.json`)
-- Use `@/hooks/`, `@/components/`, `@/lib/` for non-relative imports
+- Python only: absolute imports from `kptn` / `kptn_server`; the extension's TypeScript uses relative paths
 ## Error Handling
 - Wrap external calls in specific exception handlers, re-raise as domain exceptions:
 - `HashError` and `TaskError` propagated deliberately; other `Exception` types are wrapped
 - Errors include context (task name, file path, return code) in the message string
 - Optional deps (boto3, duckdb, prefect) use try/except at import time with `= None` fallback:
-- React components return `null` early when data is not ready: `if (!state) return null`
-- Cypress tests suppress known framework errors via `Cypress.on("uncaught:exception", ...)`
 ## Logging
 - Module-level `logger = logging.getLogger(__name__)` in core execution modules (`executor.py`, etc.)
 - `get_logger()` used in higher-level code — checks for Prefect env vars and returns appropriate logger
@@ -220,30 +207,30 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Contains: SQL lineage analyzer (`sql_lineage.py`), HTML renderer (`html_renderer.py`)
 - Depends on: `kptn/read_config.py`
 - Used by: `kptn_server/service.py`, `kptn/cli/_v01.py`
-- Purpose: Expose kptn functionality over HTTP (web app) and JSON-RPC (VS Code extension)
+- Purpose: Serve the pipeline UI for one local project over HTTP — start runs, stream consoles, read the plan and the walkthrough
 - Location: `kptn_server/`
-- Contains: FastAPI HTTP routes (`api_http.py`), JSON-RPC over stdin/stdout (`api_jsonrpc.py`), shared service logic (`service.py`), Jinja2 templates (`templates/`), static assets (`static/`)
-- Depends on: `kptn/` package, `fastapi`, `uvicorn` (optional `kptn[web]` extra)
-- Used by: VS Code extension (spawns `api_jsonrpc.py` as subprocess); web browser (via `api_http.py`)
-- Purpose: FastAPI WebSocket server powering the React UI during local development
+- Contains: app factory (`app.py`), project discovery (`project.py`), SQLite run store (`run_store.py` + `migrations/`), detached worker lifecycle (`processes.py`, `worker.py`, `capture.py`), routers (`routes/`), retained lineage and table-preview helpers (`service.py`), Jinja2 templates (`templates/`), vendored assets (`static/`)
+- Depends on: `kptn/` package, `fastapi`, `uvicorn`, `jinja2`, `psutil`, `markdown-it-py`, `sqlglot` (the `kptn[web]` extra)
+- Used by: a browser, and the VS Code extension's webview — both against the same server started by `kptn ui`. There is no second frontend and no JSON-RPC protocol
+- Purpose: Legacy FastAPI WebSocket server, built for the removed React UI
 - Location: `kptn/watcher/`
 - Contains: FastAPI app with WebSocket support (`app.py`), local task enrichment (`local.py`), stack management (`stacks.py`), utilities (`util.py`), file watcher (`filewatcher/`)
 - Depends on: `kptn/caching/` (legacy), `fastapi`, `watchfiles`
-- Used by: React UI (`ui/`) via HTTP + WebSocket on `localhost:8000`
+- Used by: only `kptn/cli/_v01.py`'s `backend` command (`from kptn.watcher.app import start`), which is unreachable while `kptn/cli/__init__.py` pins `_CLI_VERSION = "v2"`. Treat as dormant v0.1 code; `kptn ui` does not use it
 - Purpose: Browser-based dashboard for monitoring and triggering pipelines
-- Location: `ui/`
-- Contains: TanStack Router routes (`src/routes/`), Zustand state store (`src/hooks/use-state.tsx`), AG Grid tables (`src/components/Table.tsx`), shadcn/ui components (`src/components/ui/`), sidebar navigation (`src/components/app-sidebar.tsx`)
-- Depends on: `kptn/watcher/` backend via HTTP (`mande` HTTP client, `react-use-websocket`)
-- Used by: Browser
-- Purpose: Inline lineage view and pipeline tree within VS Code
+- Location: `kptn_server/templates/` and `kptn_server/static/`, served by `kptn ui`
+- Contains: server-rendered pages — run console, run history, plan, walkthrough, lineage, table preview — with htmx for fragment swaps and SSE for the live console
+- Depends on: `kptn_server/` only; vendored assets, no build step, no CDN
+- Used by: Browser, and the VS Code webview
+- Purpose: Open the pipeline UI inside VS Code — a thin launcher, not a second client
 - Location: `kptn-vscode/`
-- Contains: Extension entry (`src/extension.ts`), spawns `kptn_server/api_jsonrpc.py` as a child process
-- Communicates via: JSON-RPC 2.0 over stdin/stdout
+- Contains: extension entry (`src/extension.ts`), server lifecycle (`src/server.ts`). Contributes one command, `kptn.openUI` ("kptn: Open Pipeline UI")
+- Communicates via: spawning `kptn ui --no-open`, polling `/healthz`, then showing the served URL in a webview
 - Depends on: Python runtime with `kptn[web]` installed
 ## Data Flow
-- Zustand store (`ui/src/hooks/use-state.tsx`) holds global app state: branch, storage_key, tasks, stacks
-- TanStack Router loaders call `fetchState()` on route load and search param changes
-- Task state updates flow through `updateTask()` action (partial record updates)
+- UI state lives on the server, inside the project: `.kptn/ui.db` (run rows and console events) and `.kptn/runs/<run_id>.log` (raw captured output). Nothing else is written
+- A run is a detached child process, so it outlives the browser tab, VS Code, and a restart of the server itself. `RunProcessManager.reconcile()` marks a run whose worker is provably gone as `interrupted`, releasing the project lock
+- The run console is server-sent events over `GET /runs/{run_id}/events?after=<sequence>`, so reconnecting resumes without gaps or duplicates
 ## Key Abstractions
 - Purpose: Immutable DAG of task nodes; `Pipeline` adds a named `PipelineNode` sentinel head
 - Examples: `kptn/graph/graph.py`, `kptn/graph/pipeline.py`
@@ -269,23 +256,22 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Responsibilities: Load pipeline from `pyproject.toml`, resolve profiles, delegate to `runner/api.py`
 - Location: `kptn/watcher/app.py`
 - Triggers: Started manually or via CLI; listens on `localhost:8000`
-- Responsibilities: Serve `GET /api/state`, `WebSocket /ws`, run tasks on demand for the React UI
-- Location: `kptn_server/api_http.py`
-- Triggers: `uvicorn kptn_server.api_http:app`
-- Responsibilities: `/lineage`, `/table-preview`, `/healthz` endpoints; serves HTML fragments and JSON
-- Location: `kptn_server/api_jsonrpc.py` (via `kptn-vscode/backend.py` shim)
-- Triggers: Spawned as subprocess by VS Code extension
-- Responsibilities: Handle `generateLineageHtml`, `getTablePreview` RPC methods over stdin/stdout
-- Location: `ui/src/main.tsx`
-- Triggers: Browser; built with `vite build`, dev served with `vite --host`
-- Responsibilities: Dashboard rendering, task triggering, lineage display
+- Responsibilities: Serve `GET /api/state`, `WebSocket /ws`, run tasks on demand. Superseded by `kptn ui`; reachable only by switching `_CLI_VERSION` back to `"v1"`
+- Location: `kptn_server/app.py` (`create_app`), launched by `kptn/cli/commands.py` `ui()`
+- Triggers: `kptn ui [--host HOST] [--port PORT] [--open/--no-open]` — the only supported way to serve the UI
+- Responsibilities: Serve one project's pages, start and supervise detached run workers, reconcile interrupted runs. Binds `127.0.0.1` by default; no authentication and no remote execution
+- Location: `kptn_server/worker.py`
+- Triggers: Spawned by `RunProcessManager.start()` in its own session; never inline in a request handler
+- Responsibilities: Run the pipeline, capture stdout/stderr/warnings/logging into `.kptn/ui.db` and the run log, record the terminal status
 ## Error Handling
 - `GraphError` — raised by `topo_sort()` on cycles or edge/node mismatches (`kptn/graph/topo.py`)
 - `ProfileError` — raised by `ProfileLoader` / `ProfileResolver` on bad YAML or unknown profile names (`kptn/profiles/`)
 - `TaskError` — raised by `executor.py` when a dispatched task raises an exception; wraps original exception message
 - `StateStoreError` — raised by state store backends on DB failures (`kptn/state_store/`)
 - `HashError` — raised by `change_detector/hasher.py` when output files/tables cannot be hashed; treated as "stale" by executor
-- HTTP layer: `HTTPException` (FastAPI) used in `kptn_server/api_http.py`; JSON-RPC error envelope used in `kptn_server/api_jsonrpc.py`
+- HTTP layer: page errors render through `kptn_server/routes/support.py` `error_response()` — a whole document, or a fragment for an `HX-Request`. `HTTPException` is used only by the two JSON routes in `kptn_server/routes/lineage.py`
+- `ProjectError` — raised by `kptn_server/project.py` when a directory is not a servable kptn project; `kptn ui` reports it and exits rather than serving a UI that 500s on every page
+- `ActiveRunError` — raised by `kptn_server/run_store.py` when a project already has an active run; surfaces as a 409 naming the run holding the lock
 ## Cross-Cutting Concerns
 <!-- GSD:architecture-end -->
 

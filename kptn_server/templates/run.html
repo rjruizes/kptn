@@ -1,0 +1,27 @@
+{#
+  One run's page.
+
+  One panel, in two parts, and which of them can go stale is the organizing
+  idea.
+
+  ``_run_header``   the run row's own state -- status, Stop, force-finish.
+  ``_console``      the event list, which ``app.js`` appends to live.
+
+  The header is rendered from the run row, so a run that ends under an open
+  stream leaves it showing what was true when the page was rendered. It is a
+  partial rather than markup inlined here precisely so the stream's closing
+  frame can re-render it: one definition, two surfaces, and no way for the
+  fragment to drift from the page. Each keeps its own id inside the panel,
+  which is what lets the stream replace one of them and leave the other.
+#}
+{% extends "base.html" %}
+
+{% block title %}{{ run.status }} - {{ project.pipeline_name }} - kptn{% endblock %}
+
+
+{% block content %}
+<section class="panel run-panel">
+  {% include "_run_header.html" %}
+  {% include "_console.html" %}
+</section>
+{% endblock %}

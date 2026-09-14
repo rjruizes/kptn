@@ -1,0 +1,24 @@
+{#
+  One console event, as one list item.
+
+  Macros only, so this template can be rendered from Python for a single SSE
+  frame (via ``get_template(...).module.event_row``) as well as included in a
+  loop by the console. Both paths therefore produce byte-identical markup: what
+  the stream appends is exactly what a page reload would have rendered.
+
+  Every value here goes through Jinja's autoescaping. ``event.text`` is
+  pipeline output -- untrusted bytes read out of the run's log file -- and this
+  is the only place it is turned into markup. Do not add ``| safe`` to it.
+#}
+{% macro event_row(event) -%}
+<li class="event event--{{ event.kind }}{% if event.severity %} event--{{ event.severity }}{% endif %}{% if event.status %} event--{{ event.status }}{% endif %}"
+    id="event-{{ event.sequence }}"
+    data-sequence="{{ event.sequence }}"
+    data-kind="{{ event.kind }}">
+  <span class="event__seq">{{ event.sequence }}</span>
+  <time class="event__clock" datetime="{{ event.timestamp }}">{{ event.clock }}</time>
+  <span class="event__kind">{{ event.label }}</span>
+  {% if event.task %}<span class="event__task">{{ event.task }}</span>{% endif %}
+  {% if event.text %}{% if event.is_log %}<pre class="event__text">{{ event.text }}</pre>{% else %}<span class="event__summary">{{ event.text }}</span>{% endif %}{% endif %}
+</li>
+{%- endmacro %}

@@ -1,0 +1,69 @@
+{#
+  Run history for this project.
+
+  Read straight out of ``.kptn/ui.db`` on every request, which is what makes
+  this page durable rather than remembered: a run recorded by a server that
+  has since restarted -- or by a detached worker while no server was up at
+  all -- is still here.
+
+  Newest first, in the order the store hands them over. This template must not
+  re-sort: the ordering is a property of the query
+  (``created_at DESC, run_id DESC``), and a second opinion here would be a
+  second place for it to be wrong.
+
+  Each row carries ``data-run-id`` so the order is assertable, and links to
+  both the run's console and its raw log.
+#}
+{% extends "base.html" %}
+
+{% block title %}Runs - {{ project.pipeline_name }} - kptn{% endblock %}
+
+{% block content %}
+{% from "_warning_summary.html" import warning_badge %}
+<section class="panel" id="run-history">
+  <header class="console__bar">
+    <h2>Run history</h2>
+    {% if runs %}<span class="muted">{{ runs | length }} shown, newest first</span>{% endif %}
+  </header>
+
+  {% if runs %}
+  <ol class="run-history">
+    {% for entry in runs %}
+    <li class="run-history__item"
+        data-run-id="{{ entry.run.run_id }}"
+        data-status="{{ entry.run.status }}">
+      <span class="status status--{{ entry.run.status }}">{{ entry.run.status }}</span>
+      <a class="run-history__link" href="/runs/{{ entry.run.run_id }}"><code>{{ entry.run.run_id }}</code></a>
+      <time class="run-history__when" datetime="{{ entry.run.created_at }}">{{ entry.run.created_at }}</time>
+
+      {% if entry.run.profile %}
+      <span class="run-history__profile">profile <code>{{ entry.run.profile }}</code></span>
+      {% else %}
+      <span class="run-history__profile muted">no profile</span>
+      {% endif %}
+
+      <span class="run-history__counts">
+        <span class="run-history__count">ran <b>{{ entry.counters.tasks }}</b></span>
+        <span class="run-history__count">skipped <b>{{ entry.counters.skipped }}</b></span>
+        <span class="run-history__count">failed <b>{{ entry.counters.failed }}</b></span>
+      </span>
+
+      {% if entry.run.current_task %}
+      <span class="run-history__task">last task <code>{{ entry.run.current_task }}</code></span>
+      {% endif %}
+
+      {% if entry.run.exit_code is not none %}
+      <span class="run-history__exit">exit <code>{{ entry.run.exit_code }}</code></span>
+      {% endif %}
+
+      {{ warning_badge(entry.warnings) }}
+
+      <a class="run-history__log" href="/runs/{{ entry.run.run_id }}/log">log</a>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="muted">No runs recorded yet. Press Run to start one.</p>
+  {% endif %}
+</section>
+{% endblock %}

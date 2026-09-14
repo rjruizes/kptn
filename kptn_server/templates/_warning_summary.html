@@ -1,0 +1,31 @@
+{#
+  A run's warnings, as the history list's per-run badge.
+
+  A macro rather than markup in ``runs.html`` so that one place decides how a
+  warning is worded. The run page's own grouped summary is gone: warnings are
+  console rows there, next to the output that produced them.
+
+  ``summary`` is the dict built by ``runs.warning_summary()``. It is already
+  shaped for display (headline, sample message), because a template is the
+  wrong place to pluralize.
+
+  Every value below is pipeline-authored text -- a warning message, a task
+  name, a warning category -- and reaches the page through Jinja's
+  autoescaping. Do not add ``| safe`` to any of it.
+#}
+
+{% macro warning_badge(summary) -%}
+{#
+  The compact form for a history row: the headline, plus one sample so the
+  reader can tell whether it is worth opening the run.
+#}
+{% if summary.total %}
+<span class="warnings warnings--badge" data-warning-total="{{ summary.total }}"
+      data-warning-tasks="{{ summary.task_count }}">
+  <b class="warnings__headline">{{ summary.headline }}</b>
+  {% if summary.groups %}<span class="warnings__sample">{{ summary.groups[0].sample_message }}</span>{% endif %}
+</span>
+{% else %}
+<span class="warnings warnings--badge muted" data-warning-total="0">no warnings</span>
+{% endif %}
+{%- endmacro %}

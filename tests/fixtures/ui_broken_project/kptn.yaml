@@ -1,0 +1,9 @@
+settings:
+  db: sqlite
+  db_path: .kptn/kptn.db
+
+profiles:
+  success:
+    args:
+      only_task:
+        mode: success

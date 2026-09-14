@@ -6,10 +6,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import kptn
+from typer.testing import CliRunner
+
+from kptn.cli.commands import app
+from kptn.exceptions import ProjectConfigError
 from kptn.graph.graph import Graph
 from kptn.graph.pipeline import Pipeline
-from kptn.runner.api import run
-from kptn.cli.commands import _load_pipeline_from_pyproject
+from kptn.project import load_pipeline
 
 
 def _make_pipeline(name: str = "default") -> Pipeline:
@@ -66,7 +69,7 @@ def test_run_v2_does_not_accept_old_kwargs(bad_kwarg: str) -> None:
 
 
 def test_load_pipeline_inserts_project_root_into_sys_path(tmp_path: Path) -> None:
-    """_load_pipeline_from_pyproject inserts project_root into sys.path before importing."""
+    """load_pipeline inserts project_root into sys.path before importing."""
     # Create a minimal pyproject.toml
     (tmp_path / "pyproject.toml").write_text('[tool.kptn]\npipeline = "my_pipeline"\n')
 
@@ -83,10 +86,44 @@ def test_load_pipeline_inserts_project_root_into_sys_path(tmp_path: Path) -> Non
         sys.path.remove(str(tmp_path))
 
     try:
-        result = _load_pipeline_from_pyproject(tmp_path)
+        result = load_pipeline(tmp_path)
         assert isinstance(result, Pipeline)
         assert str(tmp_path) in sys.path
     finally:
         # Restore sys.path
         sys.path[:] = original_path
 
+
+def test_load_pipeline_missing_setting_raises_project_config_error(tmp_path: Path) -> None:
+    """Missing [tool.kptn] pipeline is reported as a project configuration error."""
+    (tmp_path / "pyproject.toml").write_text("[tool.other]\nname = 'demo'\n")
+
+    with pytest.raises(ProjectConfigError, match="Missing \\[tool.kptn\\] pipeline"):
+        load_pipeline(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("project_files", "expected_message"),
+    [
+        ({}, "Missing pyproject.toml"),
+        ({"pyproject.toml": '[tool.kptn]\npipeline = "broken"\ninvalid = [\n'}, "Invalid pyproject.toml"),
+    ],
+)
+def test_run_command_translates_project_config_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    project_files: dict[str, str],
+    expected_message: str,
+) -> None:
+    """run command renders loader failures through Typer's BadParameter path."""
+    for relative_path, contents in project_files.items():
+        target_path = tmp_path / relative_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(contents)
+
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(app, ["run"])
+
+    assert result.exit_code == 2
+    assert expected_message in result.stderr

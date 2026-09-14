@@ -1,0 +1,21 @@
+settings:
+  db: sqlite
+  db_path: .kptn/kptn.db
+
+profiles:
+  success:
+    args:
+      noisy_task:
+        mode: success
+  slow:
+    args:
+      noisy_task:
+        mode: slow
+  failure:
+    args:
+      noisy_task:
+        mode: failure
+  db_error:
+    args:
+      noisy_task:
+        mode: db_error

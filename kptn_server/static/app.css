@@ -1,0 +1,713 @@
+/*
+ * Styles for the shared pipeline UI.
+ *
+ * Vendored and self-contained: no @import, no web fonts, no CDN. The UI has
+ * to render correctly on a laptop with no network.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --ink: #16202b;
+  --ink-muted: #5c6b7a;
+  --surface: #ffffff;
+  --surface-sunken: #f4f6f8;
+  --line: #d6dde4;
+  --accent: #1f6feb;
+  --accent-ink: #ffffff;
+  --danger: #b42318;
+  --warning: #9a5b00;
+  --ok: #1a7f37;
+  --radius: 6px;
+  /* One measure for the whole app: the app bar's contents and the page
+   * content line up on the same left and right edges. */
+  --content-width: 1000px;
+  --content-gutter: 20px;
+  --control-height: 32px;
+  --control-gap: 8px;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6edf3;
+    --ink-muted: #9aa7b2;
+    --surface: #161b22;
+    --surface-sunken: #0d1117;
+    --line: #30363d;
+    --accent: #4493f8;
+    --accent-ink: #0d1117;
+    --danger: #ff7b72;
+    --warning: #d29922;
+    --ok: #3fb950;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+/* -- app bar ------------------------------------------------------------ */
+
+/* The bar itself is full-bleed -- its surface and rule run the width of the
+ * window -- while ``__inner`` holds the contents to the same measure as
+ * ``.app-main``, so the nav's right edge and the Profile label's left edge
+ * sit over the content below them rather than out in the margins. */
+.app-bar {
+  padding: 12px var(--content-gutter);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.app-bar__inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+  max-width: calc(var(--content-width) - 2 * var(--content-gutter));
+  margin: 0 auto;
+}
+
+.app-bar__profile {
+  display: flex;
+  gap: var(--control-gap);
+  align-items: center;
+}
+
+.app-bar__profile label {
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+/* Profile, Run, Plan: one group, so they read as three steps on the same
+ * subject rather than three unrelated controls. The forms are layout-neutral
+ * wrappers -- each exists only to give its button a method and an action. */
+.app-bar__controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--control-gap);
+}
+
+.app-bar__run,
+.app-bar__plan {
+  margin: 0;
+}
+
+/* A <select> and a <button> with identical padding still come out different
+ * heights -- the select is sized by the platform's own control metrics, the
+ * button by its content box -- which left the buttons overhanging the select
+ * by 2px. An explicit height on all three is the only thing that makes them
+ * one crisp row, so it is set here rather than on the global control rules:
+ * the buttons elsewhere in the UI (Stop, Force-finish, Download raw log) are
+ * sized by their content and should stay that way.
+ *
+ * ``flex-shrink: 0`` on the buttons keeps their labels on one line when the
+ * bar gets tight; the select is the element that gives up width instead. */
+.app-bar__controls select,
+.app-bar__controls button {
+  height: var(--control-height);
+  padding-block: 0;
+}
+
+.app-bar__controls button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Long profile names (``asa24_validate_ingest``) would otherwise let the
+ * selector push the nav off the bar. */
+.app-bar__controls select {
+  min-width: 0;
+  max-width: 220px;
+}
+
+/* Why the bar's controls are refused, sitting with them rather than beside
+ * the nav. No `display` of its own: `hidden` has to keep working, and the
+ * poller toggles exactly that. */
+.app-bar__busy {
+  color: var(--ink-muted);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+
+.app-bar__busy:hover {
+  color: var(--ink);
+}
+
+.app-bar__nav {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.app-bar__nav a {
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.app-bar__nav a:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.app-bar__nav a[aria-current="page"] {
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* -- controls ----------------------------------------------------------- */
+
+select,
+button {
+  font: inherit;
+  color: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.button--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* -- layout ------------------------------------------------------------- */
+
+.app-main {
+  max-width: var(--content-width);
+  margin: 0 auto;
+  padding: var(--content-gutter);
+}
+
+.panel {
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+
+.panel + .panel {
+  margin-top: 16px;
+}
+
+/* -- project facts ------------------------------------------------------ */
+
+.project-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 20px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.project-facts dt {
+  color: var(--ink-muted);
+}
+
+.project-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* -- status vocabulary -------------------------------------------------- */
+
+.status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status--succeeded {
+  color: var(--ok);
+}
+
+.status--failed,
+.status--errored {
+  color: var(--danger);
+}
+
+.status--stopped,
+.status--interrupted,
+.status--stop_requested {
+  color: var(--warning);
+}
+
+/* -- the run console ---------------------------------------------------- */
+
+/* Inline, because it renders inside the run panel's heading. On the 409 page
+ * it is the whole body and stands on its own line, which an inline-flex box
+ * does just as well. */
+.run-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* The run panel's heading is a breadcrumb: the crumbs sit on one line, and
+ * the separator is quieter than either of them. */
+/* The breadcrumb on the left, Retry hard against the right edge. */
+.run-header__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 12px;
+}
+
+.run-header__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+}
+
+.run-header__retry {
+  margin: 0 0 0 auto;
+}
+
+.run-header__crumb-separator {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
+.run-status__message {
+  flex: 1 1 100%;
+  color: var(--warning);
+}
+
+/* The run's own controls and its console are one card, and now read as one:
+ * no rule between them. The header's counters and log download already say
+ * where its half ends, so a border only drew a seam across a single surface.
+ * The spacing stays -- the output must not collide with the controls. */
+.run-panel .console {
+  margin-top: 14px;
+}
+
+.console__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+/* The only thing left in the bar, so it sits at the right on its own rather
+ * than being pushed there by a heading that no longer exists. */
+.console__follow {
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+/* The console is the one scrolling region in the UI: a long run must not turn
+ * the whole page into a mile of output. */
+/* No height and no scroller of its own: the console is as long as the run,
+ * and the page is what scrolls. A box that scrolled internally put a second
+ * scrollbar inside the first, and left the output in a 60vh window while the
+ * page around it stood still. */
+.console__events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.event {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.event:last-child {
+  border-bottom: none;
+}
+
+.event__seq,
+.event__clock {
+  color: var(--ink-muted);
+}
+
+.event__kind {
+  font-weight: 600;
+}
+
+.event__task {
+  color: var(--accent);
+}
+
+/* Captured output starts on the row that labels it and takes the rest of
+   the width, rather than claiming a line of its own: a single line of task
+   output is the common case, and a row whose text always began underneath
+   its own timestamp read like two entries instead of one.
+
+   ``pre-wrap`` and ``min-width: 0`` keep the multi-line case honest -- real
+   pipeline output is whitespace-significant, and a flex item needs the zero
+   minimum before it is allowed to wrap inside its track at all. */
+.event__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A summary ("cached", "succeeded 1.23s") is a few words about the row it
+   sits on, so it stays on that row and wraps only when it has to. */
+.event__summary {
+  color: var(--ink-muted);
+  min-width: 0;
+  word-break: break-word;
+}
+
+.event--warning .event__kind,
+.event--stderr .event__kind {
+  color: var(--warning);
+}
+
+/* Coloured by outcome, never by kind: "task finished" is the same kind for a
+   success and a failure, and colouring the kind painted every failure in the
+   success green. Statuses with no rule here (stopped, interrupted) stay the
+   default ink rather than borrowing a colour that would overstate them. */
+.event--succeeded .event__kind {
+  color: var(--ok);
+}
+
+.event--failed .event__kind {
+  color: var(--danger);
+}
+
+.notice--error {
+  border-left: 3px solid var(--danger);
+  padding-left: 12px;
+}
+
+.notice__title {
+  margin: 0 0 4px;
+  color: var(--danger);
+}
+
+.notice__detail {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* -- run actions -------------------------------------------------------- */
+
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/*
+ * The force-finish disclosure. Visually separated from the actions row above
+ * it because it is not one of them: it abandons a possibly-live worker, and
+ * the page has to read that way before it is opened.
+ */
+.run-actions__abandon {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  background: var(--surface-sunken);
+}
+
+.run-actions__abandon > summary {
+  cursor: pointer;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.run-actions__abandon[open] > summary {
+  margin-bottom: 6px;
+}
+
+.run-actions__abandon p {
+  margin: 6px 0;
+  max-width: 62ch;
+}
+
+.run-actions__abandon form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.run-actions__abandon input {
+  font: inherit;
+  color: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  width: 14ch;
+}
+
+/* Both sit in the run header's top row beside Retry. No margin of their own:
+ * the row's own ``gap`` does the spacing. The counters take the
+ * ``margin-left: auto`` so the tallies sit out at the right, away from the
+ * buttons -- reading matter, not another control. */
+.run-header__log {
+  margin: 0;
+}
+
+.run-header__counters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+/* -- warnings ----------------------------------------------------------- */
+
+.warnings__headline {
+  margin: 0;
+  color: var(--warning);
+  font-weight: 600;
+}
+
+/* The compact form, on a history row. */
+.warnings--badge {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.warnings__sample {
+  color: var(--ink-muted);
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- run history -------------------------------------------------------- */
+
+.run-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-history__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.run-history__item:last-child {
+  border-bottom: 0;
+}
+
+.run-history__link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.run-history__when,
+.run-history__profile,
+.run-history__task,
+.run-history__exit,
+.run-history__counts {
+  color: var(--ink-muted);
+}
+
+.run-history__counts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.run-history__count b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-history__log {
+  margin-left: auto;
+  color: var(--ink-muted);
+}
+
+/* -- plan and walkthrough ------------------------------------------------ */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: baseline;
+}
+
+.data-table thead th {
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.action {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.action--skip {
+  color: var(--ink-muted);
+}
+
+.walkthrough__step {
+  width: 3em;
+  color: var(--ink-muted);
+}
+
+.walkthrough__heading {
+  padding-top: 16px;
+}
+
+.walkthrough__heading-name {
+  margin-right: 10px;
+}
+
+.walkthrough__row--bypassed code {
+  color: var(--ink-muted);
+}
+
+.badge {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 8px;
+  color: var(--ink-muted);
+  font-size: 0.85em;
+}
+
+/* -- one task's detail --------------------------------------------------- */
+
+.task-detail__name {
+  margin: 0;
+}
+
+.declared-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.declared-list__link {
+  margin-left: 10px;
+  color: var(--accent);
+}
+
+.task-detail__docs {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+/* Rendered project Markdown. Kept deliberately plain: the content is the
+   project's documentation, not a design surface. */
+.markdown {
+  max-width: 78ch;
+  line-height: 1.55;
+}
+
+.markdown pre {
+  overflow-x: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+}

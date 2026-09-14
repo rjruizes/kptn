@@ -1,0 +1,76 @@
+{#
+  The pipeline walkthrough: every node of the resolved graph, in the runner's
+  order.
+
+  One table, all nodes. Structural nodes (the pipeline itself, stages,
+  parallel groups) are heading rows spanning the table; executable tasks are
+  numbered rows. The numbers come from ``inspect_pipeline`` and count only
+  what will actually run, which is why a bypassed task is shown with no
+  number rather than hidden -- the graph still contains it.
+
+  Each task row is an ordinary link. htmx swaps the detail into the panel
+  below when scripting is available; following the link works when it is not.
+
+  A task whose ``docs`` reference was refused is marked here and explains
+  itself in its detail panel. One bad reference costs that task its
+  documentation, never the page.
+#}
+{% extends "base.html" %}
+
+{% block title %}How it works - {{ project.pipeline_name }} - kptn{% endblock %}
+
+
+{% block content %}
+<section class="panel" id="walkthrough">
+  <header class="console__bar">
+    <h2>How <code>{{ inspection.pipeline }}</code> works</h2>
+    <span class="muted">
+      {% if selected_profile %}profile <code>{{ selected_profile }}</code>{% else %}no profile{% endif %}
+    </span>
+  </header>
+
+  <table class="data-table" id="walkthrough-table">
+    <thead>
+      <tr><th scope="col">Step</th><th scope="col">Node</th><th scope="col">Kind</th><th scope="col">Summary</th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      {% set item = row.item %}
+      <tr data-task="{{ item.name }}"
+          data-kind="{{ item.kind }}"
+          data-sequence="{{ item.sequence if item.sequence is not none else '' }}"
+          class="walkthrough__row{% if not row.linkable %} walkthrough__row--heading{% endif %}{% if item.bypassed %} walkthrough__row--bypassed{% endif %}">
+        {% if row.linkable %}
+        <td class="walkthrough__step">{{ item.sequence if item.sequence is not none else '' }}</td>
+        <td>
+          <a href="{{ row.detail_url }}"
+             hx-get="{{ row.detail_url }}"
+             hx-target="#task-detail"
+             hx-swap="innerHTML"><code>{{ item.name }}</code></a>
+          {% if item.bypassed %}<span class="badge">bypassed</span>{% endif %}
+          {% if item.docs_error %}<span class="badge">documentation link rejected</span>{% endif %}
+        </td>
+        <td class="muted">{{ item.kind }}</td>
+        <td class="muted">{{ item.description or not_documented }}</td>
+        {% else %}
+        <th class="walkthrough__heading" colspan="4" scope="colgroup">
+          <span class="walkthrough__heading-name">{{ item.name }}</span>
+          <span class="muted">{{ item.kind }}{% if item.description %} &mdash; {{ item.description }}{% endif %}</span>
+        </th>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{#
+  The htmx target. Empty on first load and on a no-JavaScript visit, where the
+  reader follows the link to the task's own page instead.
+#}
+<section class="panel" id="task-detail-panel">
+  <div id="task-detail">
+    <p class="muted">Choose a task above to read its documentation.</p>
+  </div>
+</section>
+{% endblock %}

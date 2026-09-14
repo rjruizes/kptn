@@ -17,7 +17,16 @@ prefect = ["prefect"]
 web = [
     "watchfiles",
     "fastapi>=0.116.2",
-    "uvicorn>=0.35.0"]
+    "uvicorn>=0.35.0",
+    "psutil>=6.0",
+    "jinja2>=3.1",
+    "markdown-it-py>=3.0",
+    # The retained lineage and table-preview surfaces are served by the same
+    # app as every other page, and kptn.lineage parses SQL with sqlglot. Without
+    # it here, kptn_server.service is unimportable in every environment the UI
+    # ships to -- i.e. those routes could only ever raise.
+    "sqlglot>=25.0",
+]
 
 [project.scripts]
 kptn = "kptn.cli:app"
@@ -36,17 +45,34 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["kptn", "kptn_server"]
+# The three asset trees below arrive through force-include, which is the
+# explicit declaration this project wants. They have to be excluded from the
+# package sweep first: hatchling refuses to add the same archive path twice,
+# so leaving them in both places fails the build outright.
+exclude = [
+    "kptn_server/templates",
+    "kptn_server/static",
+    "kptn_server/migrations",
+]
 
-# [tool.hatch.build.targets.wheel.force-include]
-# "kptn_server/templates" = "kptn_server/templates"
-# "kptn_server/static" = "kptn_server/static"
+# The served UI reads these package-relative (see kptn_server/app.py), so a
+# wheel without them installs a UI that 500s on its first page. Declared
+# explicitly rather than left to hatchling's sweep of the package directory.
+[tool.hatch.build.targets.wheel.force-include]
+"kptn_server/templates" = "kptn_server/templates"
+"kptn_server/static" = "kptn_server/static"
+"kptn_server/migrations" = "kptn_server/migrations"
 
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
     "ruff>=0.14.6",
     "ty",
+    "httpx>=0.27",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "example/step_example/tests"]
+markers = [
+    "ui_hygiene: opt a module into the pipeline-UI process-state and leaked-worker fixtures (see tests/conftest.py)",
+]

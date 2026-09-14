@@ -1,53 +1,21 @@
 from __future__ import annotations
 
-import importlib
-import sys
-import tomllib
+import threading
+import time
+import webbrowser
 from pathlib import Path
+from typing import Callable
+from urllib.parse import urljoin
 
 import typer
 
-from kptn.exceptions import ProfileError
-from kptn.graph.graph import Graph
-from kptn.graph.pipeline import Pipeline
-from kptn.profiles.loader import ProfileLoader
-from kptn.profiles.resolved import ResolvedGraph
-from kptn.profiles.resolver import ProfileResolver
+from kptn.exceptions import ProfileError, ProjectConfigError
+from kptn.project import load_pipeline
+from kptn.runner.api import resolve_pipeline
 from kptn.runner.api import run as _run_pipeline
-from kptn.state_store.factory import init_state_store
 import kptn.runner.plan as runner_plan
 
 app = typer.Typer()
-
-
-def _load_pipeline_from_pyproject(project_root: Path) -> Pipeline:
-    with open(project_root / "pyproject.toml", "rb") as f:
-        config = tomllib.load(f)
-
-    pipeline_module = config.get("tool", {}).get("kptn", {}).get("pipeline")
-    if not pipeline_module:
-        raise typer.BadParameter(
-            "Missing [tool.kptn] pipeline in pyproject.toml. "
-            "Add: [tool.kptn]\npipeline = \"your_package.pipeline\""
-        )
-
-    sys.path.insert(0, str(project_root))
-    module = importlib.import_module(pipeline_module)
-
-    pipeline_attr = getattr(module, "pipeline", None)
-    if isinstance(pipeline_attr, Pipeline):
-        return pipeline_attr
-
-    graph_attr = getattr(module, "graph", None)
-    if isinstance(graph_attr, Pipeline):
-        return graph_attr
-    if isinstance(graph_attr, Graph):
-        return Pipeline("default", graph_attr)
-
-    raise typer.BadParameter(
-        f"Module {pipeline_module!r} must expose a 'pipeline' (Pipeline) "
-        "or 'graph' (Graph) attribute"
-    )
 
 
 @app.command()
@@ -56,7 +24,11 @@ def run(
     force: bool = typer.Option(False, "--force"),
 ) -> None:
     project_root = Path.cwd()
-    pipeline = _load_pipeline_from_pyproject(project_root)
+    try:
+        pipeline = load_pipeline(project_root)
+    except ProjectConfigError as e:
+        raise typer.BadParameter(str(e)) from e
+
     try:
         _run_pipeline(pipeline, profile=profile, force=force)
     except ProfileError as e:
@@ -71,21 +43,189 @@ def plan(
     profile: str | None = typer.Option(None, "--profile"),
 ) -> None:
     project_root = Path.cwd()
-    pipeline = _load_pipeline_from_pyproject(project_root)
-    config = ProfileLoader.load(project_root / "kptn.yaml")
+    try:
+        pipeline = load_pipeline(project_root)
+        resolved, state_store = resolve_pipeline(pipeline, project_root, profile)
+    except ProjectConfigError as e:
+        raise typer.BadParameter(str(e)) from e
+    except ProfileError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
 
-    if profile is not None:
-        try:
-            resolved = ProfileResolver(config).compile(pipeline, profile)
-        except ProfileError as e:
-            typer.echo(str(e), err=True)
-            raise typer.Exit(code=1)
-    else:
-        resolved = ResolvedGraph(
-            graph=pipeline,
-            pipeline=pipeline.name,
-            storage_key=config.settings.db_path or ".kptn/kptn.db",
-        )
-
-    state_store = init_state_store(config.settings)
     runner_plan.plan(resolved, state_store)
+
+
+DEFAULT_UI_HOST = "127.0.0.1"
+DEFAULT_UI_PORT = 8000
+
+#: How many times the launcher probes the health endpoint before giving up on
+#: opening a browser. An attempt count rather than a wall-clock deadline
+#: precisely because it is also the test seam: a test that injects ``sleep``
+#: gets exactly the production number of attempts without any clock advancing.
+#: The elapsed time this corresponds to is not fixed -- each probe can itself
+#: block for up to ``_HEALTH_PROBE_TIMEOUT_SECONDS`` inside ``urllib`` (a
+#: filtered port, as opposed to a refused connection) -- so the constant is
+#: named for what it actually bounds. The server keeps running either way.
+BROWSER_READY_PROBE_ATTEMPTS = 300
+BROWSER_POLL_INTERVAL_SECONDS = 0.1
+_HEALTH_PROBE_TIMEOUT_SECONDS = 1.0
+
+
+def _probe_health(health_url: str) -> bool:
+    """Has the server started answering yet?
+
+    Deliberately stdlib-only: the UI's HTTP client dependency is test-only,
+    and a launcher that cannot start because an extra is missing is worse than
+    a launcher that polls with ``urllib``.
+    """
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(  # noqa: S310 - loopback URL we just built
+            health_url, timeout=_HEALTH_PROBE_TIMEOUT_SECONDS
+        ) as response:
+            return 200 <= response.status < 300
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def _open_when_ready(
+    url: str,
+    *,
+    probe: Callable[[str], bool] = _probe_health,
+    opener: Callable[[str], bool] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    attempts: int = BROWSER_READY_PROBE_ATTEMPTS,
+    interval: float = BROWSER_POLL_INTERVAL_SECONDS,
+) -> bool:
+    """Open *url* in a browser once its health endpoint answers.
+
+    Polling is bounded by *attempts* rather than a wall-clock deadline, so a
+    caller that injects ``sleep`` (a test) gets exactly the same number of
+    attempts as production without any clock having to advance. Returns
+    whether a browser was opened; a server that never answers simply leaves
+    the developer to click the URL the command printed.
+    """
+    health_url = urljoin(url, "healthz")
+    attempts = max(1, attempts)
+    # Resolved at call time, not captured as a default, so a test that
+    # forbids the real browser actually forbids it.
+    open_url = opener if opener is not None else webbrowser.open
+
+    for attempt in range(attempts):
+        if probe(health_url):
+            open_url(url)
+            return True
+        if attempt < attempts - 1:
+            sleep(interval)
+    return False
+
+
+def _start_browser_opener(url: str) -> threading.Thread:
+    """Poll for readiness on a daemon thread.
+
+    ``uvicorn.run`` blocks the calling thread for the life of the server, so
+    the readiness poll cannot happen inline. The thread is a daemon so it can
+    never keep the interpreter alive after the server stops.
+    """
+    thread = threading.Thread(
+        target=_open_when_ready,
+        args=(url,),
+        name="kptn-ui-browser-opener",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+@app.command()
+def ui(
+    host: str = typer.Option(
+        DEFAULT_UI_HOST, "--host", help="Interface to bind. Loopback by default."
+    ),
+    port: int = typer.Option(DEFAULT_UI_PORT, "--port", help="Port to bind."),
+    open_browser: bool = typer.Option(
+        True, "--open/--no-open", help="Open a browser once the server is ready."
+    ),
+    reload: bool = typer.Option(
+        False,
+        "--reload",
+        help="Restart the server when kptn's own source changes (development).",
+    ),
+) -> None:
+    """Serve the pipeline UI for the project in the current directory.
+
+    Loopback-bound with no authentication: this is a single developer's view
+    of their own project, and it must not become an unauthenticated remote
+    pipeline runner. Nothing here accepts a project path from the network --
+    the served project is always ``Path.cwd()``.
+
+    ``--reload`` is for working on kptn itself. Jinja already re-reads its
+    templates from disk, so without it a long-running server picks up markup
+    changes while still serving the Python it started with -- new chrome, old
+    behaviour, and a bug hunt that leads nowhere.
+    """
+    try:
+        import uvicorn
+
+        from kptn_server.app import create_app
+        from kptn_server.project import ProjectError
+    except ImportError as e:  # pragma: no cover - depends on install extras
+        typer.echo(
+            f"The kptn UI needs the 'web' extra: pip install 'kptn[web]' ({e})",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    project_root = Path.cwd()
+    try:
+        application = create_app(project_root)
+    except ProjectError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+
+    url = f"http://{host}:{port}/"
+    typer.echo(f"kptn UI for {project_root} on {url}")
+    if open_browser:
+        _start_browser_opener(url)
+
+    if reload:
+        # The reloader re-imports the application in a fresh subprocess after
+        # every change, so it needs a name rather than the object built above
+        # -- and an import string cannot carry the project root. The factory
+        # reads Path.cwd(), which the subprocess inherits, so both paths serve
+        # the same project. The app built above is discarded, but the build is
+        # what proved this directory is servable: without that check a
+        # reloading server would start and then fail to import, over and over,
+        # reporting the mistake far less clearly than the message above does.
+        del application
+        uvicorn.run(
+            "kptn_server.app:create_app_for_cwd",
+            factory=True,
+            reload=True,
+            reload_dirs=_ui_source_directories(),
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+        return
+
+    uvicorn.run(application, host=host, port=port, log_level="warning")
+
+
+def _ui_source_directories() -> list[str]:
+    """The trees ``--reload`` watches: kptn's own source, not the project.
+
+    Uvicorn would otherwise watch the working directory, which here is the
+    *served project* -- a pipeline edit is not what this flag is for, since
+    the UI reads the project per request already. What a developer wants
+    restarted is the server whose Python they just changed.
+    """
+    import kptn
+    import kptn_server
+
+    return [
+        str(Path(kptn_server.__file__).parent),
+        str(Path(kptn.__file__).parent),
+    ]

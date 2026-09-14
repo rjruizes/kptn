@@ -3,15 +3,19 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from kptn.graph.nodes import ConfigNode
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.loader import ProfileLoader
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.resolver import ProfileResolver
+from kptn.runner.console import ConsoleEventSink
 from kptn.runner.executor import execute
+from kptn.runner.events import EventEmitter, EventKind, EventSink
 from kptn.runner.plan import plan as _plan
 from kptn.state_store.factory import init_state_store
+from kptn.state_store.protocol import StateStoreBackend
 
 if TYPE_CHECKING:
     import duckdb
@@ -39,6 +43,7 @@ def _find_duckdb_factory(pipeline: Pipeline):
 def _gate(resolved: ResolvedGraph) -> ResolvedGraph:
     """Apply disjunctive requires gating to a resolved graph."""
     from kptn.graph.requires import gate_disjunctive
+
     return ResolvedGraph(
         graph=gate_disjunctive(resolved.graph),
         pipeline=resolved.pipeline,
@@ -51,10 +56,35 @@ def _gate(resolved: ResolvedGraph) -> ResolvedGraph:
 _LEGACY_KWARGS = frozenset({"project_dir", "task_names"})
 
 
+def resolve_pipeline(
+    pipeline: Pipeline,
+    project_root: Path,
+    profile: str | None,
+) -> tuple[ResolvedGraph, StateStoreBackend]:
+    config = ProfileLoader.load(project_root / "kptn.yaml")
+
+    if profile is not None:
+        resolved = ProfileResolver(config).compile(pipeline, profile)
+    else:
+        resolved = ResolvedGraph(
+            graph=pipeline,
+            pipeline=pipeline.name,
+            storage_key=config.settings.db_path or ".kptn/kptn.db",
+        )
+
+    resolved = _gate(resolved)
+
+    duckdb_factory, _ = _find_duckdb_factory(pipeline)
+    state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
+    return resolved, state_store
+
+
 def run(
     pipeline: Pipeline,
     *,
     profile: str | None = None,
+    event_sink: EventSink | None = None,
+    run_id: str | None = None,
     keep_db_open: bool = False,
     no_cache: bool = False,
     force: bool = False,
@@ -68,6 +98,11 @@ def run(
         The pipeline to execute.
     profile:
         Optional profile name to resolve from ``kptn.yaml``.
+    event_sink:
+        Optional structured event sink. When omitted, terminal output is routed
+        through the default console sink to preserve the existing CLI contract.
+    run_id:
+        Optional stable identifier for the emitted run event stream.
     keep_db_open:
         When ``True`` and the pipeline declares ``kptn.config(duckdb=get_engine)``,
         the DuckDB connection is left open after the run and returned to the caller.
@@ -129,21 +164,39 @@ def run(
     # reads/writes inside execute(), not state-store creation).
     if no_cache and profile is None:
         from kptn.state_store.noop import NoOpBackend
+
         state_store = NoOpBackend()
     else:
         state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
 
-    return execute(
-        resolved,
-        state_store,
-        cwd=cwd,
-        duckdb_factory=duckdb_factory,
-        duckdb_alias=duckdb_alias,
-        keep_db_open=keep_db_open,
-        no_cache=no_cache,
-        force=force,
-        extra_kwargs=kwargs or None,
+    sink = event_sink if event_sink is not None else ConsoleEventSink()
+    emitter = EventEmitter(
+        run_id if run_id is not None else str(uuid4()),
+        resolved.pipeline,
+        profile,
+        sink,
     )
+    emitter.emit(EventKind.RUN_STARTED)
+
+    try:
+        result = execute(
+            resolved,
+            state_store,
+            cwd=cwd,
+            duckdb_factory=duckdb_factory,
+            duckdb_alias=duckdb_alias,
+            keep_db_open=keep_db_open,
+            no_cache=no_cache,
+            force=force,
+            extra_kwargs=kwargs or None,
+            emitter=emitter,
+        )
+    except Exception as exc:
+        emitter.emit(EventKind.RUN_FINISHED, status="failed", error=str(exc))
+        raise
+
+    emitter.emit(EventKind.RUN_FINISHED, status="succeeded")
+    return result
 
 
 def plan(
@@ -160,21 +213,5 @@ def plan(
     profile:
         Optional profile name to resolve from ``kptn.yaml``.
     """
-    cwd = Path.cwd()
-    config = ProfileLoader.load(cwd / "kptn.yaml")
-
-    if profile is not None:
-        resolved = ProfileResolver(config).compile(pipeline, profile)
-    else:
-        resolved = ResolvedGraph(
-            graph=pipeline,
-            pipeline=pipeline.name,
-            storage_key=config.settings.db_path or ".kptn/kptn.db",
-        )
-
-    resolved = _gate(resolved)
-
-    duckdb_factory, _ = _find_duckdb_factory(pipeline)
-    state_store = init_state_store(config.settings, duckdb_factory=duckdb_factory)
-
+    resolved, state_store = resolve_pipeline(pipeline, Path.cwd(), profile)
     _plan(resolved, state_store)

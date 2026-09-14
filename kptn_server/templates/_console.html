@@ -1,0 +1,42 @@
+{#
+  The live console: the lower half of the run page's single panel.
+
+  The whole history is rendered server-side; ``app.js`` only appends what the
+  stream sends and never formats anything itself. The data attributes on this
+  element are the contract between the two:
+
+    data-stream-url  where to open the EventSource
+    data-last-sequence  the server's cursor when the page was rendered
+    data-terminal    whether the run is already over (from its *status*)
+
+  A connection resumes from ``max(data-last-sequence, highest data-sequence in
+  the list)``: the attribute is what the server had rendered, the list is what
+  the page actually holds, and the higher of the two is the only cursor that
+  can neither replay nor skip.
+#}
+{% from "_event.html" import event_row %}
+<div class="console" id="console"
+         data-run-id="{{ run.run_id }}"
+         data-stream-url="/runs/{{ run.run_id }}/events"
+         data-last-sequence="{{ last_sequence }}"
+         data-terminal="{{ 'true' if is_terminal else 'false' }}">
+  {#
+    No heading. "Console" named the thing the reader was already looking at,
+    and the counters and the log download moved up beside the controls that
+    act on the run. What is left is the one control that belongs to the
+    output itself: where it goes on screen.
+  #}
+  <header class="console__bar">
+    <label class="console__follow">
+      <input type="checkbox" id="follow-output" checked> Follow output
+    </label>
+  </header>
+
+  <ol class="console__events" id="console-events">
+    {% for event in events %}{{ event_row(event) }}{% endfor %}
+  </ol>
+
+  {% if not events %}
+  <p class="muted console__empty" id="console-empty">No output yet.</p>
+  {% endif %}
+</div>

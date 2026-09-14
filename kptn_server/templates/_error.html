@@ -1,0 +1,19 @@
+{#
+  An error, as a fragment.
+
+  Returned to htmx requests (``HX-Request: true``) so a failed Run press can
+  be swapped into the page without losing it. ``error.html`` wraps the same
+  markup in the full shell for a plain form post.
+#}
+<div class="notice notice--error" role="alert">
+  <h2 class="notice__title">{{ error_title }}</h2>
+  <p class="notice__detail">{{ error_detail }}</p>
+  {% if run %}
+  {# The conflict case: the run holding the project's lock is what the reader
+     has to act on, so its status fragment is embedded rather than described. #}
+  {% include "_run_status.html" %}
+  {% endif %}
+  {% if error_run_id %}
+  <p class="notice__run">Run <a href="/runs/{{ error_run_id }}"><code>{{ error_run_id }}</code></a></p>
+  {% endif %}
+</div>

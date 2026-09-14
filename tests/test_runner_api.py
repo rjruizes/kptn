@@ -1,20 +1,36 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from uuid import UUID
 
 import kptn
 from kptn.exceptions import ProfileError, TaskError
 from kptn.graph.graph import Graph
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.resolved import ResolvedGraph
-from kptn.runner.api import run
+from kptn.runner.api import plan, resolve_pipeline, run
+from kptn.runner.events import EventKind, RunEvent
 
 
 def _make_pipeline(name: str = "default") -> Pipeline:
     return Pipeline(name, Graph())
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def emit(self, event: RunEvent) -> None:
+        self.events.append(event)
+
+
+class FalsySink(RecordingSink):
+    def __bool__(self) -> bool:
+        return False
 
 
 def test_run_no_profile_uses_default_storage_key() -> None:
@@ -170,3 +186,133 @@ def test_run_no_cache_does_not_create_db_file(tmp_path, monkeypatch) -> None:
     pipeline = _make_pipeline("no_db")
     run(pipeline, no_cache=True)
     assert not (tmp_path / ".kptn").exists(), ".kptn/ directory must not be created"
+
+
+def test_run_emits_run_lifecycle_and_passes_emitter_to_execute() -> None:
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    sink = RecordingSink()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute") as mock_exec, \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.return_value = mock_config
+        run(pipeline, event_sink=sink, run_id="run-123")
+
+    assert "emitter" in mock_exec.call_args.kwargs
+    assert [event.kind for event in sink.events] == [
+        EventKind.RUN_STARTED,
+        EventKind.RUN_FINISHED,
+    ]
+    assert [event.run_id for event in sink.events] == ["run-123", "run-123"]
+    assert sink.events[-1].payload["status"] == "succeeded"
+
+
+def test_run_emits_failed_run_finished_before_reraising() -> None:
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    sink = RecordingSink()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute", side_effect=TaskError("boom")), \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.return_value = mock_config
+        with pytest.raises(TaskError, match="boom"):
+            run(pipeline, event_sink=sink, run_id="run-123")
+
+    assert [event.kind for event in sink.events] == [
+        EventKind.RUN_STARTED,
+        EventKind.RUN_FINISHED,
+    ]
+    assert sink.events[-1].payload["status"] == "failed"
+    assert sink.events[-1].payload["error"] == "boom"
+
+
+def test_run_generates_run_id_only_when_missing() -> None:
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    sink = RecordingSink()
+    generated = UUID("12345678-1234-5678-1234-567812345678")
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute"), \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()), \
+         patch("kptn.runner.api.uuid4", return_value=generated) as mock_uuid:
+        mock_loader.load.return_value = mock_config
+        run(pipeline, event_sink=sink)
+
+    mock_uuid.assert_called_once_with()
+    assert sink.events[0].run_id == str(generated)
+
+
+def test_run_uses_supplied_run_id_without_generating_uuid() -> None:
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    sink = RecordingSink()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute"), \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()), \
+         patch("kptn.runner.api.uuid4") as mock_uuid:
+        mock_loader.load.return_value = mock_config
+        run(pipeline, event_sink=sink, run_id="run-123")
+
+    mock_uuid.assert_not_called()
+    assert sink.events[0].run_id == "run-123"
+
+
+def test_run_preserves_falsy_supplied_sink_and_run_id() -> None:
+    pipeline = _make_pipeline("default")
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    sink = FalsySink()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute") as mock_exec, \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()), \
+         patch("kptn.runner.api.ConsoleEventSink") as mock_console, \
+         patch("kptn.runner.api.uuid4") as mock_uuid:
+        mock_loader.load.return_value = mock_config
+        run(pipeline, event_sink=sink, run_id="")
+
+    emitter = mock_exec.call_args.kwargs["emitter"]
+    assert emitter._sink is sink
+    assert emitter._run_id == ""
+    mock_console.assert_not_called()
+    mock_uuid.assert_not_called()
+    assert [event.kind for event in sink.events] == [
+        EventKind.RUN_STARTED,
+        EventKind.RUN_FINISHED,
+    ]
+    assert [event.run_id for event in sink.events] == ["", ""]
+
+
+def test_resolve_pipeline_returns_resolved_graph_and_state_store() -> None:
+    """Shared plan resolution returns the resolved graph and initialized state store."""
+    pipeline = _make_pipeline("default")
+    mock_settings = MagicMock(db="duckdb", db_path=".kptn/prod.db")
+    mock_config = MagicMock(settings=mock_settings)
+    mock_state_store = MagicMock()
+
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.init_state_store", return_value=mock_state_store) as mock_store:
+        mock_loader.load.return_value = mock_config
+        resolved, state_store = resolve_pipeline(pipeline, Path("/tmp/project"), None)
+
+    assert resolved.pipeline == "default"
+    assert resolved.storage_key == ".kptn/prod.db"
+    assert state_store is mock_state_store
+    mock_store.assert_called_once_with(mock_settings, duckdb_factory=None)
+
+
+def test_plan_uses_shared_resolution() -> None:
+    """runner.api.plan() resolves through the shared helper before rendering."""
+    pipeline = _make_pipeline("default")
+    resolved = ResolvedGraph(graph=pipeline, pipeline="default", storage_key=".kptn/kptn.db")
+    state_store = MagicMock()
+
+    with patch("kptn.runner.api.resolve_pipeline", return_value=(resolved, state_store)) as mock_resolve, \
+         patch("kptn.runner.api._plan") as mock_plan:
+        plan(pipeline, profile="dev")
+
+    mock_resolve.assert_called_once_with(pipeline, Path.cwd(), "dev")
+    mock_plan.assert_called_once_with(resolved, state_store)

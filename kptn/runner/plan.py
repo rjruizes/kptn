@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
+from typing import Iterable, TextIO
 
 from kptn.change_detector.detector import is_stale
 from kptn.exceptions import HashError
 from kptn.graph.nodes import (
-    AnyNode,
     ConfigNode,
     MapNode,
     NoopNode,
@@ -19,6 +21,39 @@ from kptn.profiles.resolved import ResolvedGraph
 from kptn.state_store.protocol import StateStoreBackend
 
 _PLAN_NON_EXEC = (ParallelNode, StageNode, NoopNode, PipelineNode, ConfigNode)
+_DEFAULT_STREAM = sys.stdout
+
+
+class PlanAction(StrEnum):
+    RUN = "run"
+    SKIP = "skip"
+    MAP = "map"
+
+
+@dataclass(frozen=True)
+class PlanEntry:
+    task_name: str
+    action: PlanAction
+    reason: str = ""
+    provider: str | None = None
+
+
+def _format_plan_status_line(
+    action: PlanAction,
+    task_name: str,
+    *,
+    provider: str | None = None,
+    timestamp: bool = False,
+) -> str:
+    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
+
+    if action is PlanAction.RUN:
+        return f"[RUN]{ts} {task_name}"
+    if action is PlanAction.SKIP:
+        return f"[SKIP]{ts} {task_name} — cached"
+    if provider is None:
+        raise ValueError(f"Map plan status for '{task_name}' is missing a provider.")
+    return f"[MAP]{ts} {task_name} — dynamic, expands after {provider}"
 
 
 def emit_map(task_name: str, count: int) -> None:
@@ -26,7 +61,15 @@ def emit_map(task_name: str, count: int) -> None:
 
 
 def emit_map_plan(task_name: str, provider: str) -> None:
-    print(f"[MAP] {task_name} \u2014 dynamic, expands after {provider}", flush=True)
+    print(
+        _format_plan_status_line(
+            PlanAction.MAP,
+            task_name,
+            provider=provider,
+            timestamp=False,
+        ),
+        flush=True,
+    )
 
 
 def emit_fail(task_name: str, reason: str, timestamp: bool = False) -> None:
@@ -35,13 +78,27 @@ def emit_fail(task_name: str, reason: str, timestamp: bool = False) -> None:
 
 
 def emit_skip(task_name: str, timestamp: bool = False) -> None:
-    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
-    print(f"[SKIP]{ts} {task_name} \u2014 cached", flush=True)
+    print(
+        _format_plan_status_line(
+            PlanAction.SKIP,
+            task_name,
+            provider=None,
+            timestamp=timestamp,
+        ),
+        flush=True,
+    )
 
 
 def emit_run(task_name: str, timestamp: bool = False) -> None:
-    ts = f" {datetime.now().strftime('%H:%M:%S')}" if timestamp else ""
-    print(f"[RUN]{ts} {task_name}", flush=True)
+    print(
+        _format_plan_status_line(
+            PlanAction.RUN,
+            task_name,
+            provider=None,
+            timestamp=timestamp,
+        ),
+        flush=True,
+    )
 
 
 def emit_backup_start(task_name: str, dest: str, timestamp: bool = False) -> None:
@@ -74,9 +131,12 @@ def emit_checkpoint_stale(task_name: str, stale_task: str, timestamp: bool = Fal
     print(f"[CHECKPOINT_STALE]{ts} {task_name} — {stale_task} is stale, backup deleted", flush=True)
 
 
-def plan(resolved: ResolvedGraph, state_store: StateStoreBackend) -> None:
-    ordered: list[AnyNode] = topo_sort(resolved.graph)
-    for node in ordered:
+def build_plan(
+    resolved: ResolvedGraph,
+    state_store: StateStoreBackend,
+) -> list[PlanEntry]:
+    entries: list[PlanEntry] = []
+    for node in topo_sort(resolved.graph):
         if isinstance(node, _PLAN_NON_EXEC):
             continue
         if node.name in resolved.bypassed_names:
@@ -88,16 +148,62 @@ def plan(resolved: ResolvedGraph, state_store: StateStoreBackend) -> None:
                     f"MapNode '{node.name}' has an empty 'over' expression; "
                     "cannot determine provider for plan output."
                 )
-            emit_map_plan(node.name, provider)
+            entries.append(PlanEntry(node.name, PlanAction.MAP, provider=provider))
             continue
-        # TaskNode, RTaskNode, SqlTaskNode
-        stale = True
-        reason = ""
         try:
             stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline)
         except HashError:
-            stale = True
-        if not stale and reason == "cached":
-            emit_skip(node.name)
+            stale, reason = True, "hash unavailable"
+        entries.append(
+            PlanEntry(
+                node.name,
+                PlanAction.SKIP if not stale and reason == "cached" else PlanAction.RUN,
+                reason=reason,
+            )
+        )
+    return entries
+
+
+def render_plan(entries: Iterable[PlanEntry], stream: TextIO = sys.stdout) -> None:
+    if stream is _DEFAULT_STREAM:
+        stream = sys.stdout
+    for entry in entries:
+        if entry.action is PlanAction.MAP:
+            if entry.provider is None:
+                raise ValueError(f"PlanEntry for map task '{entry.task_name}' is missing a provider.")
+            print(
+                _format_plan_status_line(
+                    PlanAction.MAP,
+                    entry.task_name,
+                    provider=entry.provider,
+                    timestamp=False,
+                ),
+                file=stream,
+                flush=True,
+            )
+        elif entry.action is PlanAction.SKIP:
+            print(
+                _format_plan_status_line(
+                    PlanAction.SKIP,
+                    entry.task_name,
+                    provider=None,
+                    timestamp=False,
+                ),
+                file=stream,
+                flush=True,
+            )
         else:
-            emit_run(node.name)
+            print(
+                _format_plan_status_line(
+                    PlanAction.RUN,
+                    entry.task_name,
+                    provider=None,
+                    timestamp=False,
+                ),
+                file=stream,
+                flush=True,
+            )
+
+
+def plan(resolved: ResolvedGraph, state_store: StateStoreBackend) -> None:
+    render_plan(build_plan(resolved, state_store))

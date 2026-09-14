@@ -1,0 +1,150 @@
+{#
+  Shared shell for every UI page.
+
+  Blocks a page may override:
+    title           - browser tab title (defaults to the pipeline name)
+    profile_options - the profile <select>'s options, so a page can mark one
+                      selected (the run console marks the profile in play)
+    content         - the page body
+    scripts         - extra page-local script tags
+
+  The app bar holds the three controls that act on "the selected profile":
+  the selector, Run, and Plan. There is no separate run console page for
+  them to live on -- "/" is the run history -- so they are here, on every
+  page, and a run can be started from wherever you are.
+
+  The selector sits *outside* the run form and carries `form="run-form"`,
+  which is what lets one `<select>` drive a form it is not nested in. HTML
+  form-owner association does the wiring, no JS required. That association
+  is also why there is exactly one selector: a page that swapped in a
+  selector of its own would leave Run posting no profile at all.
+
+  Assets are vendored only. There are no CDN references anywhere in this UI:
+  it has to work on a laptop with no network.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ project.pipeline_name }} - kptn{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="app-bar">
+    <div class="app-bar__inner">
+      {#
+        One selector, every page, always bound to the run form below. It marks
+        ``selected_profile``, which each route that accepts a ``?profile=``
+        passes after validating it -- so a profile carried here through the nav
+        arrives visible, and is the one Run and Plan will use.
+      #}
+      {#
+        One run per project is the store's rule -- ``POST /runs`` answers 409
+        to a second one -- so while a run holds the lock the three controls
+        that would start or re-aim one are disabled, and the notice below
+        says why and links to the run that is holding it.
+
+        This is an affordance, not the guard: the route keeps its own check,
+        because a lock can be taken between this render and the submit.
+
+        ``data-run-control`` is the contract app.js toggles these by when the
+        run ends under an open page. It toggles the *property* and never
+        re-renders this group: a swap would wipe an unsubmitted profile
+        choice out from under the reader every few seconds.
+      #}
+      <div class="app-bar__controls">
+        <div class="app-bar__profile">
+          <label for="profile-select">Profile</label>
+          <select id="profile-select" name="profile" form="run-form"
+                  data-run-control {% if active_run %}disabled{% endif %}>
+            {% block profile_options %}
+            <option value="" {% if not selected_profile %}selected{% endif %}>(no profile)</option>
+            {% for profile in project.profiles %}
+            <option value="{{ profile }}" {% if profile == selected_profile %}selected{% endif %}>{{ profile }}</option>
+            {% endfor %}
+            {% endblock %}
+          </select>
+        </div>
+
+        {# The form the selector above belongs to. POST, because it starts work. #}
+        <form id="run-form" class="app-bar__run" method="post" action="/runs">
+          <button type="submit" class="button button--primary"
+                data-run-control {% if active_run %}disabled{% endif %}>Run</button>
+        </form>
+
+        {#
+          Plan reads rather than starts, so it is a plain GET -- and a real
+          ``<form>`` with a real ``<button>``, not a link wearing a class, so
+          it inherits the same rules as every other button here.
+
+          The select cannot drive two forms, so the profile rides in a hidden
+          input. Disabled when there is none, because a disabled control is not
+          submitted and the URL stays a clean ``/plan``; app.js keeps both the
+          value and the disabled flag in step with an unsubmitted selection.
+        #}
+        <form class="app-bar__plan" method="get" action="/plan">
+          <input type="hidden" name="profile" data-profile-input
+                 value="{{ selected_profile or '' }}"
+                 {% if not selected_profile %}disabled{% endif %}>
+          <button type="submit"
+                data-run-control {% if active_run %}disabled{% endif %}>Plan</button>
+        </form>
+      </div>
+
+      {#
+        Why the controls are refused, and the way out: the active run's page
+        is where Stop is.
+
+        Rendered on every page and hidden when there is none, rather than
+        built by app.js when it sees one -- the poller sets ``hidden`` and
+        the href and nothing else, so this markup has exactly one home.
+      #}
+      <a class="app-bar__busy" data-run-busy
+         href="{% if active_run %}/runs/{{ active_run.run_id }}{% endif %}"
+         {% if not active_run %}hidden{% endif %}>a run is in progress</a>
+
+      {#
+        The profile travels with the reader.
+
+        The links carry ``selected_profile``, which each route that accepts a
+        ``?profile=`` passes after validating it -- the run page's comes from
+        the run row rather than the URL. So choosing a profile and clicking
+        Plan shows the plan for *that* profile, with no JavaScript involved.
+
+        Deliberately the route's value and not the request's query string: a
+        page that *refused* a profile (the unknown-profile 400) must not hand
+        it to the next page, or every link on that error page is another 400.
+        A page that passes nothing gets a clean nav, which is the right answer
+        for the run history and for every error shell.
+
+        ``data-profile-link`` holds each link's bare path, and is the contract
+        app.js rebuilds these hrefs from when the selector changes without a
+        submit -- the one case no server render can know.
+
+        The history link carries it. The history does not filter by profile,
+        but it does carry one to the page after it, so a bare link here would
+        break the chain at the click -- one step before anything server-side
+        could help. Plan is not among them: it is a button in the controls
+        above, and takes the profile in its own hidden input.
+
+        The walkthrough is not linked here. ``/walkthrough`` still serves, and
+        the plan page still links into its per-task pages; it is only off the
+        bar.
+      #}
+      {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
+      <nav class="app-bar__nav" aria-label="Main">
+        <a href="/{{ profile_query }}" data-profile-link="/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="app-main">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
