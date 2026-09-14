@@ -175,9 +175,25 @@ def create_app(project_root: Path) -> FastAPI:
     return app
 
 
+def create_app_for_cwd() -> FastAPI:
+    """Build the UI application for the project in the working directory.
+
+    The name ``kptn ui --reload`` points uvicorn at. The reloader re-imports
+    the application in a fresh subprocess after every change, so it needs an
+    import string rather than the object the launcher normally hands over --
+    and an import string cannot carry the project root as an argument.
+
+    Reading ``Path.cwd()`` here is the same rule the launcher itself follows
+    ("the served project is always the working directory"), and the reload
+    subprocess inherits that directory, so both paths serve the same project.
+    """
+    return create_app(Path.cwd())
+
+
 __all__ = [
     "RECONCILE_INTERVAL_SECONDS",
     "STATIC_DIR",
     "TEMPLATES_DIR",
     "create_app",
+    "create_app_for_cwd",
 ]

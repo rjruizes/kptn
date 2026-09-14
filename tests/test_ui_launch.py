@@ -8,7 +8,9 @@ The launcher is small but has four properties worth pinning down:
    pipeline runner". A regression here is a security regression.
 2. It hands ``uvicorn.run`` the *application object*, not an import string --
    the app is built by a factory bound to ``Path.cwd()``, so an import string
-   could not name it.
+   could not name it. ``--reload`` is the one exception, and has to be: the
+   reloader re-imports in a subprocess, so it takes the import string of a
+   factory that reads the working directory itself.
 3. It opens a browser only once the health endpoint answers, and ``--no-open``
    skips that machinery entirely.
 4. ``python -m kptn ui`` works, because the VS Code extension invokes the
@@ -148,6 +150,86 @@ def test_ui_command_reports_a_directory_that_is_not_a_project(
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(app, ["ui", "--no-open"])
+
+    assert result.exit_code != 0
+    assert "pyproject.toml" in result.output
+    assert stub_uvicorn == [], "a broken project must not start a server"
+
+
+# -- --reload --------------------------------------------------------------
+#
+# The app is built by a factory bound to ``Path.cwd()``, which is why the
+# launcher normally hands uvicorn the object rather than a name. The reloader
+# cannot work that way: it re-imports the application in a fresh subprocess
+# after every change, so it needs a name to import. ``--reload`` therefore
+# switches to the import string of a factory that reads ``Path.cwd()`` itself
+# -- the subprocess inherits the working directory, so it lands on the same
+# project.
+
+
+def test_reload_hands_uvicorn_an_import_string_factory(
+    ui_project_cwd: Path, stub_uvicorn: list[tuple[tuple, dict]]
+) -> None:
+    """The reloader cannot re-import an object, only a name."""
+    result = CliRunner().invoke(app, ["ui", "--no-open", "--reload"])
+
+    assert result.exit_code == 0, result.output
+    (args, kwargs) = stub_uvicorn[0]
+    assert args[0] == "kptn_server.app:create_app_for_cwd"
+    assert kwargs["factory"] is True
+    assert kwargs["reload"] is True
+
+
+def test_reload_watches_the_code_that_serves_the_ui(
+    ui_project_cwd: Path, stub_uvicorn: list[tuple[tuple, dict]]
+) -> None:
+    """Uvicorn would otherwise watch the working directory: the project.
+
+    A pipeline edit is not what this flag is for -- the UI reads the project
+    per request already. What a developer wants restarted is the server whose
+    Python they just changed.
+    """
+    import kptn
+    import kptn_server
+
+    result = CliRunner().invoke(app, ["ui", "--no-open", "--reload"])
+
+    assert result.exit_code == 0, result.output
+    _args, kwargs = stub_uvicorn[0]
+    watched = {Path(directory) for directory in kwargs["reload_dirs"]}
+    assert watched == {
+        Path(kptn_server.__file__).parent,
+        Path(kptn.__file__).parent,
+    }
+    assert ui_project_cwd.resolve() not in watched
+
+
+def test_without_reload_nothing_changes(
+    ui_project_cwd: Path, stub_uvicorn: list[tuple[tuple, dict]]
+) -> None:
+    """The default path stays the object, and stays un-reloaded."""
+    from fastapi import FastAPI
+
+    result = CliRunner().invoke(app, ["ui", "--no-open"])
+
+    assert result.exit_code == 0, result.output
+    args, kwargs = stub_uvicorn[0]
+    assert isinstance(args[0], FastAPI)
+    assert not kwargs.get("reload")
+
+
+def test_reload_still_refuses_a_directory_that_is_not_a_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_uvicorn: list
+) -> None:
+    """The import string defers the build, so the check has to stay here.
+
+    Without it a reloading server would start, fail to import in its own
+    subprocess, and keep retrying -- a loop that reports the mistake far less
+    clearly than the message this command already has.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(app, ["ui", "--no-open", "--reload"])
 
     assert result.exit_code != 0
     assert "pyproject.toml" in result.output

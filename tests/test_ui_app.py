@@ -950,3 +950,21 @@ def test_app_js_polls_the_active_run_endpoint() -> None:
 
     assert "/active-run" in source, "app.js does not ask whether a run is active"
     assert "data-run-control" in source, "app.js does not target the bar's controls"
+
+
+# -- the factory the reloader imports --------------------------------------
+
+
+def test_create_app_for_cwd_serves_the_working_directory(
+    ui_project_cwd: Path,
+) -> None:
+    """``kptn ui --reload`` needs a factory an import string can name.
+
+    ``create_app`` takes the project root, which is why the launcher normally
+    hands uvicorn the object it built. The reloader re-imports instead, in a
+    subprocess that inherits the working directory -- so the name it imports
+    has to be the one that reads it.
+    """
+    application = app_module.create_app_for_cwd()
+
+    assert application.state.project.root == ui_project_cwd.resolve()

@@ -148,6 +148,11 @@ def ui(
     open_browser: bool = typer.Option(
         True, "--open/--no-open", help="Open a browser once the server is ready."
     ),
+    reload: bool = typer.Option(
+        False,
+        "--reload",
+        help="Restart the server when kptn's own source changes (development).",
+    ),
 ) -> None:
     """Serve the pipeline UI for the project in the current directory.
 
@@ -155,6 +160,11 @@ def ui(
     of their own project, and it must not become an unauthenticated remote
     pipeline runner. Nothing here accepts a project path from the network --
     the served project is always ``Path.cwd()``.
+
+    ``--reload`` is for working on kptn itself. Jinja already re-reads its
+    templates from disk, so without it a long-running server picks up markup
+    changes while still serving the Python it started with -- new chrome, old
+    behaviour, and a bug hunt that leads nowhere.
     """
     try:
         import uvicorn
@@ -180,4 +190,42 @@ def ui(
     if open_browser:
         _start_browser_opener(url)
 
+    if reload:
+        # The reloader re-imports the application in a fresh subprocess after
+        # every change, so it needs a name rather than the object built above
+        # -- and an import string cannot carry the project root. The factory
+        # reads Path.cwd(), which the subprocess inherits, so both paths serve
+        # the same project. The app built above is discarded, but the build is
+        # what proved this directory is servable: without that check a
+        # reloading server would start and then fail to import, over and over,
+        # reporting the mistake far less clearly than the message above does.
+        del application
+        uvicorn.run(
+            "kptn_server.app:create_app_for_cwd",
+            factory=True,
+            reload=True,
+            reload_dirs=_ui_source_directories(),
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+        return
+
     uvicorn.run(application, host=host, port=port, log_level="warning")
+
+
+def _ui_source_directories() -> list[str]:
+    """The trees ``--reload`` watches: kptn's own source, not the project.
+
+    Uvicorn would otherwise watch the working directory, which here is the
+    *served project* -- a pipeline edit is not what this flag is for, since
+    the UI reads the project per request already. What a developer wants
+    restarted is the server whose Python they just changed.
+    """
+    import kptn
+    import kptn_server
+
+    return [
+        str(Path(kptn_server.__file__).parent),
+        str(Path(kptn.__file__).parent),
+    ]
