@@ -194,8 +194,26 @@ def _safe_create_time(proc: psutil.Process) -> float:
         return -1.0
 
 
+#: Never copied out of a fixture project: everything here is *generated*.
+#:
+#: ``.kptn/`` is git-ignored rather than absent, so one local test run leaves
+#: a task-state database sitting in the source project -- and a copy that
+#: inherited it would skip ``noisy_task`` as cached, producing a run that
+#: succeeds instantly having printed nothing. ``__pycache__`` is the same
+#: trap one layer down: every copy imports a module of the same name.
+#:
+#: The failure this prevents lies about its cause. A fresh ``git worktree``
+#: has no ignored files, so the identical test passes at baseline and
+#: whatever change is under review looks responsible.
+GENERATED_PROJECT_STATE = shutil.ignore_patterns(".kptn", "__pycache__")
+
+
 def copy_fixture_project(source: Path, tmp_path: Path, name: str) -> Path:
     """Copy a fixture project so a test can write ``.kptn/`` into it freely.
+
+    The copy carries the project and none of the state a previous run left
+    in it -- see :data:`GENERATED_PROJECT_STATE` -- so a test's result does
+    not depend on whether this machine has run the suite before.
 
     A plain function, not a fixture, so that each fixture below depends only
     on pytest built-ins. Fixtures imported into a module's namespace do not
@@ -204,7 +222,7 @@ def copy_fixture_project(source: Path, tmp_path: Path, name: str) -> Path:
     dependency too -- a trap worth designing out rather than documenting.
     """
     destination = tmp_path / name
-    shutil.copytree(source, destination)
+    shutil.copytree(source, destination, ignore=GENERATED_PROJECT_STATE)
     return destination
 
 
