@@ -338,13 +338,12 @@ button:disabled {
   color: var(--warning);
 }
 
-/* The run's own controls and its console are one card. The rule is what is
- * left of the seam between them: enough to separate the two halves, without
- * the gap and second border that made them look unrelated. */
+/* The run's own controls and its console are one card, and now read as one:
+ * no rule between them. The header's counters and log download already say
+ * where its half ends, so a border only drew a seam across a single surface.
+ * The spacing stays -- the output must not collide with the controls. */
 .run-panel .console {
   margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
 }
 
 .console__bar {
@@ -355,17 +354,8 @@ button:disabled {
   margin-bottom: 10px;
 }
 
-.console__bar h2 {
-  margin: 0;
-}
-
-.console__counters {
-  display: flex;
-  gap: 12px;
-  color: var(--ink-muted);
-  font-size: 12px;
-}
-
+/* The only thing left in the bar, so it sits at the right on its own rather
+ * than being pushed there by a heading that no longer exists. */
 .console__follow {
   margin-left: auto;
   color: var(--ink-muted);
@@ -527,11 +517,21 @@ button:disabled {
   width: 14ch;
 }
 
-/* Sits in the console bar beside the follow toggle, which carries the
- * ``margin-left: auto`` that pushes the pair to the right. No margin of its
- * own: the bar's own ``gap`` does the spacing. */
-.console__log {
+/* Both sit in the run header's top row beside Retry. No margin of their own:
+ * the row's own ``gap`` does the spacing. The counters take the
+ * ``margin-left: auto`` so the tallies sit out at the right, away from the
+ * buttons -- reading matter, not another control. */
+.run-header__log {
   margin: 0;
+}
+
+.run-header__counters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: 12px;
 }
 
 /* -- warnings ----------------------------------------------------------- */

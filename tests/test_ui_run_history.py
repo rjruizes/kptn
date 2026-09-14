@@ -899,7 +899,7 @@ def test_history_does_not_hydrate_a_run_s_events(
 
     row = _history_row(client.get("/runs").text, record.run_id)
     # And the counts are still right, read out of the aggregate.
-    assert "tasks <b>1</b>" in row
+    assert "ran <b>1</b>" in row
     assert "1 warning in 1 task" in row
 
 
@@ -931,8 +931,8 @@ def test_history_counts_ignore_log_events(client, store: RunStore, app) -> None:
 
     body = client.get("/runs").text
     counts = _history_row(body, quiet.run_id)
-    assert "tasks <b>1</b>" in counts
-    assert "tasks <b>1</b>" in _history_row(body, noisy.run_id)
+    assert "ran <b>1</b>" in counts
+    assert "ran <b>1</b>" in _history_row(body, noisy.run_id)
 
     # And on the run page, where the events *are* hydrated for the console.
     console = client.get(f"/runs/{noisy.run_id}").text
@@ -1204,29 +1204,32 @@ def test_history_carrying_a_profile_still_lists_every_run(
     assert other.run_id in body, "the history filtered itself by the carried profile"
 
 
-def test_log_download_sits_in_the_console_bar_after_follow_output(
+def test_log_download_sits_in_the_header_after_retry(
     client, completed_run: RunRecord
 ) -> None:
-    """The two console controls belong together, in that order.
+    """The download is a control on the run, so it sits with the controls.
 
-    "Follow output" and "Download raw log" both act on the console's output,
-    so the download lives in the console's own bar to the right of the
-    toggle, rather than a section away from the thing it downloads.
+    It used to live in the console bar, beside "Follow output". They are not
+    the same kind of thing: one decides where output goes on screen, the
+    other takes the run away with you, next to Retry. The console bar keeps
+    only the toggle.
     """
     body = client.get(f"/runs/{completed_run.run_id}").text
 
+    header = body[body.index('id="run-header"') : body.index('class="console"')]
+    retry_at = header.find('class="run-header__retry"')
+    download_at = header.find(f'action="/runs/{completed_run.run_id}/log"')
+
+    assert retry_at != -1, "Retry left the run header"
+    assert download_at != -1, "the log download is not in the run header"
+    assert retry_at < download_at, (
+        "the log download renders before Retry, not to its right"
+    )
+
     bar = re.search(r'<header class="console__bar">(.*?)</header>', body, re.S)
     assert bar, "the console bar is gone"
-    inside = bar.group(1)
-
-    follow_at = inside.find('id="follow-output"')
-    download_at = inside.find(f'action="/runs/{completed_run.run_id}/log"')
-
-    assert follow_at != -1, "the follow toggle left the console bar"
-    assert download_at != -1, "the log download is not in the console bar"
-    assert follow_at < download_at, (
-        "the log download renders before the follow toggle, not to its right"
-    )
+    assert 'id="follow-output"' in bar.group(1)
+    assert "/log" not in bar.group(1), "the download is still in the console bar too"
 
 
 def test_the_log_download_is_offered_exactly_once(

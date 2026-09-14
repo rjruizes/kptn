@@ -869,3 +869,74 @@ def test_a_finished_event_without_a_status_keeps_its_kind(
     row = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
 
     assert '<span class="event__kind">task finished</span>' in row
+
+
+# -- counters and the log download in the run header -----------------------
+
+
+def test_counters_and_log_download_sit_in_the_run_header(
+    app, store: RunStore, client
+) -> None:
+    """Both moved out of the console bar and up beside Retry."""
+    record = _start_run(store, app.state.project.root)
+    store.append_event(record.run_id, "task_started", task_name="alpha")
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    body = client.get(f"/runs/{record.run_id}").text
+    header = body[body.index('id="run-header"') : body.index('class="console"')]
+
+    assert 'data-counter="tasks"' in header
+    assert f'action="/runs/{record.run_id}/log"' in header
+    assert ">Console<" not in body
+
+
+def test_the_closing_frame_still_carries_the_counters(
+    app, store: RunStore, client
+) -> None:
+    """The header frame replaces ``#run-header`` whole.
+
+    Counters live in that region now, so a context without them would blank
+    the numbers the moment a run went terminal under an open stream -- a
+    break that never shows on a reload, only mid-run.
+    """
+    record = _start_run(store, app.state.project.root)
+    store.append_event(record.run_id, "task_started", task_name="alpha")
+    store.append_event(record.run_id, "task_skipped", task_name="beta")
+    store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    payloads = _data_payloads(client.get(f"/runs/{record.run_id}/events").text)
+    frame = next(p for p in payloads if p.get("target") == "run-header")
+
+    assert 'data-counter="tasks">1<' in frame["html"]
+    assert 'data-counter="skipped">1<' in frame["html"]
+
+
+def test_the_live_recount_reaches_counters_outside_the_console() -> None:
+    """``app.js`` recounts off the DOM; the counters are no longer inside it.
+
+    Scoping the lookup to the console element would leave them frozen at
+    their server-rendered values for the life of the connection.
+    """
+    source = (STATIC_DIR / "app.js").read_text()
+
+    assert 'console_.querySelectorAll("[data-counter]")' not in source
+
+
+def test_the_counter_reads_ran_not_tasks(app, store: RunStore, client) -> None:
+    """It counts ``task_started``, so "tasks" beside "skipped" is a lie.
+
+    The internal key stays ``tasks``: it is also a ``counters()`` key, an
+    ``app.js`` lookup key, and part of the ``unfinished`` derivation.
+    """
+    record = _start_run(store, app.state.project.root)
+    store.append_event(record.run_id, "task_started", task_name="alpha")
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    run_page = client.get(f"/runs/{record.run_id}").text
+    history = client.get("/runs").text
+
+    assert "ran <b" in run_page
+    assert "tasks <b" not in run_page
+    assert "ran <b" in history
+    assert "tasks <b" not in history

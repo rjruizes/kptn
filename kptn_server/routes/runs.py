@@ -415,6 +415,11 @@ def render_region(
             "is_terminal": record.status in TERMINAL_STATUSES,
             "force_finish_offered": looks_wedged(record),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
+            # The counters live in this region, and this frame replaces it
+            # whole. Without them the numbers would blank the instant a run
+            # went terminal under an open stream -- invisible on a reload,
+            # which is where a reader would go looking for the bug.
+            "counters": counters(store.event_counts(record.run_id)),
         }
     else:
         raise ValueError(f"no such run-page region: {name!r}")

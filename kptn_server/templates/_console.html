@@ -20,29 +20,16 @@
          data-stream-url="/runs/{{ run.run_id }}/events"
          data-last-sequence="{{ last_sequence }}"
          data-terminal="{{ 'true' if is_terminal else 'false' }}">
+  {#
+    No heading. "Console" named the thing the reader was already looking at,
+    and the counters and the log download moved up beside the controls that
+    act on the run. What is left is the one control that belongs to the
+    output itself: where it goes on screen.
+  #}
   <header class="console__bar">
-    <h2>Console</h2>
-    <span class="console__counters">
-      <span class="console__counter">tasks <b data-counter="tasks">{{ counters.tasks }}</b></span>
-      <span class="console__counter">skipped <b data-counter="skipped">{{ counters.skipped }}</b></span>
-      <span class="console__counter">warnings <b data-counter="warnings">{{ counters.warnings }}</b></span>
-    </span>
     <label class="console__follow">
       <input type="checkbox" id="follow-output" checked> Follow output
     </label>
-
-    {#
-      Both console controls in one place: "Follow output" decides where the
-      output goes on screen, this takes the same output away with you.
-
-      A GET form rather than a styled link, so the control is a real
-      ``<button>``: it inherits the same rules as every other button in this
-      UI with no ``.button`` class to keep in sync, and it stays a plain GET
-      that works with JavaScript off.
-    #}
-    <form class="console__log" method="get" action="/runs/{{ run.run_id }}/log">
-      <button type="submit">Download raw log</button>
-    </form>
   </header>
 
   <ol class="console__events" id="console-events">

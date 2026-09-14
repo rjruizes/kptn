@@ -85,8 +85,13 @@
   function updateCounters(console_, list) {
     /* Counted off the DOM rather than tallied in a variable, so the numbers
      * survive a reconnect that re-sends nothing and a reload that re-renders
-     * everything. */
-    var counters = console_.querySelectorAll("[data-counter]");
+     * everything.
+     *
+     * Searched from the document, not from the console: the counters sit in
+     * the run header now, beside the controls that act on the run. Scoped to
+     * the console they would simply never be found, and would sit frozen at
+     * their server-rendered values for the life of the connection. */
+    var counters = document.querySelectorAll("[data-counter]");
     for (var i = 0; i < counters.length; i += 1) {
       var kind = { tasks: "task_started", skipped: "task_skipped", warnings: "warning" }[
         counters[i].getAttribute("data-counter")

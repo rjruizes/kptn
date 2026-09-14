@@ -86,6 +86,34 @@
       Retry
     </button>
   </form>
+
+  {#
+    A GET form rather than a styled link, so the control is a real
+    ``<button>``: it inherits the same rules as every other button in this UI
+    with no ``.button`` class to keep in sync, and it stays a plain GET that
+    works with JavaScript off.
+  #}
+  <form class="run-header__log" method="get" action="/runs/{{ run.run_id }}/log">
+    <button type="submit">Download raw log</button>
+  </form>
+
+  {#
+    The run's tallies, beside the controls that act on it rather than down in
+    the console bar. ``app.js`` recounts them off the DOM as events stream
+    in, by the ``data-counter`` attributes -- which is why this region's
+    closing frame has to carry ``counters`` too, or a run going terminal
+    under an open stream would blank them.
+
+    "ran", not "tasks": this counts ``task_started``, so beside "skipped" the
+    word "tasks" reads as a total, which it is not. The *key* stays ``tasks``
+    -- it is a ``counters()`` key, an ``app.js`` lookup key, and part of the
+    ``unfinished`` derivation.
+  #}
+  <span class="run-header__counters">
+    <span class="run-header__counter">ran <b data-counter="tasks">{{ counters.tasks }}</b></span>
+    <span class="run-header__counter">skipped <b data-counter="skipped">{{ counters.skipped }}</b></span>
+    <span class="run-header__counter">warnings <b data-counter="warnings">{{ counters.warnings }}</b></span>
+  </span>
   </div>
 
   {#
