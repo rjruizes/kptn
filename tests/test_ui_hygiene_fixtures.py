@@ -32,6 +32,7 @@ from types import ModuleType
 
 import pytest
 
+from kptn.project import _PROJECT_IMPORT_ROOTS, load_pipeline
 from tests.conftest import _INSTALLED_PACKAGE_DIRS, _is_installed_module
 
 pytestmark = pytest.mark.ui_hygiene
@@ -158,3 +159,52 @@ def test_a_namespace_package_does_not_survive_teardown() -> None:
 
     assert _IMPORTED_NAMESPACE_PACKAGE not in sys.modules
     assert f"{_IMPORTED_NAMESPACE_PACKAGE}.leaf" not in sys.modules
+
+
+# -- the accumulating project-root registry --------------------------------
+
+#: Set by the first test below, read by the second -- like the pair above,
+#: the property under test is what survives *between* two tests.
+#:
+#: Only the root that test registered, not the whole registry: modules
+#: without the ``ui_hygiene`` marker (``tests/test_project.py`` among them)
+#: load projects too, and nothing clears theirs. Asserting on the whole set
+#: would be asserting on those, which this fixture does not govern.
+_ROOT_REGISTERED_BY_THE_FIRST_TEST: list[str] = []
+
+
+def test_a_loaded_project_registers_its_root(ui_project: Path) -> None:
+    """Loading a project adds its root to the module-level registry.
+
+    ``kptn.project`` is imported at *module* scope here on purpose. The
+    eviction in ``restore_process_state`` only drops what a test imported
+    while it ran, so a module already in ``sys.modules`` at collection --
+    which ``kptn.project`` always is, because every UI test module imports
+    ``kptn_server.app`` at its top -- is never evicted, and its registry is
+    never reborn. Importing it inside the test instead would let the
+    eviction reset the registry as a side effect, and the test below would
+    pass without the restore it exists to pin.
+    """
+    load_pipeline(ui_project)
+
+    assert str(ui_project.resolve()) in _PROJECT_IMPORT_ROOTS
+    _ROOT_REGISTERED_BY_THE_FIRST_TEST.append(str(ui_project.resolve()))
+
+
+def test_the_registry_does_not_accumulate_across_tests() -> None:
+    """The previous test's root is gone by the time this one runs.
+
+    ``_PROJECT_IMPORT_ROOTS`` is never pruned in normal operation, which is
+    right for a server: it serves one project, so the set stays at one entry.
+    A test session loads a *different* temporary project per test, and
+    ``_prepare_project_imports`` rescans every entry of ``sys.modules``
+    against every accumulated root on each load -- so the suite's cost grows
+    with the square of its own size. Measured over 120 apps: 48.9s of
+    ``create_app`` without this reset, 6.9s with it.
+
+    Restoring it belongs here rather than in ``kptn.project``: the growth is
+    not a bug in a process that serves one project, and this fixture already
+    exists to undo what loading a pipeline does to the process.
+    """
+    assert _ROOT_REGISTERED_BY_THE_FIRST_TEST, "the first test did not run"
+    assert _ROOT_REGISTERED_BY_THE_FIRST_TEST[0] not in _PROJECT_IMPORT_ROOTS

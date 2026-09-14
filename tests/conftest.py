@@ -47,6 +47,8 @@ from pathlib import Path
 import psutil
 import pytest
 
+import kptn.project
+
 #: The deterministic project every UI test serves. Its ``success``, ``slow``,
 #: ``failure`` and ``db_error`` profiles are documented in
 #: ``tests/fixtures/ui_project/ui_pipeline.py``.
@@ -137,6 +139,7 @@ def restore_process_state(request: pytest.FixtureRequest):
     original_showwarning = warnings.showwarning
     root = logging.getLogger()
     original_handlers = root.handlers.copy()
+    original_roots = set(kptn.project._PROJECT_IMPORT_ROOTS)
 
     yield
 
@@ -148,6 +151,33 @@ def restore_process_state(request: pytest.FixtureRequest):
         sys.modules.pop(name, None)
     warnings.showwarning = original_showwarning
     root.handlers[:] = original_handlers
+    _restore_project_import_roots(original_roots)
+
+
+def _restore_project_import_roots(original: set[str]) -> None:
+    """Forget the project roots this test taught ``kptn.project`` about.
+
+    ``_prepare_project_imports`` records every root it has ever loaded and
+    never prunes it, then rescans all of ``sys.modules`` against every
+    recorded root on each load. For a server that is free: it serves one
+    project, so the set stays at one entry. A test session loads a different
+    temporary project per test, so the set grows once per test and the scan
+    grows with it -- the suite's cost becomes quadratic in its own size.
+    Measured over 120 apps: 48.9s inside ``create_app`` without this, 6.9s
+    with it.
+
+    The eviction above cannot do this job. It drops only what a test imported
+    while it ran, and ``kptn.project`` is in ``sys.modules`` from collection
+    onwards -- every UI test module imports ``kptn_server.app`` at its top --
+    so it is never evicted and its registry is never reborn.
+
+    Mutated in place rather than rebound, and through the module object this
+    file holds: functions bound at collection close over *that* module's
+    globals, so a re-imported ``kptn.project`` is not necessarily the one
+    doing the recording.
+    """
+    kptn.project._PROJECT_IMPORT_ROOTS.clear()
+    kptn.project._PROJECT_IMPORT_ROOTS.update(original)
 
 
 @pytest.fixture(autouse=True)
