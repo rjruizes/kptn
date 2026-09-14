@@ -11,7 +11,7 @@
   is the only place it is turned into markup. Do not add ``| safe`` to it.
 #}
 {% macro event_row(event) -%}
-<li class="event event--{{ event.kind }}{% if event.severity %} event--{{ event.severity }}{% endif %}"
+<li class="event event--{{ event.kind }}{% if event.severity %} event--{{ event.severity }}{% endif %}{% if event.status %} event--{{ event.status }}{% endif %}"
     id="event-{{ event.sequence }}"
     data-sequence="{{ event.sequence }}"
     data-kind="{{ event.kind }}">
@@ -19,6 +19,6 @@
   <time class="event__clock" datetime="{{ event.timestamp }}">{{ event.clock }}</time>
   <span class="event__kind">{{ event.label }}</span>
   {% if event.task %}<span class="event__task">{{ event.task }}</span>{% endif %}
-  {% if event.text %}<pre class="event__text">{{ event.text }}</pre>{% endif %}
+  {% if event.text %}{% if event.is_log %}<pre class="event__text">{{ event.text }}</pre>{% else %}<span class="event__summary">{{ event.text }}</span>{% endif %}{% endif %}
 </li>
 {%- endmacro %}

@@ -258,7 +258,22 @@ def _summary(event: StoredEvent) -> str:
         return str(payload.get("message", ""))
     if event.kind == EventKind.TASK_SKIPPED.value:
         return "cached"
-    if event.kind in (EventKind.TASK_FINISHED.value, EventKind.RUN_FINISHED.value):
+    if event.kind == EventKind.RUN_FINISHED.value:
+        # Status only. ``kptn.run`` finishes a failed run with the very
+        # exception that propagated out of the task, so the error here is the
+        # same sentence the task's own row printed immediately above -- said
+        # twice, in consecutive rows.
+        #
+        # Suppressing it only when it *does* duplicate would be the precise
+        # rule and the wrong one: that needs the neighbouring event, and the
+        # stream renders one event at a time, so the row would differ
+        # depending on whether it arrived live or came back with a reload.
+        #
+        # Nothing becomes unexplained. A failure outside any task has no task
+        # row to have shown it, but the worker prints the traceback into the
+        # captured log either way, so the reason is always on screen.
+        return str(payload.get("status", ""))
+    if event.kind == EventKind.TASK_FINISHED.value:
         parts = [str(payload[key]) for key in ("status", "error") if payload.get(key)]
         duration = payload.get("duration_seconds")
         if isinstance(duration, (int, float)):
@@ -282,9 +297,22 @@ def console_event(event: StoredEvent, log_path: Path) -> dict[str, Any]:
         "kind": event.kind,
         "label": event.kind.replace("_", " "),
         "task": event.task_name,
+        # The instant, unambiguous, for the ``datetime`` attribute...
         "timestamp": _isoformat(event.timestamp),
-        "clock": event.timestamp.strftime("%H:%M:%S"),
+        # ...and the developer's own wall clock for the text beside it. Events
+        # are stored in UTC; the CLI and the raw log download both read local,
+        # and a console offset from the log it mirrors is a discrepancy that
+        # costs an hour to notice.
+        "clock": event.timestamp.astimezone().strftime("%H:%M:%S"),
         "severity": str(event.payload.get("severity") or "") if is_log else "",
+        # The outcome, for the stylesheet. "task finished" is one kind whether
+        # the task succeeded or failed, so without this the CSS has nothing to
+        # colour a failure differently by -- and a failure rendered in the
+        # success green says the opposite of what happened.
+        "status": "" if is_log else str(event.payload.get("status") or ""),
+        # Captured output is a block: multi-line and whitespace-significant.
+        # A summary is a few words, and belongs on the row it describes.
+        "is_log": is_log,
         "text": log_text(log_path, event) if is_log else _summary(event),
     }
 

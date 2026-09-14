@@ -415,10 +415,27 @@ button:disabled {
   color: var(--accent);
 }
 
+/* Captured output starts on the row that labels it and takes the rest of
+   the width, rather than claiming a line of its own: a single line of task
+   output is the common case, and a row whose text always began underneath
+   its own timestamp read like two entries instead of one.
+
+   ``pre-wrap`` and ``min-width: 0`` keep the multi-line case honest -- real
+   pipeline output is whitespace-significant, and a flex item needs the zero
+   minimum before it is allowed to wrap inside its track at all. */
 .event__text {
-  flex: 1 1 100%;
-  margin: 2px 0 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
   white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A summary ("cached", "succeeded 1.23s") is a few words about the row it
+   sits on, so it stays on that row and wraps only when it has to. */
+.event__summary {
+  color: var(--ink-muted);
+  min-width: 0;
   word-break: break-word;
 }
 
@@ -427,9 +444,16 @@ button:disabled {
   color: var(--warning);
 }
 
-.event--run_finished .event__kind,
-.event--task_finished .event__kind {
+/* Coloured by outcome, never by kind: "task finished" is the same kind for a
+   success and a failure, and colouring the kind painted every failure in the
+   success green. Statuses with no rule here (stopped, interrupted) stay the
+   default ink rather than borrowing a colour that would overstate them. */
+.event--succeeded .event__kind {
   color: var(--ok);
+}
+
+.event--failed .event__kind {
+  color: var(--danger);
 }
 
 .notice--error {

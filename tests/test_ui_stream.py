@@ -36,6 +36,7 @@ from kptn.runner.events import EventKind
 from kptn_server.app import STATIC_DIR, create_app
 from kptn_server.routes import runs as runs_module
 from kptn_server.run_store import (
+    STATUS_FAILED,
     STATUS_INTERRUPTED,
     STATUS_SUCCEEDED,
     RunRecord,
@@ -612,3 +613,198 @@ def test_app_js_swaps_every_region_the_server_sends() -> None:
     assert listed == dict(runs_module.REGION_EVENT_TARGETS), (
         "app.js and runs.REGION_EVENT_TARGETS have diverged"
     )
+
+
+# -- one-line summary rows -------------------------------------------------
+
+
+def _row_for(body: str, sequence: int) -> str:
+    start = body.index(f'id="event-{sequence}"')
+    start = body.rindex("<li", 0, start)
+    return body[start : body.index("</li>", start)]
+
+
+def test_summary_events_render_on_one_line(app, store: RunStore, client) -> None:
+    """A one-word summary does not get a line of its own.
+
+    ``.event__text`` is ``flex: 1 1 100%`` -- a full-width flex line, which is
+    what multi-line captured output needs. Rendering ``cached`` into the same
+    element spends a whole row on one word, so the console reads nothing like
+    the raw log it mirrors.
+    """
+    record = _start_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "task_skipped",
+        task_name="init_database",
+        payload={"mode": "python", "cached": True},
+    )
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    row = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
+
+    assert "<pre" not in row, row
+    assert 'class="event__summary"' in row
+    assert "cached" in row
+    assert "init_database" in row
+
+
+def test_captured_output_still_renders_as_a_block(app, store: RunStore, client) -> None:
+    """Log events keep the ``<pre>``.
+
+    Their text is real pipeline output: multi-line, whitespace-significant,
+    and the reason ``.event__text`` exists. Collapsing summaries must not
+    collapse this.
+    """
+    record = _start_run(store, app.state.project.root)
+    _append_log(store, record, "   recs\n0    39\n")
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    row = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
+
+    assert '<pre class="event__text">' in row
+    assert "event__summary" not in row
+
+
+def test_streamed_summary_fragment_matches_the_reloaded_row(
+    app, store: RunStore, client
+) -> None:
+    """The contract in ``_event.html``: append == reload.
+
+    A summary rendered one way by the page and another by the stream would
+    make a row change shape when the connection dropped and the page came
+    back.
+    """
+    record = _start_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "task_skipped",
+        task_name="init_database",
+        payload={"mode": "python", "cached": True},
+    )
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    reloaded = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
+    payloads = _data_payloads(client.get(f"/runs/{record.run_id}/events").text)
+    streamed = next(p for p in payloads if p.get("kind") == "task_skipped")["html"]
+
+    assert reloaded.strip() == streamed[: streamed.index("</li>")].strip()
+
+
+def test_console_clock_is_local_time(app, store: RunStore, client) -> None:
+    """The console clock reads like the CLI's, not like the database's.
+
+    Events are stored in UTC. The raw log download renders local time, and a
+    console five hours off the log it mirrors is the kind of discrepancy a
+    developer debugs for an hour before noticing.
+    """
+    from datetime import datetime, timezone
+
+    stamp = datetime(2026, 9, 14, 17, 13, 7, tzinfo=timezone.utc)
+    record = _start_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "task_skipped",
+        task_name="init_database",
+        timestamp=stamp,
+        payload={"cached": True},
+    )
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    row = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
+
+    assert f">{stamp.astimezone().strftime('%H:%M:%S')}<" in row
+    # The machine-readable attribute stays the unambiguous instant.
+    assert 'datetime="2026-09-14T17:13:07+00:00"' in row
+
+
+def test_run_finished_row_does_not_repeat_the_task_error(
+    app, store: RunStore, client
+) -> None:
+    """The run's error is the failing task's, already shown one row above.
+
+    ``kptn.run`` finishes a failed run with ``error=str(exc)`` -- the very
+    exception that propagated out of the task -- so rendering it again says
+    the same sentence twice in two consecutive rows.
+
+    The status stays: "the run failed" is not implied by a task failing, and
+    the reason is never lost, because the worker prints the traceback into
+    the captured log.
+    """
+    record = _start_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="qa_omop_person",
+        payload={
+            "mode": "python",
+            "status": "failed",
+            "error": "QC failed. Check person.",
+            "duration_seconds": 1.72,
+        },
+    )
+    store.append_event(
+        record.run_id,
+        "run_finished",
+        payload={"status": "failed", "error": "QC failed. Check person."},
+    )
+    store.finish_run(record.run_id, STATUS_FAILED, exit_code=1)
+
+    body = client.get(f"/runs/{record.run_id}").text
+    task_row = _row_for(body, 2)
+    run_row = _row_for(body, 3)
+
+    assert "QC failed. Check person." in task_row
+    assert "1.72s" in task_row
+
+    assert "failed" in run_row
+    assert "QC failed. Check person." not in run_row
+
+
+def test_failed_rows_are_not_coloured_as_success(app, store: RunStore, client) -> None:
+    """A failure must not render in the success colour.
+
+    The console's colour rule keys on the event *kind*, and "task finished"
+    is the same kind whether the task succeeded or failed -- so a failure
+    came out in the same green as a success. The outcome has to reach the
+    markup for the stylesheet to be able to tell them apart.
+    """
+    record = _start_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="qa_omop_person",
+        payload={"mode": "python", "status": "failed", "error": "QC failed."},
+    )
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="load_ref",
+        payload={"mode": "python", "status": "succeeded"},
+    )
+    store.append_event(
+        record.run_id,
+        "run_finished",
+        payload={"status": "failed", "error": "QC failed."},
+    )
+    store.finish_run(record.run_id, STATUS_FAILED, exit_code=1)
+
+    body = client.get(f"/runs/{record.run_id}").text
+
+    assert "event--failed" in _row_for(body, 2)
+    assert "event--succeeded" in _row_for(body, 3)
+    assert "event--failed" in _row_for(body, 4)
+
+
+def test_the_stylesheet_colours_failure_apart_from_success() -> None:
+    """The markup distinction is only worth anything if the CSS uses it.
+
+    Asserted against the stylesheet because there is nowhere else it can be:
+    the colour is not observable in the rendered HTML.
+    """
+    source = (STATIC_DIR / "app.css").read_text()
+
+    assert ".event--failed .event__kind" in source
+    assert "var(--danger)" in source
+    # The success colour must no longer apply to every finished event.
+    assert ".event--task_finished .event__kind" not in source
