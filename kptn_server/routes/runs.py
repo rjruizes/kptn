@@ -82,14 +82,15 @@ from typing import Any, AsyncIterator, Mapping, Sequence
 
 from fastapi import APIRouter, Request
 from fastapi.responses import (
-    FileResponse,
     HTMLResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
+from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
 from kptn_server.routes.support import (
     error_response,
@@ -948,13 +949,18 @@ def run_log(request: Request, run_id: str):
             run_id=run_id,
         )
 
-    return FileResponse(
-        log_path,
+    store: RunStore = request.app.state.store
+    body = render_run_log(store.events_after(run_id), log_path)
+
+    return Response(
+        content=body,
         media_type="text/plain; charset=utf-8",
-        # Named after the run, not after the file on disk: the stored path is
-        # an internal detail, and a browser download called
-        # "3f2c...e91.log" tells the developer nothing.
-        filename=f"kptn-{run_id}.log",
+        headers={
+            # Named after the run, not after the file on disk: the stored path
+            # is an internal detail, and a browser download called
+            # "3f2c...e91.log" tells the developer nothing.
+            "content-disposition": f'attachment; filename="kptn-{run_id}.log"',
+        },
     )
 
 

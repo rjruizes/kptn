@@ -1236,3 +1236,91 @@ def test_the_log_download_is_offered_exactly_once(
     body = client.get(f"/runs/{completed_run.run_id}").text
 
     assert body.count(f'action="/runs/{completed_run.run_id}/log"') == 1
+
+
+def test_log_download_renders_progress_lines_from_the_event_stream(
+    client, store, app
+) -> None:
+    """A fully-cached run's download is the CLI's output, not an empty file.
+
+    ``kptn.run`` takes *one* event sink. The CLI gets ``ConsoleEventSink``,
+    which prints ``[SKIP] ... -- cached``; the worker passes ``RunStoreSink``
+    instead, so nothing ever writes those lines to the stdout that
+    ``capture_worker_output`` captures. A run whose tasks were all cached and
+    printed nothing of their own therefore leaves a zero-byte log file, and
+    "Download raw log" hands back a blank file.
+
+    The progress is not lost -- it is in ``run_events`` -- so the download
+    renders it rather than depending on whether anything happened to be
+    printed.
+    """
+    record = _seed_run(store, app.state.project.root)
+    Path(record.log_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(record.log_path).touch()
+
+    for task in ("init_database", "aou_concepts", "load_ref"):
+        store.append_event(
+            record.run_id,
+            "task_skipped",
+            task_name=task,
+            payload={"mode": "python", "cached": True},
+        )
+
+    response = client.get(f"/runs/{record.run_id}/log")
+
+    assert response.status_code == 200
+    lines = response.text.splitlines()
+    assert len(lines) == 3, response.text
+    for line, task in zip(lines, ("init_database", "aou_concepts", "load_ref")):
+        assert re.fullmatch(rf"\[SKIP\] \d\d:\d\d:\d\d {task} — cached", line), line
+
+
+def test_log_download_interleaves_captured_output_with_progress(
+    client, store, app
+) -> None:
+    """Captured output lands between the progress lines it came from.
+
+    Rendering the stream and concatenating the file would put every captured
+    byte after every progress line. Sequence order is what the run actually
+    produced, and it is what a developer reading a failure needs.
+    """
+    record = _seed_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "task_skipped",
+        task_name="init_database",
+        payload={"mode": "python", "cached": True},
+    )
+    _seed_log_event(store, record, "rows: 39\n")
+    store.append_event(
+        record.run_id,
+        "task_skipped",
+        task_name="load_ref",
+        payload={"mode": "python", "cached": True},
+    )
+
+    lines = client.get(f"/runs/{record.run_id}/log").text.splitlines()
+
+    assert [line.split(" ")[0] for line in lines] == ["[SKIP]", "rows:", "[SKIP]"]
+    assert lines[0].endswith("init_database — cached")
+    assert lines[2].endswith("load_ref — cached")
+
+
+def test_log_download_keeps_bytes_no_event_accounts_for(client, store, app) -> None:
+    """A file longer than its events still downloads whole.
+
+    Everything written through ``capture_worker_output`` records a span, so
+    an unaccounted-for byte means the file and the stream disagree -- a
+    truncation, a rotation, or something that wrote to the log without going
+    through the capture. The old whole-file response kept those bytes, and
+    losing them to a rendering change would be a silent regression.
+    """
+    record = _seed_run(store, app.state.project.root)
+    _seed_log_event(store, record, "accounted for\n")
+    with open(record.log_path, "ab") as handle:
+        handle.write(b"written behind the capture's back\n")
+
+    body = client.get(f"/runs/{record.run_id}/log").text
+
+    assert "accounted for\n" in body
+    assert "written behind the capture's back\n" in body
