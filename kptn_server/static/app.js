@@ -2,8 +2,8 @@
  * Page-local behaviour for the shared pipeline UI.
  *
  * Vendored and dependency-free. htmx does the request plumbing; this file
- * holds only what htmx cannot express declaratively, which right now is one
- * thing: the run console's live event stream.
+ * holds only what htmx cannot express declaratively: the run console's live
+ * event stream, the nav's profile, and the app bar's active-run poll.
  *
  * Two rules govern everything below.
  *
@@ -28,6 +28,8 @@
 
   var FOLLOW_STORAGE_KEY = "kptn.followOutput";
   var RECONNECT_DELAY_MS = 1000;
+  var ACTIVE_RUN_URL = "/active-run";
+  var ACTIVE_RUN_POLL_MS = 3000;
 
   /* Every event name the server can send. EventSource dispatches by name, so
    * an unlisted kind would arrive and be silently dropped. */
@@ -260,8 +262,93 @@
     select.addEventListener("change", sync);
   }
 
+  function initRunLock() {
+    /* The app bar renders its controls disabled while a run holds the
+     * project lock, which is right at the moment the page is drawn and stale
+     * the moment the run ends. Only the run console has a stream to hear
+     * that on, and the bar is on every page -- so the bar asks.
+     *
+     * Polling rather than swapping a server-rendered fragment in: the group
+     * holds the profile <select>, and replacing it every few seconds would
+     * discard a choice the reader had not submitted yet. `disabled` is the
+     * one thing that can be toggled without touching what is in the
+     * controls. Same reason the console is not special-cased -- one
+     * mechanism on every page cannot disagree with itself.
+     *
+     * With JavaScript off the controls keep whatever the server rendered,
+     * which is correct for that page load; this only ever improves on it. */
+    var controls = document.querySelectorAll("[data-run-control]");
+    var busy = document.querySelector("[data-run-busy]");
+    if (!controls.length || typeof window.fetch !== "function") {
+      return;
+    }
+
+    var timer = null;
+
+    function apply(state) {
+      for (var i = 0; i < controls.length; i += 1) {
+        controls[i].disabled = state.active;
+      }
+      if (busy) {
+        /* Property assignments, never markup: the run id is the only value
+         * that moves, and it goes in through `href`. */
+        busy.href = state.run_id ? "/runs/" + encodeURIComponent(state.run_id) : "";
+        busy.hidden = !state.active;
+      }
+    }
+
+    function poll() {
+      window
+        .fetch(ACTIVE_RUN_URL, { headers: { Accept: "application/json" } })
+        .then(function (response) {
+          return response.ok ? response.json() : null;
+        })
+        .then(function (state) {
+          if (state) {
+            apply(state);
+          }
+        })
+        .catch(function () {
+          /* A server that is restarting under a running dev session is the
+           * common case. Leave the bar as it is and ask again. */
+        });
+    }
+
+    function start() {
+      if (timer === null) {
+        timer = window.setInterval(poll, ACTIVE_RUN_POLL_MS);
+      }
+    }
+
+    function stop() {
+      if (timer !== null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    }
+
+    document.addEventListener("visibilitychange", function () {
+      /* A backgrounded tab polling every three seconds is a run store query
+       * every three seconds for nobody. Ask once on the way back, so the bar
+       * is right before the reader can reach for it. */
+      if (document.hidden) {
+        stop();
+      } else {
+        poll();
+        start();
+      }
+    });
+
+    if (!document.hidden) {
+      start();
+    }
+    window.addEventListener("pagehide", stop);
+  }
+
   window.kptn.initConsole = initConsole;
   window.kptn.initProfileNav = initProfileNav;
+  window.kptn.initRunLock = initRunLock;
   initConsole();
   initProfileNav();
+  initRunLock();
 })();

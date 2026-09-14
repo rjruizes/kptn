@@ -117,10 +117,25 @@ def _build_templates() -> Jinja2Templates:
     The base page needs the project name and the profile list on *every* page,
     so a context processor supplies them once here instead of each router
     having to remember.
+
+    ``active_run`` is here for the same reason and one more: the app bar
+    disables Run, Plan and the profile selector while a run holds the
+    project lock, and the bar is on every page -- including the error pages,
+    which no router renders through a shared helper. A router that had to
+    remember this would eventually forget on exactly one page, and that page
+    would offer a Run button whose only outcome is the 409.
+
+    One indexed lookup by project root per render, against the same lock
+    table ``POST /runs`` consults before it creates anything.
     """
 
     def project_context(request: Request) -> dict[str, Any]:
-        return {"project": request.app.state.project}
+        return {
+            "project": request.app.state.project,
+            "active_run": request.app.state.store.active_run(
+                request.app.state.project.root
+            ),
+        }
 
     return Jinja2Templates(
         directory=str(TEMPLATES_DIR), context_processors=[project_context]

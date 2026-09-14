@@ -40,6 +40,7 @@ from kptn_server.project import ProjectContext, ProjectError
 from kptn_server.run_store import (
     STATUS_INTERRUPTED,
     STATUS_QUEUED,
+    STATUS_SUCCEEDED,
     RunRequest,
     RunStore,
 )
@@ -489,7 +490,7 @@ def test_base_page_loads_only_vendored_assets(ui_project: Path) -> None:
 
 
 def test_base_page_offers_the_shared_navigation(ui_project: Path) -> None:
-    """Two nav destinations, and the two actions that live in the bar.
+    """One nav destination, and the two actions that live in the bar.
 
     Asserted against the nav and the bar separately, because "Run" and
     "Plan" appear in both as words: checking the whole document for the
@@ -499,10 +500,7 @@ def test_base_page_offers_the_shared_navigation(ui_project: Path) -> None:
     nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S).group(0)
     bar = _app_bar(body)
 
-    # ``/walkthrough`` is the route the walkthrough router serves; the nav's
-    # label for it is still "How it works".
-    assert ">Runs<" in nav and "How it works" in nav
-    assert "/walkthrough" in nav
+    assert ">History<" in nav
     assert ">Run<" in bar and ">Plan<" in bar
 
 
@@ -532,7 +530,7 @@ def _nav_href(body: str, base: str) -> str:
     return match.group(1)
 
 
-@pytest.mark.parametrize("base", ["/", "/walkthrough"])
+@pytest.mark.parametrize("base", ["/"])
 def test_nav_carries_the_selected_profile_between_pages(
     ui_project: Path, base: str
 ) -> None:
@@ -542,7 +540,7 @@ def test_nav_carries_the_selected_profile_between_pages(
     assert _nav_href(body, base) == f"{base}?profile=slow"
 
 
-@pytest.mark.parametrize("base", ["/", "/walkthrough"])
+@pytest.mark.parametrize("base", ["/"])
 def test_nav_omits_the_profile_when_none_is_selected(
     ui_project: Path, base: str
 ) -> None:
@@ -636,7 +634,7 @@ def test_unknown_profile_error_page_offers_a_way_out(ui_project: Path) -> None:
     """
     body = TestClient(create_app(ui_project)).get("/?profile=nope").text
 
-    for base in ("/", "/walkthrough"):
+    for base in ("/",):
         assert _nav_href(body, base) == base, (
             f"the {base!r} link carries the profile that was just refused"
         )
@@ -740,13 +738,17 @@ def test_nav_no_longer_offers_a_plan_link(ui_project: Path) -> None:
     assert ">Plan<" not in nav.group(0)
 
 
-def test_nav_offers_the_history_and_the_walkthrough(ui_project: Path) -> None:
-    """Two destinations left, and no "Run" page to link to."""
+def test_nav_offers_the_history_alone(ui_project: Path) -> None:
+    """One destination left, and no "Run" page to link to.
+
+    The walkthrough is off the bar: ``/walkthrough`` still serves, and the
+    plan page still links into it, but the nav does not offer it.
+    """
     body = TestClient(create_app(ui_project)).get("/").text
     nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S).group(0)
 
     assert _nav_href(nav, "/") == "/"
-    assert _nav_href(nav, "/walkthrough") == "/walkthrough"
+    assert "/walkthrough" not in nav, "the nav still offers the walkthrough"
     assert ">Run<" not in nav, "the nav still links to a run page that is gone"
 
 
@@ -775,3 +777,176 @@ def test_every_page_can_start_a_run(ui_project: Path, page: str) -> None:
 
     assert '<form id="run-form"' in bar
     assert 'form="run-form"' in bar, f"{page}'s selector is not bound to the run form"
+
+
+# -- the bar's controls go quiet while a run is in progress ----------------
+#
+# One run per project is the store's rule, enforced by the lock row that
+# ``create_run`` takes and ``finish_run`` releases -- POST /runs answers 409
+# to anyone who asks anyway. The bar is where that rule becomes visible:
+# offering an enabled Run button whose only possible outcome is an error page
+# is an invitation to be told no.
+#
+# The disabling is an affordance, never the guard. The 409 stays exactly
+# where it is; these tests are about what the reader is offered.
+
+
+def _control_tag(bar: str, pattern: str) -> str:
+    """The opening tag of one app-bar control, by a pattern matching it."""
+    match = re.search(pattern, bar, re.S)
+    assert match, f"no control matching {pattern!r} in the app bar"
+    return match.group(0)
+
+
+def _bar_controls(bar: str) -> dict[str, str]:
+    """The three controls that act on the selected profile."""
+    return {
+        "select": _control_tag(bar, r"<select[^>]*id=\"profile-select\"[^>]*>"),
+        "run": _control_tag(bar, r"<button[^>]*>\s*Run\s*</button>"),
+        "plan": _control_tag(bar, r"<button[^>]*>\s*Plan\s*</button>"),
+    }
+
+
+def test_app_bar_controls_are_disabled_while_a_run_holds_the_lock(
+    ui_project: Path,
+) -> None:
+    """The three controls that would start or re-aim a run.
+
+    Without this the bar offers a Run button whose only outcome is the 409
+    page, and a selector whose choice that page throws away.
+    """
+    app = create_app(ui_project)
+    app.state.store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+
+    bar = _app_bar(TestClient(app).get("/").text)
+
+    for name, tag in _bar_controls(bar).items():
+        assert "disabled" in tag, f"the {name} control is still offered"
+
+
+def test_app_bar_controls_are_offered_when_the_project_is_idle(
+    ui_project: Path,
+) -> None:
+    """The other half: a finished run must not leave the bar wedged shut."""
+    app = create_app(ui_project)
+    record = app.state.store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+    app.state.store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    bar = _app_bar(TestClient(app).get("/").text)
+
+    for name, tag in _bar_controls(bar).items():
+        assert "disabled" not in tag, f"the {name} control is refused for no reason"
+
+
+def test_app_bar_says_why_it_is_disabled_and_links_to_the_run(
+    ui_project: Path,
+) -> None:
+    """A control refused without a reason is a bug report waiting to happen.
+
+    The link is the way out, too: the active run's page is where Stop is.
+    """
+    app = create_app(ui_project)
+    record = app.state.store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+
+    bar = _app_bar(TestClient(app).get("/").text)
+
+    hint = re.search(r'<a[^>]*class="app-bar__busy"[^>]*>.*?</a>', bar, re.S)
+    assert hint, "the bar does not say a run is in progress"
+    assert f'href="/runs/{record.run_id}"' in hint.group(0)
+    assert "hidden" not in hint.group(0), "the reason is on the page but invisible"
+
+
+def test_app_bar_hint_is_hidden_when_the_project_is_idle(ui_project: Path) -> None:
+    """No run, no notice -- but the element stays, hidden.
+
+    The poller toggles it rather than building it, so the hint's markup
+    lives in the template alone. A version assembled in JavaScript would be
+    a second copy of it, free to drift from this one.
+    """
+    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
+
+    hint = re.search(r"<a[^>]*class=\"app-bar__busy\"[^>]*>", bar)
+    assert hint, "the hint element is gone, so the poller has nothing to reveal"
+    assert "hidden" in hint.group(0), "the bar claims a run is in progress"
+
+
+@pytest.mark.parametrize("page", ["/", "/plan", "/walkthrough"])
+def test_every_page_disables_the_bar_during_a_run(
+    ui_project: Path, page: str
+) -> None:
+    """The bar is on every page, so the rule has to be on every page.
+
+    The run console is deliberately included: its own Run button is the app
+    bar's, and "run this again" is exactly the mis-click this prevents.
+    """
+    app = create_app(ui_project)
+    app.state.store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+
+    bar = _app_bar(TestClient(app).get(page).text)
+
+    assert all("disabled" in tag for tag in _bar_controls(bar).values())
+
+
+# -- ... and come back without a reload ------------------------------------
+#
+# Nothing server-rendered can know that the run finished a second after the
+# page was drawn. The history and plan pages have no stream of their own, so
+# the bar asks: one small endpoint, polled, toggling `disabled` and nothing
+# else. It deliberately does not re-render the controls -- a swap would wipe
+# an unsubmitted profile choice out from under the reader every few seconds.
+
+
+def test_active_run_endpoint_names_the_run_holding_the_lock(
+    ui_project: Path,
+) -> None:
+    app = create_app(ui_project)
+    record = app.state.store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+
+    payload = TestClient(app).get("/active-run").json()
+
+    assert payload == {"active": True, "run_id": record.run_id}
+
+
+def test_active_run_endpoint_reports_an_idle_project(ui_project: Path) -> None:
+    payload = TestClient(create_app(ui_project)).get("/active-run").json()
+
+    assert payload == {"active": False, "run_id": None}
+
+
+def test_active_run_endpoint_follows_the_lock_being_released(
+    ui_project: Path,
+) -> None:
+    """The transition the poller exists to see."""
+    app = create_app(ui_project)
+    client = TestClient(app)
+    record = app.state.store.create_run(
+        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
+    )
+    assert client.get("/active-run").json()["active"] is True
+
+    app.state.store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    assert client.get("/active-run").json()["active"] is False
+
+
+def test_app_js_polls_the_active_run_endpoint() -> None:
+    """The one piece of this that no server render can cover.
+
+    Asserted against the source for the same reason the nav's sync is: the
+    behaviour needs a browser, but the wiring -- which URL, which controls --
+    is a contract the templates and the route share.
+    """
+    source = (STATIC_DIR / "app.js").read_text()
+
+    assert "/active-run" in source, "app.js does not ask whether a run is active"
+    assert "data-run-control" in source, "app.js does not target the bar's controls"
