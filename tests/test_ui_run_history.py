@@ -1,4 +1,4 @@
-"""Tests for run history, the completion summary, log download, and stop.
+"""Tests for run history, warning attribution, log download, and stop.
 
 Four surfaces meet here, and each one has a way of going quietly wrong:
 
@@ -8,10 +8,11 @@ Four surfaces meet here, and each one has a way of going quietly wrong:
    guard for that is ``test_history_survives_app_recreation``, which throws
    the whole application away between the write and the read.
 
-2. **The summary is computed from lifecycle events and warning groups, never
-   from console text.** A task that *prints* the words ``task_started`` must
-   not add to the task count, and a warning that occurred five times must
-   still be five linkable occurrences after the UI groups it.
+2. **Counts and warning headlines are computed from lifecycle events and
+   warning groups, never from console text.** A task that *prints* the words
+   ``task_started`` must not add to the task count, and a run's warnings must
+   be attributed to the right tasks -- the history row's badge is the surface
+   that wording reaches now.
 
 3. **The raw log is served from the stored run's path and nothing else.** No
    query parameter, header, or path segment may pick the file. The download
@@ -257,125 +258,6 @@ def test_module_opts_into_the_ui_hygiene_fixtures(
     failure.
     """
     assert request.node.get_closest_marker("ui_hygiene") is not None
-
-
-# -- the completion summary ------------------------------------------------
-
-
-def test_completed_run_groups_warning_links(client, completed_run) -> None:
-    response = client.get(f"/runs/{completed_run.run_id}")
-    assert "3 warnings in 2 tasks" in response.text
-    assert 'href="#event-4"' in response.text
-    assert "2 occurrences" in response.text
-
-
-def test_warning_group_links_every_occurrence(client, completed_run) -> None:
-    """Grouping is presentation; no occurrence may be dropped.
-
-    The store keeps all three warning events and the group carries all of
-    their sequences, so the summary has to offer a link to each. A summary
-    that linked only the first (or only the last) would hide the repeat the
-    count is advertising.
-    """
-    body = client.get(f"/runs/{completed_run.run_id}").text
-    for sequence in (3, 4, 7):
-        assert f'href="#event-{sequence}"' in body
-    # And the anchors exist to jump to: the raw occurrences are still in the
-    # console, not collapsed away.
-    for sequence in (3, 4, 7):
-        assert f'id="event-{sequence}"' in body
-
-
-def test_single_warning_reads_as_one_occurrence(client, completed_run) -> None:
-    """Pluralization, pinned. The beta group has exactly one warning."""
-    body = client.get(f"/runs/{completed_run.run_id}").text
-    assert "1 occurrence" in body
-    assert "1 occurrences" not in body
-
-
-def test_summary_counts_tasks_from_lifecycle_events(
-    client, store: RunStore, app
-) -> None:
-    """Task counts come from events, not from console text.
-
-    The log line here says ``task_started`` three times. A summary that
-    scraped console output would report five tasks; one that reads the
-    lifecycle events reports two.
-    """
-    record = _seed_run(store, app.state.project.root)
-    store.append_event(record.run_id, "task_started", task_name="alpha")
-    _seed_log_event(store, record, "task_started task_started task_started\n")
-    store.append_event(
-        record.run_id,
-        "task_finished",
-        task_name="alpha",
-        payload={"status": "succeeded"},
-    )
-    store.append_event(record.run_id, "task_started", task_name="beta")
-    store.append_event(
-        record.run_id, "task_skipped", task_name="gamma", payload={"cached": True}
-    )
-    store.append_event(
-        record.run_id,
-        "task_finished",
-        task_name="beta",
-        payload={"status": "failed", "error": "boom"},
-    )
-    store.append_event(record.run_id, "run_finished", payload={"status": "failed"})
-    store.finish_run(record.run_id, STATUS_FAILED, exit_code=1)
-
-    body = client.get(f"/runs/{record.run_id}").text
-    summary = _summary_section(body)
-    assert 'data-summary="tasks" data-count="2"' in summary
-    assert 'data-summary="skipped" data-count="1"' in summary
-    assert 'data-summary="succeeded" data-count="1"' in summary
-    assert 'data-summary="failed" data-count="1"' in summary
-
-
-def test_summary_counts_an_unfinished_task(client, store: RunStore, app) -> None:
-    """A task that started and never finished is reported, not silently lost.
-
-    This is the shape an interrupted run leaves behind, and the number a
-    reader needs in order to know where to look.
-    """
-    record = _seed_run(store, app.state.project.root)
-    store.append_event(record.run_id, "task_started", task_name="alpha")
-    store.append_event(
-        record.run_id,
-        "task_finished",
-        task_name="alpha",
-        payload={"status": "succeeded"},
-    )
-    store.append_event(record.run_id, "task_started", task_name="beta")
-    store.finish_run(record.run_id, STATUS_INTERRUPTED)
-
-    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
-    assert 'data-summary="tasks" data-count="2"' in summary
-    assert 'data-summary="unfinished" data-count="1"' in summary
-
-
-def test_summary_reports_no_warnings_when_there_are_none(
-    client, store: RunStore, app
-) -> None:
-    record = _seed_run(store, app.state.project.root)
-    store.append_event(record.run_id, "task_started", task_name="alpha")
-    store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
-    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
-
-    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
-    assert "No warnings" in summary
-    assert "warnings in" not in summary
-
-
-def _summary_section(body: str) -> str:
-    """Just the completion-summary panel, so a match cannot come from elsewhere.
-
-    Without this, an assertion about the summary could be satisfied by the
-    console below it -- which renders every warning individually and would
-    make several of these tests pass against a summary that renders nothing.
-    """
-    start = body.index('id="run-summary"')
-    return body[start : body.index("</section>", start)]
 
 
 def _seed_log_event(store: RunStore, record: RunRecord, text: str) -> None:
@@ -940,31 +822,6 @@ def _hostile_run(store: RunStore, project_root: Path) -> RunRecord:
     return store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
 
-def test_summary_escapes_a_hostile_warning_message(
-    client, store: RunStore, app
-) -> None:
-    record = _hostile_run(store, app.state.project.root)
-    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
-    assert HOSTILE_MESSAGE not in summary
-    assert _escaped(HOSTILE_MESSAGE) in summary
-
-
-def test_summary_escapes_a_hostile_task_name(client, store: RunStore, app) -> None:
-    record = _hostile_run(store, app.state.project.root)
-    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
-    assert HOSTILE_TASK not in summary
-    assert _escaped(HOSTILE_TASK) in summary
-
-
-def test_summary_escapes_a_hostile_warning_category(
-    client, store: RunStore, app
-) -> None:
-    record = _hostile_run(store, app.state.project.root)
-    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
-    assert HOSTILE_CATEGORY not in summary
-    assert _escaped(HOSTILE_CATEGORY) in summary
-
-
 def test_history_escapes_a_hostile_warning_message(
     client, store: RunStore, app
 ) -> None:
@@ -1078,9 +935,8 @@ def test_history_counts_ignore_log_events(client, store: RunStore, app) -> None:
     assert "tasks <b>1</b>" in _history_row(body, noisy.run_id)
 
     # And on the run page, where the events *are* hydrated for the console.
-    summary = _summary_section(client.get(f"/runs/{noisy.run_id}").text)
-    assert 'data-summary="tasks" data-count="1"' in summary
-    assert 'data-summary="succeeded" data-count="1"' in summary
+    console = client.get(f"/runs/{noisy.run_id}").text
+    assert '<b data-counter="tasks">1</b>' in console
 
 
 def test_history_truncates_to_the_limit_dropping_the_oldest(
@@ -1175,6 +1031,11 @@ def test_a_foreign_project_s_log_is_never_served(
 
 
 # -- warning attribution --------------------------------------------------
+#
+# Read off the history row's badge, which is the one surface left that renders
+# ``runs.warning_summary()``'s headline. On the run page a warning is a console
+# row beside the output that produced it; there is no grouped summary there any
+# more.
 
 
 def test_headline_counts_only_attributed_warnings_against_tasks(
@@ -1201,11 +1062,11 @@ def test_headline_counts_only_attributed_warnings_against_tasks(
     store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
-    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
-    assert "2 warnings in 2 tasks, 1 outside any task" in summary
-    assert "3 warnings in 2 tasks" not in summary
-    # The total is still all three, and still linked.
-    assert 'data-warning-total="3"' in summary
+    badge = _history_row(client.get("/runs").text, record.run_id)
+    assert "2 warnings in 2 tasks, 1 outside any task" in badge
+    assert "3 warnings in 2 tasks" not in badge
+    # The total is still all three.
+    assert 'data-warning-total="3"' in badge
 
 
 def test_headline_says_so_when_every_warning_is_outside_a_task(
@@ -1222,18 +1083,18 @@ def test_headline_says_so_when_every_warning_is_outside_a_task(
     store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
-    summary = _summary_section(client.get(f"/runs/{record.run_id}").text)
-    assert "2 warnings outside any task" in summary
-    assert "in 0 tasks" not in summary
+    badge = _history_row(client.get("/runs").text, record.run_id)
+    assert "2 warnings outside any task" in badge
+    assert "in 0 tasks" not in badge
 
 
 def test_headline_omits_the_outside_clause_when_there_is_nothing_outside(
     client, completed_run: RunRecord
 ) -> None:
     """The all-attributed wording is the brief's, and stays exact."""
-    summary = _summary_section(client.get(f"/runs/{completed_run.run_id}").text)
-    assert "3 warnings in 2 tasks" in summary
-    assert "outside any task" not in summary
+    badge = _history_row(client.get("/runs").text, completed_run.run_id)
+    assert "3 warnings in 2 tasks" in badge
+    assert "outside any task" not in badge
 
 
 # -- the selector is never orphaned ---------------------------------------
@@ -1322,18 +1183,6 @@ def test_run_page_and_stream_render_one_run_header(
     assert fragment.strip() in page
 
 
-def test_run_page_and_stream_render_one_run_summary(
-    client, store: RunStore, completed_run: RunRecord, app
-) -> None:
-    """Same contract for the summary panel: one partial, both surfaces."""
-    page = client.get(f"/runs/{completed_run.run_id}").text
-    fragment = render_region(
-        app.state.templates, store, "run_summary", store.get_run(completed_run.run_id)
-    )
-
-    assert fragment.strip() in page
-
-
 def test_history_carrying_a_profile_still_lists_every_run(
     client, store: RunStore, ui_project: Path
 ) -> None:
@@ -1362,8 +1211,7 @@ def test_log_download_sits_in_the_console_bar_after_follow_output(
 
     "Follow output" and "Download raw log" both act on the console's output,
     so the download lives in the console's own bar to the right of the
-    toggle -- not down in the summary panel, a section away from the thing
-    it downloads.
+    toggle, rather than a section away from the thing it downloads.
     """
     body = client.get(f"/runs/{completed_run.run_id}").text
 
@@ -1381,15 +1229,10 @@ def test_log_download_sits_in_the_console_bar_after_follow_output(
     )
 
 
-def test_run_summary_no_longer_carries_the_log_download(
+def test_the_log_download_is_offered_exactly_once(
     client, completed_run: RunRecord
 ) -> None:
-    """Moved, not duplicated -- two download buttons would be a regression."""
+    """Moved into the console bar, not duplicated -- two would be a regression."""
     body = client.get(f"/runs/{completed_run.run_id}").text
 
     assert body.count(f'action="/runs/{completed_run.run_id}/log"') == 1
-    summary = re.search(
-        r'<section class="panel" id="run-summary">(.*?)</section>', body, re.S
-    )
-    assert summary, "the summary panel is gone"
-    assert "/log" not in summary.group(1)

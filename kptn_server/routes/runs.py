@@ -143,15 +143,14 @@ STATUS_EVENT_NAME = "run_status"
 
 #: The run page's replaceable regions, as SSE event name -> element id.
 #:
-#: Both are rendered from the run row and the store rather than from the
-#: event list, so a run that goes terminal under an open stream leaves both
-#: stale -- a "still running" finish time, a Stop button for a process that
-#: is gone, counts from before the run did anything. The closing pass sends
-#: each one as the fragment the server would render now, and ``app.js``
-#: swaps it in by id. Adding a region here without teaching app.js about it
-#: is caught by a test, because the failure has no symptom of its own.
+#: The header is rendered from the run row rather than from the event list,
+#: so a run that goes terminal under an open stream leaves it stale -- a Stop
+#: button for a process that is gone. The closing pass sends it as the
+#: fragment the server would render now, and ``app.js`` swaps it in by id.
+#: Adding a region here without teaching app.js about it is caught by a test,
+#: because the failure has no symptom of its own.
 REGION_EVENT_TARGETS: Mapping[str, str] = MappingProxyType(
-    {"run_header": "run-header", "run_summary": "run-summary"}
+    {"run_header": "run-header"}
 )
 
 #: How many runs ``GET /runs`` renders. The history is unbounded on disk and
@@ -366,12 +365,6 @@ def render_region(
             "is_terminal": record.status in TERMINAL_STATUSES,
             "force_finish_offered": looks_wedged(record),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
-        }
-    elif name == "run_summary":
-        context = {
-            "run": record,
-            "counters": counters(store.event_counts(record.run_id)),
-            "warnings": warning_summary(store.warning_groups(record.run_id)),
         }
     else:
         raise ValueError(f"no such run-page region: {name!r}")
@@ -677,11 +670,10 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             # plan for this run" is the obvious move from a finished one.
             "selected_profile": record.profile,
             "events": events,
-            # From the same aggregate the history page uses, rather than from
-            # the events hydrated just above for the console: one counting
-            # path, so the two pages cannot disagree about one run.
+            # The console bar's counters. From the same aggregate the history
+            # page uses, rather than from the events hydrated just above: one
+            # counting path, so the two pages cannot disagree about one run.
             "counters": counters(store.event_counts(run_id)),
-            "warnings": warning_summary(store.warning_groups(run_id)),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
             "force_finish_offered": looks_wedged(record),
             "is_terminal": record.status in TERMINAL_STATUSES,

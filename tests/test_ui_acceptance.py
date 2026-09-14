@@ -249,10 +249,15 @@ def _await_terminal(client: httpx.Client, run_id: str, what: str) -> tuple[str, 
     return _until(what, finished)
 
 
-def _warning_anchor_targets(page: str) -> set[str]:
-    """The ``#event-N`` targets the warning summary links to."""
+def _warning_rows(page: str) -> set[str]:
+    """The console rows a run's warnings rendered as.
+
+    The run page's grouped warning summary is gone -- a warning is a console
+    row beside the output that produced it -- so this is where a warning has
+    to show up now.
+    """
     return set(
-        re.findall(r'class="warning-group__occurrence" href="#(event-\d+)"', page)
+        re.findall(r'<li class="event[^"]*"\s+id="(event-\d+)"[^>]*data-kind="warning"', page)
     )
 
 
@@ -289,18 +294,15 @@ def test_a_run_survives_the_server_that_started_it(
         assert status == "succeeded", page[:4000]
         assert "ordinary output" in page
         assert "raw stderr output" in page
-        anchors = _warning_anchor_targets(page)
-        assert anchors, "the completed run rendered no warning anchors"
-        assert anchors <= _event_ids(page), (
-            f"warning anchors point at rows that are not on the page: "
-            f"{anchors - _event_ids(page)}"
-        )
+        warnings = _warning_rows(page)
+        assert warnings, "the completed run rendered no warning rows"
+        assert warnings <= _event_ids(page)
 
         # 3. Re-requesting the page (a closed and reopened tab) replays the
         #    same console from the store rather than losing it with the stream.
         _, reopened = _await_terminal(client, success_id, "the run page to re-render")
         assert _event_ids(reopened) == _event_ids(page)
-        assert _warning_anchor_targets(reopened) == anchors
+        assert _warning_rows(reopened) == warnings
 
         # 4. Clear kptn's *task-state* cache so the next run really executes.
         #    Without this, `noisy_task` is skipped as cached -- its hash does
@@ -356,11 +358,10 @@ def test_a_run_survives_the_server_that_started_it(
         assert "ordinary output" in page
         assert STARTED_MARKER in page
 
-        # warning anchors
-        slow_anchors = _warning_anchor_targets(page)
-        assert slow_anchors, "the restarted run rendered no warning anchors"
-        assert slow_anchors <= _event_ids(page)
-        assert 'data-warning-total="' in page
+        # warnings, as console rows
+        slow_warnings = _warning_rows(page)
+        assert slow_warnings, "the restarted run rendered no warning rows"
+        assert slow_warnings <= _event_ids(page)
 
         # history: both runs, both succeeded, newest first
         history = client.get("/runs")

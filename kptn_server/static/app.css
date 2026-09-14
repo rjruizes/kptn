@@ -295,18 +295,56 @@ button:disabled {
 
 /* -- the run console ---------------------------------------------------- */
 
+/* Inline, because it renders inside the run panel's heading. On the 409 page
+ * it is the whole body and stands on its own line, which an inline-flex box
+ * does just as well. */
 .run-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* The run panel's heading is a breadcrumb: the crumbs sit on one line, and
+ * the separator is quieter than either of them. */
+/* The breadcrumb on the left, Retry hard against the right edge. */
+.run-header__top {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px 14px;
   margin-bottom: 12px;
+}
+
+.run-header__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+}
+
+.run-header__retry {
+  margin: 0 0 0 auto;
+}
+
+.run-header__crumb-separator {
+  color: var(--ink-muted);
+  font-weight: 400;
 }
 
 .run-status__message {
   flex: 1 1 100%;
-  margin: 0;
   color: var(--warning);
+}
+
+/* The run's own controls and its console are one card. The rule is what is
+ * left of the seam between them: enough to separate the two halves, without
+ * the gap and second border that made them look unrelated. */
+.run-panel .console {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 
 .console__bar {
@@ -336,9 +374,11 @@ button:disabled {
 
 /* The console is the one scrolling region in the UI: a long run must not turn
  * the whole page into a mile of output. */
+/* No height and no scroller of its own: the console is as long as the run,
+ * and the page is what scrolls. A box that scrolled internally put a second
+ * scrollbar inside the first, and left the output in a 60vh window while the
+ * page around it stood still. */
 .console__events {
-  max-height: 60vh;
-  overflow: auto;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -463,23 +503,6 @@ button:disabled {
   width: 14ch;
 }
 
-/* -- completion summary ------------------------------------------------- */
-
-.summary-counts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 18px;
-  margin: 0 0 14px;
-  padding: 0;
-  list-style: none;
-  color: var(--ink-muted);
-}
-
-.summary-count b {
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-}
-
 /* Sits in the console bar beside the follow toggle, which carries the
  * ``margin-left: auto`` that pushes the pair to the right. No margin of its
  * own: the bar's own ``gap`` does the spacing. */
@@ -493,60 +516,6 @@ button:disabled {
   margin: 0;
   color: var(--warning);
   font-weight: 600;
-}
-
-.warnings__groups {
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.warning-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  align-items: baseline;
-  padding: 6px 10px;
-  border-left: 3px solid var(--warning);
-  background: var(--surface-sunken);
-  border-radius: 0 var(--radius) var(--radius) 0;
-}
-
-.warning-group__category,
-.warning-group__count {
-  color: var(--ink-muted);
-  font-size: 0.92em;
-}
-
-.warning-group__message {
-  flex: 1 1 100%;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.warning-group__occurrences {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.warning-group__occurrence {
-  color: var(--ink-muted);
-  font-family: var(--font-mono);
-  font-size: 0.85em;
-  text-decoration: none;
-  padding: 0 4px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-
-.warning-group__occurrence:hover {
-  color: var(--ink);
-  border-color: var(--warning);
 }
 
 /* The compact form, on a history row. */

@@ -5,11 +5,20 @@
   that closes a stream. It therefore takes only the run and the three flags
   below -- never the request -- so it can be rendered straight from Python.
 
+  A plain ``<div>`` and not a panel of its own: the run page is one panel, and
+  this is the half of it that can go stale. The id stays on *this* element
+  rather than on the panel, so the stream's frame replaces the header without
+  taking the console with it.
+
   Everything here comes from the run *row*, which is why it has to be
   replaceable at all. A run that goes terminal under an open stream leaves the
-  page showing "still running" and offering Stop for a process that is gone;
-  the closing frame swaps this whole section for the one the server would
-  render now.
+  page offering Stop for a process that is gone; the closing frame swaps this
+  whole section for the one the server would render now.
+
+  The timestamps and the log path are deliberately not here. The status line
+  above already says where the run stands, the history lists when each run
+  happened, and the raw log is a download in the console bar rather than a
+  path to copy.
 
   Two controls, and the difference between them is the point:
 
@@ -22,17 +31,62 @@
                     behind a disclosure *and* a typed confirmation -- never
                     one click away from Stop.
 #}
-<section class="panel" id="run-header">
-  <h2>Run</h2>
-  {% include "_run_status.html" %}
-  <dl class="project-facts">
-    <dt>Started</dt>
-    <dd>{{ run.started_at or run.created_at }}</dd>
-    <dt>Finished</dt>
-    <dd>{% if run.finished_at %}{{ run.finished_at }}{% else %}<span class="muted">still running</span>{% endif %}</dd>
-    <dt>Log</dt>
-    <dd><code>{{ run.log_path }}</code></dd>
-  </dl>
+<div id="run-header">
+  {#
+    A breadcrumb rather than a title. This page is reached from the history
+    and has nowhere else to go, so the heading is the way back; "Run" only
+    named the page you were already looking at.
+
+    The second crumb is which run this is -- its profile, which used to sit
+    in the status line below and is not worth saying twice. "no profile" is a
+    real, documented way to run a pipeline, so it is spelled out rather than
+    left as a crumb that trails off.
+
+    The link carries the profile the same way the app bar's nav does, so
+    stepping back to the history and on to Plan keeps it. Built from the run
+    row, not the request: this partial is rendered straight from Python for
+    the stream's closing frame, which has no request to read.
+  #}
+  <div class="run-header__top">
+  <h2 class="run-header__crumbs">
+    <a href="/{% if run.profile %}?profile={{ run.profile | urlencode }}{% endif %}">Runs</a>
+    <span class="run-header__crumb-separator" aria-hidden="true">/</span>
+    {% if run.profile %}<code>{{ run.profile }}</code>
+    {% else %}<span class="muted">no profile</span>{% endif %}
+    {#
+      The run's state, on the same line as the run it belongs to. Still the
+      replaceable ``#run-status`` fragment the stream swaps by id -- rendering
+      it here rather than in a row of its own changes where it sits, not what
+      keeps it current.
+    #}
+    {% include "_run_status.html" %}
+  </h2>
+
+  {#
+    Run this again, with *this run's* profile -- not the app bar's selector,
+    which the reader may have changed since the page loaded. The profile
+    rides in a hidden input, sent empty for a run that had none: ``POST
+    /runs`` rejects a body with no ``profile`` field at all, because a
+    request carrying no fields whatsoever is what a drive-by post looks like.
+
+    Deliberately not ``id="run-form"``. That id belongs to the app bar's
+    form, and the bar's selector binds to it by name: a second element with
+    the same id would capture the selector and make Run post whatever this
+    form carried.
+
+    ``data-run-control`` puts it in the group the active-run poll governs, so
+    it obeys the one-run-per-project rule like the bar's own Run. When this
+    partial is re-rendered for the stream's closing frame there is no request
+    and so no ``active_run`` -- the button comes back enabled, which is right
+    the instant a run ends, and the poll corrects it if another has started.
+  #}
+  <form class="run-header__retry" method="post" action="/runs">
+    <input type="hidden" name="profile" value="{{ run.profile or '' }}">
+    <button type="submit" data-run-control {% if active_run %}disabled{% endif %}>
+      Retry
+    </button>
+  </form>
+  </div>
 
   {#
     No Run button here: the app bar has one, and on this page its selector is
@@ -89,4 +143,4 @@
     </form>
   </details>
   {% endif %}
-</section>
+</div>

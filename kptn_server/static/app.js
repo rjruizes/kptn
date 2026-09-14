@@ -45,13 +45,13 @@
   var STATUS_EVENT = "run_status";
 
   /* Regions of the run page the server re-renders and this file swaps in by
-   * id. Everything in them comes from the run row or the store rather than
-   * from the event list, so a run that ends under an open stream leaves them
-   * showing what was true when the page was rendered -- a "still running"
-   * finish time, a Stop button for a process that is gone. Must stay in step
-   * with kptn_server.routes.runs.REGION_EVENT_TARGETS; a test enforces it,
+   * id. What is in them comes from the run row rather than from the event
+   * list, so a run that ends under an open stream leaves them showing what
+   * was true when the page was rendered -- a Stop button for a process that
+   * is gone. Must stay in step with
+   * kptn_server.routes.runs.REGION_EVENT_TARGETS; a test enforces it,
    * because a region nobody listens for is dropped in silence. */
-  var REGION_EVENTS = { run_header: "run-header", run_summary: "run-summary" };
+  var REGION_EVENTS = { run_header: "run-header" };
 
   function highestSequence(list) {
     var rows = list.querySelectorAll("[data-sequence]");
@@ -152,7 +152,9 @@
       }
       updateCounters(console_, list);
       if (!follow || follow.checked) {
-        list.scrollTop = list.scrollHeight;
+        /* The list has no scroller of its own -- the page scrolls -- so
+         * following the output means keeping the newest row in view. */
+        window.scrollTo(0, document.documentElement.scrollHeight);
       }
     }
 

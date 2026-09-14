@@ -1,5 +1,5 @@
 {#
-  The live console.
+  The live console: the lower half of the run page's single panel.
 
   The whole history is rendered server-side; ``app.js`` only appends what the
   stream sends and never formats anything itself. The data attributes on this
@@ -15,7 +15,7 @@
   can neither replay nor skip.
 #}
 {% from "_event.html" import event_row %}
-<section class="panel console" id="console"
+<div class="console" id="console"
          data-run-id="{{ run.run_id }}"
          data-stream-url="/runs/{{ run.run_id }}/events"
          data-last-sequence="{{ last_sequence }}"
@@ -52,4 +52,4 @@
   {% if not events %}
   <p class="muted console__empty" id="console-empty">No output yet.</p>
   {% endif %}
-</section>
+</div>

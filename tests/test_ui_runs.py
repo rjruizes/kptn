@@ -20,6 +20,7 @@ the real launch path.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -32,6 +33,7 @@ from kptn_server.routes.runs import LAUNCH_FAILURE_PREFIX
 from kptn_server.run_store import (
     STATUS_FAILED,
     STATUS_INTERRUPTED,
+    STATUS_SUCCEEDED,
     RunRecord,
     RunRequest,
     RunStore,
@@ -532,6 +534,236 @@ def test_run_page_links_its_event_stream(
     body = client.get(f"/runs/{record.run_id}").text
 
     assert f"/runs/{record.run_id}/events" in body
+
+
+def _run_heading(body: str) -> str:
+    """The run panel's heading, which is a breadcrumb rather than a title."""
+    match = re.search(r"<h2[^>]*>.*?</h2>", body, re.S)
+    assert match, "the run panel has no heading"
+    return match.group(0)
+
+
+def test_run_heading_leads_back_to_the_history(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """"Run" named the page; "Runs" gets you off it.
+
+    A single run's page is reached from the history and has nowhere else to
+    go, so the heading is the way back rather than a label for where you
+    already know you are.
+    """
+    record = _seed_run(store, app.state.project.root, profile="slow")
+
+    heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
+
+    assert ">Runs<" in heading
+    assert 'href="/?profile=slow"' in heading, "the way back drops the profile"
+
+
+def test_run_heading_names_the_runs_profile(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """The second crumb is which run this is: its profile."""
+    record = _seed_run(store, app.state.project.root, profile="slow")
+
+    heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
+
+    assert "slow" in heading
+
+
+def test_run_heading_says_so_when_the_run_had_no_profile(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """Running with no profile is a real, documented way to run a pipeline.
+
+    A crumb that just stopped after "Runs" would read as a missing value
+    rather than the deliberate one it is.
+    """
+    record = _seed_run(store, app.state.project.root, profile=None)
+
+    heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
+
+    assert "no profile" in heading
+    assert "?profile=" not in heading, "the way back carries an empty profile"
+
+
+def _retry_form(body: str) -> str:
+    match = re.search(r'<form class="run-header__retry".*?</form>', body, re.S)
+    assert match, "the run header offers no retry"
+    return match.group(0)
+
+
+def test_run_page_offers_a_retry_for_the_runs_own_profile(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """"Run this again" without going back to the bar and re-picking.
+
+    It posts the profile explicitly rather than borrowing the app bar's
+    selector, which the reader may have changed since the page loaded.
+    """
+    record = _seed_run(store, app.state.project.root, profile="slow")
+    store.finish_run(record.run_id, STATUS_FAILED, exit_code=1)
+
+    form = _retry_form(client.get(f"/runs/{record.run_id}").text)
+
+    assert 'action="/runs"' in form and 'method="post"' in form
+    assert re.search(r'<input[^>]*name="profile"[^>]*value="slow"', form)
+
+
+def test_retry_submits_an_empty_profile_for_a_run_that_had_none(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """``POST /runs`` rejects a body with no ``profile`` field at all.
+
+    An omitted field is what a drive-by form post looks like, so the route
+    refuses it; "(no profile)" is the field sent empty. A retry that dropped
+    the input would be a 400 rather than a run.
+    """
+    record = _seed_run(store, app.state.project.root, profile=None)
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    form = _retry_form(client.get(f"/runs/{record.run_id}").text)
+
+    assert re.search(r'<input[^>]*name="profile"[^>]*value=""', form)
+
+
+def test_retry_is_not_a_second_run_form(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """The app bar's form owns ``id="run-form"``, and an id is unique.
+
+    A second one would capture the bar's own selector, which binds by form
+    id -- the bar's Run would then post whatever this form carried.
+    """
+    record = _seed_run(store, app.state.project.root, profile="slow")
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    body = client.get(f"/runs/{record.run_id}").text
+
+    assert body.count('id="run-form"') == 1
+
+
+def test_retry_is_disabled_while_a_run_holds_the_lock(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """Same rule as the app bar's Run: one run per project.
+
+    ``data-run-control`` is how it joins the group the active-run poll
+    re-enables, so a retry offered on a page that was loaded mid-run comes
+    back by itself when that run ends.
+    """
+    record = _seed_run(store, app.state.project.root, profile="slow")
+
+    form = _retry_form(client.get(f"/runs/{record.run_id}").text)
+
+    assert "disabled" in form
+    assert "data-run-control" in form
+
+
+def test_run_page_is_one_panel(client: TestClient, app, store: RunStore) -> None:
+    """The heading, the controls and the console are one surface, not two.
+
+    They were two bordered cards with a gap between them, which read as two
+    unrelated things -- and the top one was four lines tall.
+    """
+    record = _seed_run(store, app.state.project.root)
+
+    body = client.get(f"/runs/{record.run_id}").text
+    panels = re.findall(r'<section class="panel[^"]*"', body)
+
+    assert len(panels) == 1, f"the run page renders {len(panels)} panels"
+    panel = body[body.index('<section class="panel') :]
+    assert panel.index('id="run-header"') < panel.index('id="console"'), (
+        "the console renders before the run's own header"
+    )
+
+
+def test_run_header_stays_a_swappable_region(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """Merging the panels must not cost the stream its target.
+
+    ``app.js`` replaces ``#run-header`` by id when a run goes terminal under
+    an open page; an id that moved into the panel's wrapper would be replaced
+    along with the console.
+    """
+    record = _seed_run(store, app.state.project.root)
+
+    body = client.get(f"/runs/{record.run_id}").text
+
+    header_at = body.index('id="run-header"')
+    console_at = body.index('id="console"')
+    assert body.index("</div>", header_at) < console_at, (
+        "the run header region is not closed before the console starts"
+    )
+
+
+def test_run_heading_carries_the_status_after_the_profile(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """One line: which runs, which profile, how it is going.
+
+    The status was a row of its own under the heading, which spent a line on
+    a single word.
+    """
+    record = _seed_run(store, app.state.project.root, profile="slow")
+
+    heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
+
+    assert 'id="run-status"' in heading, "the status is not in the heading"
+    assert heading.index("slow") < heading.index('id="run-status"'), (
+        "the status renders before the profile it belongs to"
+    )
+
+
+def test_run_page_does_not_report_an_exit_code(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """The status already says how the run ended.
+
+    A number beside it is the shell's vocabulary, not the reader's, and the
+    history row still carries it for anyone who wants it.
+    """
+    record = _seed_run(store, app.state.project.root)
+    store.finish_run(record.run_id, STATUS_FAILED, exit_code=2)
+
+    body = client.get(f"/runs/{record.run_id}").text
+
+    assert "run-status__exit" not in body
+
+
+def test_status_line_no_longer_repeats_the_profile(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """It is in the heading above, one line up."""
+    record = _seed_run(store, app.state.project.root, profile="slow")
+
+    body = client.get(f"/runs/{record.run_id}").text
+    status = re.search(r'<span class="run-status".*?</span>\s*</h2>', body, re.S)
+    assert status, "the status line is gone"
+
+    assert "run-status__profile" not in status.group(0)
+
+
+def test_status_line_does_not_repeat_the_run_id(
+    client: TestClient, app, store: RunStore
+) -> None:
+    """The status line says what the run is doing, and nothing else.
+
+    It used to end in a link whose text was the run's 32-character hash. The
+    id is in the URL, in the history row, and in ``data-run-id`` on this very
+    element for anything that needs it -- and the app bar's "a run is in
+    progress" notice is what links to the active run from elsewhere, which is
+    the one place that link was the way out.
+    """
+    record = _seed_run(store, app.state.project.root)
+
+    body = client.get(f"/runs/{record.run_id}").text
+    status = re.search(r'<span class="run-status".*?</span>\s*</h2>', body, re.S)
+    assert status, "the status line is gone"
+
+    assert "run-status__link" not in status.group(0)
+    assert f">{record.run_id}<" not in status.group(0)
 
 
 def test_run_page_404s_for_an_unknown_run(client: TestClient) -> None:
