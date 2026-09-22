@@ -14,6 +14,6 @@
   {% include "_run_status.html" %}
   {% endif %}
   {% if error_run_id %}
-  <p class="notice__run">Run <a href="/runs/{{ error_run_id }}"><code>{{ error_run_id }}</code></a></p>
+  <p class="notice__run">Run <a href="{{ base }}/runs/{{ error_run_id }}"><code>{{ error_run_id }}</code></a></p>
   {% endif %}
 </div>

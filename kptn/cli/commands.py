@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 import time
 import webbrowser
@@ -153,6 +154,14 @@ def ui(
         "--reload",
         help="Restart the server when kptn's own source changes (development).",
     ),
+    root_path: str = typer.Option(
+        "",
+        "--root-path",
+        help=(
+            "Path prefix a reverse proxy strips before requests arrive, e.g. "
+            "/notebook/user/me/vscode/proxy/8000. Emitted URLs gain it."
+        ),
+    ),
 ) -> None:
     """Serve the pipeline UI for the project in the current directory.
 
@@ -180,7 +189,7 @@ def ui(
 
     project_root = Path.cwd()
     try:
-        application = create_app(project_root)
+        application = create_app(project_root, root_path)
     except ProjectError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)
@@ -200,6 +209,10 @@ def ui(
         # reloading server would start and then fail to import, over and over,
         # reporting the mistake far less clearly than the message above does.
         del application
+        # An import string cannot carry the prefix, and the reloader builds
+        # the app in a fresh subprocess; the environment is the only channel.
+        if root_path:
+            os.environ["KPTN_UI_ROOT_PATH"] = root_path
         uvicorn.run(
             "kptn_server.app:create_app_for_cwd",
             factory=True,

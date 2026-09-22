@@ -298,6 +298,63 @@ suite('shared UI launcher', () => {
 		]);
 	});
 
+	test('passes the proxy path prefix through to the CLI', async () => {
+		// VS Code for the Web forwards the loopback port at a path, not a
+		// host, and the served page's own URLs have to carry that path or the
+		// browser resolves them against the proxy's host instead. The prefix
+		// is resolvable only after the port is known, which is why the
+		// launcher takes a callback rather than a value.
+		const process = new FakeProcess('');
+		const ports: number[] = [];
+		const server = new KptnServer(fakeSpawner(process), fakeHealth());
+
+		await server.start(workspaceUri, '/venv/bin/python', {
+			resolveRootPath: async (port: number) => {
+				ports.push(port);
+				return '/notebook/user/me/vscode/proxy/' + port;
+			},
+		});
+
+		assert.deepStrictEqual(ports, [fakeHealth.port], 'resolved for the reserved port');
+		assert.deepStrictEqual(process.argv, [
+			'-m', 'kptn', 'ui', '--no-open', '--port', String(fakeHealth.port),
+			'--root-path', '/notebook/user/me/vscode/proxy/' + fakeHealth.port,
+		]);
+	});
+
+	test('omits --root-path when the UI is served at the root', async () => {
+		// Loopback is the common case: no proxy, no prefix, and the CLI must
+		// not be handed an empty flag value to parse.
+		const process = new FakeProcess('');
+		const server = new KptnServer(fakeSpawner(process), fakeHealth());
+
+		await server.start(workspaceUri, '/venv/bin/python', {
+			resolveRootPath: async () => '/',
+		});
+
+		assert.deepStrictEqual(process.argv, [
+			'-m', 'kptn', 'ui', '--no-open', '--port', String(fakeHealth.port),
+		]);
+	});
+
+	test('starts without a prefix when resolving one fails', async () => {
+		// asExternalUri talks to the host; a failure there must not be the
+		// difference between a working UI and no UI at all.
+		const process = new FakeProcess('');
+		const server = new KptnServer(fakeSpawner(process), fakeHealth());
+
+		const url = await server.start(workspaceUri, '/venv/bin/python', {
+			resolveRootPath: async () => {
+				throw new Error('no port forwarding here');
+			},
+		});
+
+		assert.strictEqual(url.hostname, '127.0.0.1');
+		assert.deepStrictEqual(process.argv, [
+			'-m', 'kptn', 'ui', '--no-open', '--port', String(fakeHealth.port),
+		]);
+	});
+
 	test('runs the interpreter it was given, from the workspace directory', async () => {
 		const process = new FakeProcess('');
 		const server = new KptnServer(fakeSpawner(process), fakeHealth());

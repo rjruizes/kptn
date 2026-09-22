@@ -228,7 +228,10 @@ def _start_run(client: httpx.Client, profile: str) -> str:
     )
     assert response.status_code == 303, response.text
     location = response.headers["location"]
-    assert location.startswith("/runs/"), location
+    # Relative by design: a root-absolute Location is re-prefixed by the
+    # proxy that serves this UI in VS Code for the Web, arriving doubled.
+    # See tests/test_ui_root_path.py.
+    assert location.startswith("runs/"), location
     return location.rsplit("/", 1)[-1]
 
 

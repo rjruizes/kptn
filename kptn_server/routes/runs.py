@@ -558,7 +558,12 @@ async def start_run(request: Request):
         if not launched:
             _fail_launch(store, record.run_id, None)
 
-    return RedirectResponse(url=f"/runs/{record.run_id}", status_code=303)
+    # Relative, and deliberately not prefixed: jupyter-server-proxy
+    # re-prefixes any root-absolute Location itself, so a prefixed one reaches
+    # the browser doubled and 404s. Resolved against the posted URL
+    # (``<base>/runs``), this lands on ``<base>/runs/<id>`` with or without a
+    # proxy in front. See tests/test_ui_root_path.py.
+    return RedirectResponse(url=f"runs/{record.run_id}", status_code=303)
 
 
 #: The one body type ``POST /runs`` accepts: what a plain HTML form sends.
@@ -1081,7 +1086,9 @@ def stop_run(request: Request, run_id: str):
         # not turn a landed stop request into a 500.
         _LOGGER.exception("could not signal the worker for run %s", run_id)
 
-    return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+    # ``..`` from ``<base>/runs/<id>/stop`` is ``<base>/runs/``; see the
+    # comment on the create redirect for why this is relative.
+    return RedirectResponse(url=f"../{run_id}", status_code=303)
 
 
 # -- POST /runs/{run_id}/force-finish -------------------------------------
@@ -1157,7 +1164,9 @@ async def force_finish_run(request: Request, run_id: str):
         "run %s was force-finished: its worker was abandoned, not stopped",
         run_id,
     )
-    return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+    # ``..`` from ``<base>/runs/<id>/stop`` is ``<base>/runs/``; see the
+    # comment on the create redirect for why this is relative.
+    return RedirectResponse(url=f"../{run_id}", status_code=303)
 
 
 # -- GET /runs/{run_id}/events --------------------------------------------

@@ -26,9 +26,15 @@
 
   window.kptn = window.kptn || {};
 
+  /* The path prefix a reverse proxy strips before requests reach the
+   * server -- empty when served at the root. Every URL this script builds
+   * itself has to carry it, or it resolves against the proxy's host and
+   * leaves the proxy. URLs that come from the server already carry it. */
+  var BASE = (document.body && document.body.getAttribute("data-base")) || "";
+
   var FOLLOW_STORAGE_KEY = "kptn.followOutput";
   var RECONNECT_DELAY_MS = 1000;
-  var ACTIVE_RUN_URL = "/active-run";
+  var ACTIVE_RUN_URL = BASE + "/active-run";
   var ACTIVE_RUN_POLL_MS = 3000;
 
   /* Every event name the server can send. EventSource dispatches by name, so
@@ -299,7 +305,9 @@
       if (busy) {
         /* Property assignments, never markup: the run id is the only value
          * that moves, and it goes in through `href`. */
-        busy.href = state.run_id ? "/runs/" + encodeURIComponent(state.run_id) : "";
+        busy.href = state.run_id
+          ? BASE + "/runs/" + encodeURIComponent(state.run_id)
+          : "";
         busy.hidden = !state.active;
       }
     }

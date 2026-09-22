@@ -276,9 +276,15 @@ def _inspection(project: ProjectContext, profile: str | None) -> PipelineInspect
     return inspect_pipeline(project.pipeline, project.config, profile, project.root)
 
 
-def _detail_url(name: str, profile: str | None) -> str:
+def _detail_url(name: str, profile: str | None, base: str = "") -> str:
+    """The walkthrough link for *name*, carrying the proxy prefix.
+
+    This one is built in Python rather than in a template, so it does not get
+    ``{{ base }}`` for free -- and it is handed straight to htmx as
+    ``hx-get``, which would fetch it from the proxy's host without the prefix.
+    """
     query = urllib.parse.urlencode({"profile": profile}) if profile else ""
-    path = f"/walkthrough/task/{urllib.parse.quote(name, safe='')}"
+    path = f"{base}/walkthrough/task/{urllib.parse.quote(name, safe='')}"
     return f"{path}?{query}" if query else path
 
 
@@ -311,7 +317,9 @@ def walkthrough(request: Request, profile: str | None = None) -> HTMLResponse:
             "rows": [
                 {
                     "item": item,
-                    "detail_url": _detail_url(item.name, selected),
+                    "detail_url": _detail_url(
+                        item.name, selected, request.app.state.base
+                    ),
                     "linkable": item.kind in TASK_KINDS,
                 }
                 for item in inspection.items

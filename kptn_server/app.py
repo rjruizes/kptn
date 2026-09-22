@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -111,7 +112,21 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             await task
 
 
-def _build_templates() -> Jinja2Templates:
+def normalise_root_path(root_path: str) -> str:
+    """A prefix that concatenates cleanly: leading slash, no trailing one.
+
+    ``vscode.env.asExternalUri`` yields a trailing slash, and templates join
+    with ``{{ base }}/static/...``, so an unnormalised value produces
+    ``//static`` -- a protocol-relative URL the browser sends to a host named
+    "static". Empty stays empty, which is the loopback default.
+    """
+    trimmed = root_path.strip().rstrip("/")
+    if not trimmed:
+        return ""
+    return trimmed if trimmed.startswith("/") else f"/{trimmed}"
+
+
+def _build_templates(base: str = "") -> Jinja2Templates:
     """Jinja environment whose every render already knows the project.
 
     The base page needs the project name and the profile list on *every* page,
@@ -127,6 +142,14 @@ def _build_templates() -> Jinja2Templates:
 
     One indexed lookup by project root per render, against the same lock
     table ``POST /runs`` consults before it creates anything.
+
+    *base* is the path prefix every emitted URL must carry when the server is
+    reached through a path-prefixing proxy (VS Code for the Web forwards ports
+    at ``/.../proxy/<port>/``). It is an environment global, not a context
+    processor, because two run fragments are rendered with
+    ``get_template(...).render(...)`` and never see a ``Request`` -- so
+    request-scoped lookup would render empty in exactly those fragments.
+    Empty by default, which reproduces the root-absolute markup byte for byte.
     """
 
     def project_context(request: Request) -> dict[str, Any]:
@@ -137,18 +160,34 @@ def _build_templates() -> Jinja2Templates:
             ),
         }
 
-    return Jinja2Templates(
+    templates = Jinja2Templates(
         directory=str(TEMPLATES_DIR), context_processors=[project_context]
     )
+    templates.env.globals["base"] = base
+    return templates
 
 
-def create_app(project_root: Path) -> FastAPI:
+def create_app(project_root: Path, root_path: str = "") -> FastAPI:
     """Build the UI application for the project rooted at *project_root*.
 
     Raises :class:`~kptn_server.project.ProjectError` if the directory is not
     a servable kptn project -- failing at construction rather than serving a
     UI that 500s on every page.
+
+    *root_path* is the path prefix a reverse proxy strips before the request
+    arrives. Routes stay unprefixed -- the proxy already removed it -- but
+    every URL the templates emit gains it, because a root-absolute URL in the
+    served HTML resolves against the proxy's host and never reaches this
+    server. Empty means "served at the root", the loopback default.
+
+    Deliberately *not* passed to ``FastAPI(root_path=...)``. ASGI's
+    ``root_path`` describes a proxy that forwards the original path intact and
+    only names its prefix; jupyter-server-proxy, which is what serves this in
+    VS Code for the Web, strips the prefix instead. Setting it makes the
+    ``/static`` mount insist on a prefix that never arrives -- 404 on every
+    asset, the very failure this prefix exists to fix.
     """
+    base = normalise_root_path(root_path)
     project = ProjectContext.load(project_root)
     store = RunStore(project.database_path)
     processes = RunProcessManager(store)
@@ -163,7 +202,8 @@ def create_app(project_root: Path) -> FastAPI:
     app.state.project = project
     app.state.store = store
     app.state.processes = processes
-    app.state.templates = _build_templates()
+    app.state.base = base
+    app.state.templates = _build_templates(base)
 
     # Before any router, so that a state-changing route added later cannot
     # be added without it. See :mod:`kptn_server.origin` for why
@@ -186,8 +226,12 @@ def create_app_for_cwd() -> FastAPI:
     Reading ``Path.cwd()`` here is the same rule the launcher itself follows
     ("the served project is always the working directory"), and the reload
     subprocess inherits that directory, so both paths serve the same project.
+
+    ``KPTN_UI_ROOT_PATH`` carries the proxy prefix across the same boundary,
+    for the same reason: an import string cannot take arguments, and the
+    subprocess inherits the environment.
     """
-    return create_app(Path.cwd())
+    return create_app(Path.cwd(), os.environ.get("KPTN_UI_ROOT_PATH", ""))
 
 
 __all__ = [
@@ -196,4 +240,5 @@ __all__ = [
     "TEMPLATES_DIR",
     "create_app",
     "create_app_for_cwd",
+    "normalise_root_path",
 ]

@@ -464,7 +464,10 @@ def test_stop_requests_a_stop_and_signals_the_worker(
 ) -> None:
     response = client.post(f"/runs/{active_run.run_id}/stop", follow_redirects=False)
     assert response.status_code == 303
-    assert response.headers["location"] == f"/runs/{active_run.run_id}"
+    # ``..`` from ``/runs/<id>/stop`` is the run page. Relative because the
+    # proxy in VS Code for the Web re-prefixes absolute Location headers;
+    # tests/test_ui_root_path.py resolves it the way a browser does.
+    assert response.headers["location"] == f"../{active_run.run_id}"
     manager.stop.assert_called_once_with(active_run.run_id)
     assert store.get_run(active_run.run_id).status == STATUS_STOP_REQUESTED
 
@@ -598,7 +601,7 @@ def test_force_finish_abandons_the_worker_and_releases_the_lock(
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert response.headers["location"] == f"/runs/{active_run.run_id}"
+    assert response.headers["location"] == f"../{active_run.run_id}"
 
     record = store.get_run(active_run.run_id)
     assert record.status == STATUS_INTERRUPTED

@@ -28,11 +28,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ project.pipeline_name }} - kptn{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css">
-  <script src="/static/htmx.min.js" defer></script>
-  <script src="/static/app.js" defer></script>
+  <link rel="stylesheet" href="{{ base }}/static/app.css">
+  <script src="{{ base }}/static/htmx.min.js" defer></script>
+  <script src="{{ base }}/static/app.js" defer></script>
 </head>
-<body>
+<body data-base="{{ base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
       {#
@@ -70,7 +70,7 @@
         </div>
 
         {# The form the selector above belongs to. POST, because it starts work. #}
-        <form id="run-form" class="app-bar__run" method="post" action="/runs">
+        <form id="run-form" class="app-bar__run" method="post" action="{{ base }}/runs">
           <button type="submit" class="button button--primary"
                 data-run-control {% if active_run %}disabled{% endif %}>Run</button>
         </form>
@@ -85,7 +85,7 @@
           submitted and the URL stays a clean ``/plan``; app.js keeps both the
           value and the disabled flag in step with an unsubmitted selection.
         #}
-        <form class="app-bar__plan" method="get" action="/plan">
+        <form class="app-bar__plan" method="get" action="{{ base }}/plan">
           <input type="hidden" name="profile" data-profile-input
                  value="{{ selected_profile or '' }}"
                  {% if not selected_profile %}disabled{% endif %}>
@@ -136,7 +136,7 @@
       #}
       {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
       <nav class="app-bar__nav" aria-label="Main">
-        <a href="/{{ profile_query }}" data-profile-link="/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+        <a href="{{ base }}/{{ profile_query }}" data-profile-link="{{ base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
       </nav>
     </div>
   </header>

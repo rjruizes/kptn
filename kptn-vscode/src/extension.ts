@@ -13,6 +13,7 @@ import * as vscode from 'vscode';
 
 import {
 	KptnServer,
+	LOOPBACK_HOST,
 	authorizeOpenSource,
 	buildHostHtml,
 	createBridgeToken,
@@ -82,7 +83,21 @@ async function openPipelineUI(
 	output.appendLine(`Using Python interpreter from ${source}: ${executable}`);
 
 	const extraPythonPath = resolveExtraPythonPath(context, output);
-	const url = await server.start(workspace.uri, executable, { extraPythonPath });
+	// VS Code for the Web forwards a loopback port at a path
+	// (`/notebook/user/<user>/vscode/proxy/<port>/`), and the proxy strips that
+	// path before the request arrives. The server therefore cannot discover it
+	// from a request -- the launcher asks for it here, once the port is known,
+	// and passes it to `kptn ui --root-path` so every URL the page emits keeps
+	// the prefix. On desktop this resolves to `/` and nothing is passed.
+	const url = await server.start(workspace.uri, executable, {
+		extraPythonPath,
+		resolveRootPath: async (port: number) => {
+			const forwarded = await vscode.env.asExternalUri(
+				vscode.Uri.parse(`http://${LOOPBACK_HOST}:${port}/`),
+			);
+			return forwarded.path;
+		},
+	});
 	const externalUri = await vscode.env.asExternalUri(vscode.Uri.parse(url.toString()));
 
 	// The token is minted per render and lives only as long as the rendered

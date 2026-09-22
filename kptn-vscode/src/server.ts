@@ -59,6 +59,19 @@ export interface SpawnedProcess {
 export type Spawner = (command: string, argv: string[], options: SpawnOptions) => SpawnedProcess;
 
 /**
+ * How `start` is told about the world outside the loopback port.
+ *
+ * `resolveRootPath` is a callback rather than a value because the prefix
+ * depends on the port, and the port is only known once it is reserved. It is
+ * also the one place this module would otherwise need `vscode`:
+ * `asExternalUri` lives in the extension, and stays there.
+ */
+export interface StartOptions {
+	extraPythonPath?: string;
+	resolveRootPath?: (port: number) => Promise<string>;
+}
+
+/**
  * The single network boundary: it hands out a free loopback port and reports
  * when the server behind that port answers `/healthz`.
  */
@@ -224,7 +237,7 @@ export class KptnServer {
 	async start(
 		workspace: WorkspaceLocation,
 		pythonPath: string,
-		options: { extraPythonPath?: string } = {},
+		options: StartOptions = {},
 	): Promise<URL> {
 		this.refuseIfDisposed();
 		if (this.starting) {
@@ -244,6 +257,29 @@ export class KptnServer {
 	}
 
 	/**
+	 * The path prefix the served page's own URLs must carry, or `''`.
+	 *
+	 * `'/'` means "served at the root", which is the loopback case: the CLI
+	 * gets no flag rather than an empty one.
+	 */
+	private async resolveRootPath(port: number, options: StartOptions): Promise<string> {
+		if (!options.resolveRootPath) {
+			return '';
+		}
+		try {
+			const resolved = await options.resolveRootPath(port);
+			const trimmed = resolved.replace(/\/+$/, '');
+			return trimmed === '' ? '' : trimmed;
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			this.log.appendLine(
+				`Could not resolve the external path prefix (${detail}); serving the UI at the root.`,
+			);
+			return '';
+		}
+	}
+
+	/**
 	 * Refuse to go any further once disposed.
 	 *
 	 * Called before every spawn and after every await that a `dispose()` could
@@ -260,7 +296,7 @@ export class KptnServer {
 	private async resolve(
 		workspace: WorkspaceLocation,
 		pythonPath: string,
-		options: { extraPythonPath?: string },
+		options: StartOptions,
 	): Promise<URL> {
 		const current = this.running;
 		if (current?.alive) {
@@ -284,7 +320,7 @@ export class KptnServer {
 	private async launch(
 		workspace: WorkspaceLocation,
 		pythonPath: string,
-		options: { extraPythonPath?: string },
+		options: StartOptions,
 	): Promise<URL> {
 		let lastFailure = 'the server never answered /healthz';
 
@@ -297,6 +333,16 @@ export class KptnServer {
 			const port = await this.gate.reservePort();
 			const url = new URL(`http://${LOOPBACK_HOST}:${port}/`);
 			const argv = ['-m', 'kptn', 'ui', '--no-open', '--port', String(port)];
+
+			// Resolved before the spawn, and deliberately before `live.add`:
+			// every await here is covered by the disposal check that follows
+			// the spawn. A host that cannot forward the port at all is not a
+			// reason to refuse to start -- the UI still works on loopback --
+			// so a failure here is logged and the prefix dropped.
+			const rootPath = await this.resolveRootPath(port, options);
+			if (rootPath) {
+				argv.push('--root-path', rootPath);
+			}
 
 			this.log.appendLine(`Starting kptn UI: ${pythonPath} ${argv.join(' ')}`);
 			const child = this.spawner(pythonPath, argv, {
