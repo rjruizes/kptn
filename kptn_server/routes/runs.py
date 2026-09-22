@@ -90,6 +90,7 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
+from kptn_server.context import ui
 from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
 from kptn_server.routes.support import (
@@ -452,9 +453,9 @@ def _region_frame(
 @router.post("/runs")
 async def start_run(request: Request):
     """Create a run, take the project lock, and launch its worker."""
-    project = request.app.state.project
-    store: RunStore = request.app.state.store
-    manager = request.app.state.processes
+    project = ui(request).entry
+    store: RunStore = ui(request).store
+    manager = ui(request).processes
 
     if not _is_form_encoded(request):
         # No body, or a body this route cannot parse. Falling through would
@@ -506,7 +507,7 @@ async def start_run(request: Request):
         record = store.create_run(
             RunRequest(
                 project_root=project.root,
-                pipeline=project.pipeline_name,
+                pipeline=project.display_name,
                 profile=profile,
             )
         )
@@ -695,8 +696,9 @@ def project_run(request: Request, run_id: str) -> RunRecord | None:
     root and ``create_run`` stores the resolved one -- so this is a value
     comparison, not a filesystem one.
     """
-    record = request.app.state.store.get_run(run_id)
-    if record is None or record.project_root != request.app.state.project.root:
+    current = ui(request)
+    record = current.store.get_run(run_id)
+    if record is None or record.project_root != current.entry.root:
         return None
     return record
 
@@ -719,7 +721,7 @@ def _no_such_run(request: Request, run_id: str) -> HTMLResponse:
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
 def run_page(request: Request, run_id: str) -> HTMLResponse:
     """The run console for one run, with its whole history already rendered."""
-    store: RunStore = request.app.state.store
+    store: RunStore = ui(request).store
     record = project_run(request, run_id)
     if record is None:
         return _no_such_run(request, run_id)
@@ -727,7 +729,7 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
     log_path = Path(record.log_path)
     stored = store.events_after(run_id, 0)
     events = [console_event(event, log_path) for event in stored]
-    return request.app.state.templates.TemplateResponse(
+    return ui(request).templates.TemplateResponse(
         request,
         "run.html",
         {
@@ -955,10 +957,10 @@ def run_history(request: Request, profile: str | None = None) -> HTMLResponse:
     developer lands on -- do a dataclass construction and a JSON parse per
     line of pipeline output the project has ever produced.
     """
-    project = request.app.state.project
+    project = ui(request).entry
     if profile and profile not in project.profiles:
         return unknown_profile(request, profile, nav_active="runs")
-    store: RunStore = request.app.state.store
+    store: RunStore = ui(request).store
     runs = [
         {
             "run": record,
@@ -967,7 +969,7 @@ def run_history(request: Request, profile: str | None = None) -> HTMLResponse:
         }
         for record in store.list_runs(project.root, limit=HISTORY_LIMIT)
     ]
-    return request.app.state.templates.TemplateResponse(
+    return ui(request).templates.TemplateResponse(
         request,
         "runs.html",
         {
@@ -1015,7 +1017,7 @@ def run_log(request: Request, run_id: str):
             run_id=run_id,
         )
 
-    store: RunStore = request.app.state.store
+    store: RunStore = ui(request).store
     body = render_run_log(store.events_after(run_id), log_path)
 
     return Response(
@@ -1058,8 +1060,8 @@ def stop_run(request: Request, run_id: str):
     ``POST /runs`` exists because an unparseable body there reads as a valid
     request, and this route has no field to misread.
     """
-    store: RunStore = request.app.state.store
-    manager = request.app.state.processes
+    store: RunStore = ui(request).store
+    manager = ui(request).processes
 
     if project_run(request, run_id) is None:
         # Scope first, and only then the atomic status gate below. This is a
@@ -1122,7 +1124,7 @@ async def force_finish_run(request: Request, run_id: str):
     absent field is the only thing standing between a click and a possibly
     live process being written off.
     """
-    store: RunStore = request.app.state.store
+    store: RunStore = ui(request).store
 
     if project_run(request, run_id) is None:
         return _no_such_run(request, run_id)
@@ -1240,14 +1242,14 @@ async def event_frames(
 @router.get("/runs/{run_id}/events")
 def run_events(request: Request, run_id: str, after: str | None = None):
     """Stream this run's events, resuming from a cursor the client supplies."""
-    store: RunStore = request.app.state.store
+    store: RunStore = ui(request).store
     if project_run(request, run_id) is None:
         return _no_such_run(request, run_id)
 
     return StreamingResponse(
         event_frames(
             store,
-            request.app.state.templates,
+            ui(request).templates,
             run_id,
             after=_cursor(request, after),
         ),

@@ -20,7 +20,8 @@ from __future__ import annotations
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 
-from kptn_server.project import ProjectContext
+from kptn_server.context import ui
+from kptn_server.registry import ProjectEntry
 from kptn_server.run_store import TERMINAL_STATUSES, RunRecord
 
 
@@ -52,7 +53,7 @@ def error_response(
     marker on the section the reader was in when the error happened.
     """
     template = "_error.html" if is_fragment_request(request) else "error.html"
-    return request.app.state.templates.TemplateResponse(
+    return ui(request).templates.TemplateResponse(
         request,
         template,
         {
@@ -90,7 +91,7 @@ def unknown_profile(request: Request, profile: str, *, nav_active: str) -> HTMLR
     into this error on whichever page the reader lands, and one wording that
     names the real profiles is the difference between a dead end and a fix.
     """
-    project: ProjectContext = request.app.state.project
+    project: ProjectEntry = ui(request).entry
     return error_response(
         request,
         status_code=400,

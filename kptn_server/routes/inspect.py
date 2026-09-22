@@ -72,6 +72,7 @@ from kptn.profiles.resolver import ProfileResolver
 from kptn.runner.plan import PlanAction, PlanEntry, build_plan
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
+from kptn_server.context import ui
 from kptn_server.markdown import DocumentationError, render_project_markdown
 from kptn_server.project import PROFILE_CONFIG_FILENAME, ProjectContext
 from kptn_server.routes.support import (
@@ -237,36 +238,37 @@ def _plan_row(entry: PlanEntry) -> dict[str, Any]:
 @router.get("/plan", response_class=HTMLResponse)
 def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
     """What ``kptn run`` would do next, without doing any of it."""
-    project: ProjectContext = request.app.state.project
-    if profile and profile not in project.profiles:
-        return unknown_profile(request, profile, nav_active="plan")
-    selected = requested_profile(profile)
+    current = ui(request)
+    with current.project() as project:
+        if profile and profile not in project.profiles:
+            return unknown_profile(request, profile, nav_active="plan")
+        selected = requested_profile(profile)
 
-    try:
-        resolved = _resolved_graph(project, selected)
-        store = _open_state_store(project)
         try:
-            entries = build_plan(resolved, store)
-        finally:
-            _release(store)
-    except (KptnError, ValueError, OSError) as exc:
-        return error_response(
-            request,
-            status_code=500,
-            title="The plan could not be built",
-            detail=f"{type(exc).__name__}: {exc}",
-            nav_active="plan",
-        )
+            resolved = _resolved_graph(project, selected)
+            store = _open_state_store(project)
+            try:
+                entries = build_plan(resolved, store)
+            finally:
+                _release(store)
+        except (KptnError, ValueError, OSError) as exc:
+            return error_response(
+                request,
+                status_code=500,
+                title="The plan could not be built",
+                detail=f"{type(exc).__name__}: {exc}",
+                nav_active="plan",
+            )
 
-    return request.app.state.templates.TemplateResponse(
-        request,
-        "plan.html",
-        {
-            "nav_active": "plan",
-            "selected_profile": selected,
-            "rows": [_plan_row(entry) for entry in entries],
-        },
-    )
+        return current.templates.TemplateResponse(
+            request,
+            "plan.html",
+            {
+                "nav_active": "plan",
+                "selected_profile": selected,
+                "rows": [_plan_row(entry) for entry in entries],
+            },
+        )
 
 
 # -- GET /walkthrough ------------------------------------------------------
@@ -291,42 +293,43 @@ def _detail_url(name: str, profile: str | None, base: str = "") -> str:
 @router.get("/walkthrough", response_class=HTMLResponse)
 def walkthrough(request: Request, profile: str | None = None) -> HTMLResponse:
     """The resolved pipeline, in order, as a reader would walk it."""
-    project: ProjectContext = request.app.state.project
-    if profile and profile not in project.profiles:
-        return unknown_profile(request, profile, nav_active="docs")
-    selected = requested_profile(profile)
+    current = ui(request)
+    with current.project() as project:
+        if profile and profile not in project.profiles:
+            return unknown_profile(request, profile, nav_active="docs")
+        selected = requested_profile(profile)
 
-    try:
-        inspection = _inspection(project, selected)
-    except KptnError as exc:
-        return error_response(
+        try:
+            inspection = _inspection(project, selected)
+        except KptnError as exc:
+            return error_response(
+                request,
+                status_code=500,
+                title="This pipeline could not be inspected",
+                detail=f"{type(exc).__name__}: {exc}",
+                nav_active="docs",
+            )
+
+        return current.templates.TemplateResponse(
             request,
-            status_code=500,
-            title="This pipeline could not be inspected",
-            detail=f"{type(exc).__name__}: {exc}",
-            nav_active="docs",
+            "walkthrough.html",
+            {
+                "nav_active": "docs",
+                "selected_profile": selected,
+                "inspection": inspection,
+                "rows": [
+                    {
+                        "item": item,
+                        "detail_url": _detail_url(
+                            item.name, selected, current.project_base
+                        ),
+                        "linkable": item.kind in TASK_KINDS,
+                    }
+                    for item in inspection.items
+                ],
+                "not_documented": NOT_DOCUMENTED,
+            },
         )
-
-    return request.app.state.templates.TemplateResponse(
-        request,
-        "walkthrough.html",
-        {
-            "nav_active": "docs",
-            "selected_profile": selected,
-            "inspection": inspection,
-            "rows": [
-                {
-                    "item": item,
-                    "detail_url": _detail_url(
-                        item.name, selected, request.app.state.base
-                    ),
-                    "linkable": item.kind in TASK_KINDS,
-                }
-                for item in inspection.items
-            ],
-            "not_documented": NOT_DOCUMENTED,
-        },
-    )
 
 
 # -- GET /walkthrough/task/{name} ------------------------------------------
@@ -486,53 +489,54 @@ def task_detail(
     request: Request, name: str, profile: str | None = None
 ) -> HTMLResponse:
     """One task, in full: metadata, declared data, source, documentation."""
-    project: ProjectContext = request.app.state.project
-    if profile and profile not in project.profiles:
-        return unknown_profile(request, profile, nav_active="docs")
-    selected = requested_profile(profile)
+    current = ui(request)
+    with current.project() as project:
+        if profile and profile not in project.profiles:
+            return unknown_profile(request, profile, nav_active="docs")
+        selected = requested_profile(profile)
 
-    try:
-        inspection = _inspection(project, selected)
-    except KptnError as exc:
-        return error_response(
-            request,
-            status_code=500,
-            title="This pipeline could not be inspected",
-            detail=f"{type(exc).__name__}: {exc}",
-            nav_active="docs",
+        try:
+            inspection = _inspection(project, selected)
+        except KptnError as exc:
+            return error_response(
+                request,
+                status_code=500,
+                title="This pipeline could not be inspected",
+                detail=f"{type(exc).__name__}: {exc}",
+                nav_active="docs",
+            )
+
+        item = _first_named(inspection.items, name)
+        if item is None:
+            return error_response(
+                request,
+                status_code=404,
+                title="No such task",
+                detail=(
+                    f"{name!r} is not in this pipeline's resolved graph"
+                    + (f" for profile {selected!r}." if selected else ".")
+                ),
+                nav_active="docs",
+            )
+
+        docs_html, docs_error = _rendered_docs(project, item)
+        template = (
+            "_task_detail.html" if is_fragment_request(request) else "task_detail.html"
         )
-
-    item = _first_named(inspection.items, name)
-    if item is None:
-        return error_response(
+        return current.templates.TemplateResponse(
             request,
-            status_code=404,
-            title="No such task",
-            detail=(
-                f"{name!r} is not in this pipeline's resolved graph"
-                + (f" for profile {selected!r}." if selected else ".")
-            ),
-            nav_active="docs",
+            template,
+            {
+                "nav_active": "docs",
+                "selected_profile": selected,
+                "item": item,
+                "source_reference": _source_reference(item),
+                "docs_html": docs_html,
+                "docs_error": docs_error,
+                "output_links": output_links(request, project, item.outputs),
+                "not_documented": NOT_DOCUMENTED,
+            },
         )
-
-    docs_html, docs_error = _rendered_docs(project, item)
-    template = (
-        "_task_detail.html" if is_fragment_request(request) else "task_detail.html"
-    )
-    return request.app.state.templates.TemplateResponse(
-        request,
-        template,
-        {
-            "nav_active": "docs",
-            "selected_profile": selected,
-            "item": item,
-            "source_reference": _source_reference(item),
-            "docs_html": docs_html,
-            "docs_error": docs_error,
-            "output_links": output_links(request, project, item.outputs),
-            "not_documented": NOT_DOCUMENTED,
-        },
-    )
 
 
 def _first_named(items: Iterable[InspectionItem], name: str) -> InspectionItem | None:

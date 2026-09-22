@@ -54,6 +54,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from kptn_server.context import ui
 from kptn_server.project import PROFILE_CONFIG_FILENAME, ProjectContext
 from kptn_server.routes.support import error_response
 
@@ -88,8 +89,8 @@ def _accepted_config(request: Request, config_path: str) -> Path | None:
     a symlink cannot dodge the check. ``ProjectContext.root`` is already
     canonical, which is what makes the comparison meaningful.
     """
-    project: ProjectContext = request.app.state.project
-    expected = project_config_path(project)
+    with ui(request).project() as project:
+        expected = project_config_path(project)
     try:
         candidate = Path(config_path).resolve()
     except OSError:  # pragma: no cover - defensive

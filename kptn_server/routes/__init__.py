@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, FastAPI, Request
 
+from kptn_server.context import ui
 from kptn_server.routes import inspect, lineage, runs
 
 router = APIRouter()
@@ -50,7 +51,8 @@ def active_run(request: Request) -> dict[str, object]:
     (``/runs/{run_id}``), and a sibling literal there is one route-ordering
     change away from meaning "the run whose id is 'active'".
     """
-    record = request.app.state.store.active_run(request.app.state.project.root)
+    current = ui(request)
+    record = current.store.active_run(current.entry.root)
     return {"active": record is not None, "run_id": record.run_id if record else None}
 
 

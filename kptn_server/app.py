@@ -41,12 +41,16 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
+from starlette.types import Scope
 
+from kptn_server.context import RequestUI, RequestUIMiddleware
 from kptn_server.origin import enforce_same_origin
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
 from kptn_server.project import ProjectContext
+from kptn_server.registry import ProjectEntry
 from kptn_server.routes import register_routers
 from kptn_server.run_store import RunStore
+from kptn_server.slot import ProjectSlot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -153,11 +157,15 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     """
 
     def project_context(request: Request) -> dict[str, Any]:
+        current = getattr(request.state, "ui", None)
+        if current is None:
+            # The project list renders through this same environment with no
+            # project resolved -- it is the page you pick a project *from*.
+            return {}
         return {
-            "project": request.app.state.project,
-            "active_run": request.app.state.store.active_run(
-                request.app.state.project.root
-            ),
+            "project": current.entry,
+            "active_run": current.store.active_run(current.entry.root),
+            "project_base": current.project_base,
         }
 
     templates = Jinja2Templates(
@@ -199,16 +207,72 @@ def create_app(project_root: Path, root_path: str = "") -> FastAPI:
         openapi_url=None,
         lifespan=_lifespan,
     )
+    slot = ProjectSlot(preloaded=project)
+    entry = ProjectEntry(
+        slug=project.root.name,
+        root=project.root,
+        release="",
+        display_name=project.display_name,
+        profiles=project.profiles,
+        database_path=project.database_path,
+        run_log_dir=project.run_log_dir,
+    )
+
     app.state.project = project
     app.state.store = store
     app.state.processes = processes
     app.state.base = base
     app.state.templates = _build_templates(base)
+    app.state.stores = {entry.slug: store}
+    app.state.managers = {entry.slug: processes}
 
-    # Before any router, so that a state-changing route added later cannot
-    # be added without it. See :mod:`kptn_server.origin` for why
-    # ``Sec-Fetch-Site`` is the check and why safe methods are exempt.
+    # Registered *before* the resolver below, and therefore inside it.
+    #
+    # Starlette builds its middleware stack in reverse registration order, so
+    # the last thing registered here is the outermost thing at request time.
+    # The origin check has to run before any *router*, which it still does --
+    # that is the property :mod:`kptn_server.origin` is about, and why the
+    # check is middleware rather than a decorator a new route can forget to
+    # wear. What it must not run before is the request context, because its
+    # refusal is an ordinary rendered page: ``error_response`` renders through
+    # ``base.html``, and that shell names the project and lists its profiles.
+    # Refuse first and there is no project to name, so the 403 raises
+    # ``AttributeError`` out of the middleware and the caller gets a 500 --
+    # a cross-origin POST turning the defence itself into the failure.
+    #
+    # Resolving the context is not "work" in the sense the defence cares
+    # about. It constructs a frozen dataclass and, in multi-project mode,
+    # looks a slug up in a dictionary. It reads no body, loads no pipeline,
+    # touches no run store and starts nothing. Every effect the defence
+    # exists to prevent still happens strictly after the check.
+    #
+    # See :mod:`kptn_server.origin` for why ``Sec-Fetch-Site`` is the check
+    # and why safe methods are exempt.
     app.middleware("http")(enforce_same_origin)
+
+    def resolve_ui(scope: Scope) -> RequestUI:
+        # Single-project mode: one project for the process's lifetime, so the
+        # per-request object is constant in everything but identity. It
+        # exists anyway so that routes have exactly one way to ask, in both
+        # modes.
+        #
+        # ``store``, ``processes`` and ``templates`` are read off
+        # ``app.state`` on every request rather than closed over: tests swap
+        # in a mock supervisor by assigning ``app.state.processes`` after the
+        # app is built, and a captured value would keep handing routes the
+        # original one.
+        state = scope["app"].state
+        return RequestUI(
+            entry=entry,
+            store=state.store,
+            processes=state.processes,
+            slot=slot,
+            base=base,
+            project_base=base,
+            templates=state.templates,
+        )
+
+    app.add_middleware(RequestUIMiddleware, resolver=resolve_ui)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     register_routers(app)

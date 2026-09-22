@@ -75,6 +75,18 @@ class ProjectContext:
     pipeline: Pipeline = field(compare=False, repr=False)
     config: KptnConfig = field(compare=False, repr=False)
 
+    @property
+    def display_name(self) -> str:
+        """What the app bar calls this project.
+
+        The pipeline's name, here. A multi-project server names projects by
+        their working directory instead (:class:`~kptn_server.registry.ProjectEntry`),
+        because the app bar renders on pages that must not load a pipeline --
+        the run history above all. One attribute name, two sources, so the
+        template does not have to know which mode it is in.
+        """
+        return self.pipeline_name
+
     @classmethod
     def load(cls, root: Path) -> ProjectContext:
         """Resolve *root* into a served project, or raise :class:`ProjectError`."""
