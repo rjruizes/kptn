@@ -15,7 +15,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:kptn.openUI"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -24,7 +24,17 @@
         "command": "kptn.openUI",
         "title": "kptn: Open Pipeline UI"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "kptn",
+      "properties": {
+        "kptn.prewarmOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the pipeline UI server in the background when the window opens, so the command does not have to wait for it. Also opens the UI once on the first window after a new build is installed. Off by default: a window opened to edit one file should not spawn a server."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

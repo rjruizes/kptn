@@ -16,8 +16,10 @@ import {
 	LOOPBACK_HOST,
 	authorizeOpenSource,
 	buildHostHtml,
+	consumeInstallMarker,
 	createBridgeToken,
 	createLoopbackGate,
+	decideStartupAction,
 	defaultSpawner,
 	withBridgeToken,
 } from './server';
@@ -52,6 +54,10 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 		}),
 	);
+
+	// Last, so that a slow or failing start cannot delay the command being
+	// registered -- the reader must always have a way in.
+	void runStartupAction(context, output);
 }
 
 export function deactivate(): void {
@@ -67,14 +73,19 @@ function disposeServer(): void {
 	server = undefined;
 }
 
-async function openPipelineUI(
+/**
+ * Bring the `kptn ui` server up, or return the one already running.
+ *
+ * Shared by the command and by prewarming, so that a prewarmed window and a
+ * command-opened one differ in nothing but when the cost was paid --
+ * `KptnServer.start` hands back the live child rather than spawning a
+ * second.
+ */
+async function startServer(
 	context: vscode.ExtensionContext,
 	output: vscode.OutputChannel,
-): Promise<void> {
-	const workspace = vscode.workspace.workspaceFolders?.[0];
-	if (!workspace) {
-		throw new Error('Open a folder containing a kptn project first.');
-	}
+	workspace: vscode.WorkspaceFolder,
+): Promise<URL> {
 	if (!server) {
 		throw new Error('The kptn extension is not active.');
 	}
@@ -89,7 +100,7 @@ async function openPipelineUI(
 	// from a request -- the launcher asks for it here, once the port is known,
 	// and passes it to `kptn ui --root-path` so every URL the page emits keeps
 	// the prefix. On desktop this resolves to `/` and nothing is passed.
-	const url = await server.start(workspace.uri, executable, {
+	return server.start(workspace.uri, executable, {
 		extraPythonPath,
 		resolveRootPath: async (port: number) => {
 			const forwarded = await vscode.env.asExternalUri(
@@ -98,6 +109,64 @@ async function openPipelineUI(
 			return forwarded.path;
 		},
 	});
+}
+
+/**
+ * Prewarm, open, or stay out of the way -- once, at activation.
+ *
+ * Everything decidable lives in `decideStartupAction`; this is the part that
+ * needs a `vscode`. It never rejects: a server that will not start is a
+ * failed command later, with a message, not a failed activation now.
+ */
+async function runStartupAction(
+	context: vscode.ExtensionContext,
+	output: vscode.OutputChannel,
+): Promise<void> {
+	const workspace = vscode.workspace.workspaceFolders?.[0];
+	if (!workspace) {
+		return;
+	}
+
+	// Consumed whether or not it is acted on. A marker left behind in a
+	// window with prewarming off would otherwise fire whenever it is
+	// switched on, long after the install it refers to.
+	const justInstalled = consumeInstallMarker(workspace.uri.fsPath);
+	const enabled = vscode.workspace
+		.getConfiguration('kptn')
+		.get<boolean>('prewarmOnStartup', false);
+
+	try {
+		switch (decideStartupAction({ enabled, justInstalled })) {
+			case 'open':
+				output.appendLine('A new kptn build is installed; opening the pipeline UI.');
+				await openPipelineUI(context, output);
+				break;
+			case 'prewarm':
+				output.appendLine('Prewarming the kptn UI server.');
+				await startServer(context, output, workspace);
+				break;
+			case 'none':
+				break;
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		output.appendLine(`Could not start the pipeline UI at startup: ${message}`);
+	}
+}
+
+async function openPipelineUI(
+	context: vscode.ExtensionContext,
+	output: vscode.OutputChannel,
+): Promise<void> {
+	const workspace = vscode.workspace.workspaceFolders?.[0];
+	if (!workspace) {
+		throw new Error('Open a folder containing a kptn project first.');
+	}
+	if (!server) {
+		throw new Error('The kptn extension is not active.');
+	}
+
+	const url = await startServer(context, output, workspace);
 	const externalUri = await vscode.env.asExternalUri(vscode.Uri.parse(url.toString()));
 
 	// The token is minted per render and lives only as long as the rendered

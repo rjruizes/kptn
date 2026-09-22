@@ -12,6 +12,9 @@ import {
 	authorizeOpenSource,
 	buildHostHtml,
 	createBridgeToken,
+	INSTALL_MARKER_SEGMENTS,
+	consumeInstallMarker,
+	decideStartupAction,
 	isAddressInUse,
 	reserveLoopbackPort,
 	withBridgeToken,
@@ -1084,15 +1087,113 @@ suite('shared UI loopback plumbing', () => {
 	});
 });
 
+suite('startup behaviour', () => {
+	/*
+	 * Starting `kptn ui` costs the interpreter plus every import the served
+	 * project pulls in -- seconds, all of it after the reader has asked for
+	 * the UI and is watching an empty panel. Prewarming moves that cost to
+	 * window startup, where nobody is waiting on it.
+	 *
+	 * The decision is kept pure, and here rather than in extension.ts,
+	 * because extension.ts cannot be imported without a live `vscode`.
+	 */
+
+	function markerPath(root: string): string {
+		return path.join(root, ...INSTALL_MARKER_SEGMENTS);
+	}
+
+	function workspaceWithMarker(): string {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kptn-startup-'));
+		fs.mkdirSync(path.dirname(markerPath(root)), { recursive: true });
+		fs.writeFileSync(markerPath(root), '');
+		return root;
+	}
+
+	test('does nothing when prewarming is off', () => {
+		// The default everywhere but prod: opening a folder must not spawn a
+		// server the reader never asked for.
+		assert.strictEqual(
+			decideStartupAction({ enabled: false, justInstalled: false }),
+			'none',
+		);
+	});
+
+	test('does nothing when prewarming is off, even just after an install', () => {
+		assert.strictEqual(
+			decideStartupAction({ enabled: false, justInstalled: true }),
+			'none',
+		);
+	});
+
+	test('prewarms silently on an ordinary window', () => {
+		assert.strictEqual(
+			decideStartupAction({ enabled: true, justInstalled: false }),
+			'prewarm',
+		);
+	});
+
+	test('opens the panel on the first window after an install', () => {
+		// The extension host keeps the old build live until the window is
+		// reloaded, so this reload is the earliest the new one can show
+		// itself -- and the reader reloaded *because* they were told to.
+		assert.strictEqual(
+			decideStartupAction({ enabled: true, justInstalled: true }),
+			'open',
+		);
+	});
+
+	test('reports no marker in a workspace that never had one', () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kptn-startup-'));
+
+		assert.strictEqual(consumeInstallMarker(root), false);
+		assert.strictEqual(fs.existsSync(markerPath(root)), false, 'created nothing');
+	});
+
+	test('reports the marker and removes it', () => {
+		const root = workspaceWithMarker();
+
+		assert.strictEqual(consumeInstallMarker(root), true);
+		assert.strictEqual(fs.existsSync(markerPath(root)), false);
+	});
+
+	test('the marker fires exactly once', () => {
+		// Left behind, it would reopen the panel on every window open for
+		// the rest of the deployment.
+		const root = workspaceWithMarker();
+
+		consumeInstallMarker(root);
+
+		assert.strictEqual(consumeInstallMarker(root), false);
+	});
+
+	test('an unreadable workspace is not an activation failure', () => {
+		// Activation runs this before anything else works; a surprise here
+		// must not be the difference between a usable extension and none.
+		assert.strictEqual(
+			consumeInstallMarker(path.join(path.sep, 'no', 'such', 'workspace')),
+			false,
+		);
+	});
+});
+
 suite('extension contributions', () => {
 	const manifestPath = path.join(__dirname, '..', '..', 'package.json');
 	const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
 		activationEvents: string[];
-		contributes: Record<string, unknown> & { commands: { command: string; title: string }[] };
+		contributes: Record<string, unknown> & {
+			commands: { command: string; title: string }[];
+			configuration: { properties: Record<string, { type: string; default: unknown }> };
+		};
 	};
 
-	test('activates on the single open-UI command', () => {
-		assert.deepStrictEqual(manifest.activationEvents, ['onCommand:kptn.openUI']);
+	test('activates at startup, so it can prewarm before it is asked', () => {
+		assert.deepStrictEqual(manifest.activationEvents, ['onStartupFinished']);
+	});
+
+	test('contributes the prewarm setting, off by default', () => {
+		const setting = manifest.contributes.configuration.properties['kptn.prewarmOnStartup'];
+		assert.strictEqual(setting.type, 'boolean');
+		assert.strictEqual(setting.default, false);
 	});
 
 	test('contributes exactly one command', () => {
@@ -1102,7 +1203,7 @@ suite('extension contributions', () => {
 	});
 
 	test('contributes no views, view containers or menus', () => {
-		assert.deepStrictEqual(Object.keys(manifest.contributes), ['commands']);
+		assert.deepStrictEqual(Object.keys(manifest.contributes), ['commands', 'configuration']);
 	});
 
 	test('no longer ships the JSON-RPC backend shim', () => {

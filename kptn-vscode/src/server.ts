@@ -705,3 +705,70 @@ function escapeHtml(value: string): string {
 		.replace(/'/g, '&#39;');
 }
 
+
+// ---------------------------------------------------------------------------
+// Startup
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the installer leaves word that it installed a new build.
+ *
+ * Written by `scripts/install-kptn-vscode.sh --on-folder-open` in the served
+ * project, which is the only thing that knows an install happened: the
+ * extension host keeps the previous build live until the window is reloaded,
+ * so the build that finds this file is never the build that was running when
+ * it was written. Both ends hard-code the path; there is no channel between
+ * a shell script and an extension that could carry it instead.
+ */
+export const INSTALL_MARKER_SEGMENTS = ['.kptn', '.vscode-open-ui'] as const;
+
+/** What activation should do, before anything with a `vscode` in it. */
+export type StartupAction = 'none' | 'prewarm' | 'open';
+
+export interface StartupInputs {
+	/** `kptn.prewarmOnStartup`. Off by default, on in prod. */
+	enabled: boolean;
+	/** Whether this window is the first since a new build was installed. */
+	justInstalled: boolean;
+}
+
+/**
+ * Prewarm, open, or stay out of the way.
+ *
+ * Starting the server costs the interpreter plus every import the served
+ * project pulls in, and today all of it is spent after the reader has asked
+ * for the UI, watching an empty panel. Prewarming spends it at window
+ * startup instead. It is opt-in because a window opened to edit one file
+ * should not spawn a server, and a developer running `kptn ui` from a
+ * terminal already has one.
+ */
+export function decideStartupAction(inputs: StartupInputs): StartupAction {
+	if (!inputs.enabled) {
+		return 'none';
+	}
+	return inputs.justInstalled ? 'open' : 'prewarm';
+}
+
+/**
+ * Whether a new build was just installed here -- asked exactly once.
+ *
+ * The marker is removed as it is read, because it answers "is this the first
+ * window since the install", and every window after the first must get
+ * `false`. Removal failures are reported as "no marker" for the same reason:
+ * a marker that cannot be cleared would reopen the panel on every window
+ * open for the rest of the deployment, which is worse than not opening it.
+ */
+export function consumeInstallMarker(workspaceFsPath: string): boolean {
+	const marker = path.join(workspaceFsPath, ...INSTALL_MARKER_SEGMENTS);
+	try {
+		if (!fs.existsSync(marker)) {
+			return false;
+		}
+		fs.unlinkSync(marker);
+		return true;
+	} catch {
+		// Activation runs this before anything else works. A workspace that
+		// cannot be read is not a reason to have no extension.
+		return false;
+	}
+}
