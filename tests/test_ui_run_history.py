@@ -767,16 +767,16 @@ def test_force_finish_still_accepts_a_healthy_run(
 # -- interrupted runs ------------------------------------------------------
 
 
-def test_interrupted_run_renders_from_status_not_events(
+def test_interrupted_run_explains_itself_on_the_page(
     client, store: RunStore, app, active_run: RunRecord
 ) -> None:
-    """Reconciliation writes a status and appends no event.
+    """Reconciliation closes the run *and* says why, in the console.
 
-    So a page (or summary) that derived terminal state from the event stream
-    would show an interrupted run as still going, forever. This drives a real
-    reconciliation pass and then asserts both halves: the page says
-    ``interrupted``, and the event log still has no finish event to have said
-    it.
+    A killed worker prints nothing, so before reconciliation appended this row
+    the console stopped mid-output and only the header changed -- the reader's
+    last line on screen was an unrelated log line. This drives a real
+    reconciliation pass and asserts the page reports the status, drops the
+    live controls, and carries the explanation.
     """
     store.record_worker_start(active_run.run_id, pid=DEAD_PID, started_at=1.0)
     # Past the supervisor's grace window, without waiting for it.
@@ -784,14 +784,39 @@ def test_interrupted_run_renders_from_status_not_events(
     manager = RunProcessManager(store, now=lambda: future)
     assert manager.reconcile() == [active_run.run_id]
 
-    kinds = [event.kind for event in store.events_after(active_run.run_id)]
-    assert "run_finished" not in kinds
+    finished = [
+        event
+        for event in store.events_after(active_run.run_id)
+        if event.kind == "run_finished"
+    ]
+    assert len(finished) == 1
+    assert finished[0].payload["status"] == STATUS_INTERRUPTED
 
     body = client.get(f"/runs/{active_run.run_id}").text
     assert STATUS_INTERRUPTED in body
+    assert "worker process disappeared" in body
     # Terminal, so no Stop control and no live stream.
     assert f'action="/runs/{active_run.run_id}/stop"' not in body
     assert 'data-terminal="true"' in body
+
+
+def test_a_status_only_interruption_still_reads_as_terminal(
+    client, store: RunStore, active_run: RunRecord
+) -> None:
+    """The original guard, kept: terminal state comes from the status.
+
+    A page that derived "finished" from the presence of a finish event would
+    show a run as still going forever whenever no such event exists -- which
+    is every run interrupted by a server too old to append one, and any run
+    whose announcement the store refused.
+    """
+    store.finish_run(active_run.run_id, STATUS_INTERRUPTED)
+
+    body = client.get(f"/runs/{active_run.run_id}").text
+
+    assert STATUS_INTERRUPTED in body
+    assert 'data-terminal="true"' in body
+    assert f'action="/runs/{active_run.run_id}/stop"' not in body
 
 
 def test_history_shows_an_interrupted_run_as_interrupted(

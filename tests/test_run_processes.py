@@ -36,7 +36,9 @@ from kptn_server.processes import (
     ProcessIdentity,
     RunProcessManager,
 )
+from kptn.runner.events import EventKind
 from kptn_server.run_store import (
+    STATUS_FAILED,
     STATUS_INTERRUPTED,
     STATUS_RUNNING,
     STATUS_STOP_REQUESTED,
@@ -634,3 +636,119 @@ def test_manager_owns_no_background_threads(store: RunStore) -> None:
     manager = RunProcessManager(store)
     manager.reconcile()
     assert {t.ident for t in threading.enumerate()} == before
+
+
+# -- what an interrupted run tells the console -----------------------------
+#
+# A SIGKILLed worker writes nothing: no traceback, no final event, no exit
+# status. Before this, the console simply stopped mid-output and only the
+# page header changed to "interrupted" -- so the reader's last line of output
+# was an unrelated log line and nothing on screen said why. Reconciliation is
+# the only thing that knows, so it is the only thing that can say.
+
+
+def _finished_events(store: RunStore, run_id: str) -> list:
+    return [
+        event
+        for event in store.events_after(run_id)
+        if event.kind == EventKind.RUN_FINISHED.value
+    ]
+
+
+def test_reconcile_appends_an_event_explaining_the_interruption(
+    store: RunStore, ui_project: Path
+) -> None:
+    run = fake_running_run(store, ui_project, pid=999999, worker_started_at=1.0)
+
+    RunProcessManager(store).reconcile()
+
+    events = _finished_events(store, run.run_id)
+    assert len(events) == 1, "the console needs exactly one closing row"
+    payload = events[0].payload
+    assert payload["status"] == STATUS_INTERRUPTED
+    detail = str(payload["detail"])
+    assert "worker" in detail.lower(), detail
+    assert "memory" in detail.lower(), detail
+
+
+def test_the_explanation_survives_into_the_rendered_console_row(
+    store: RunStore, ui_project: Path
+) -> None:
+    """The payload is only useful if the row actually shows it."""
+    from pathlib import Path as _Path
+
+    from kptn_server.routes.runs import console_event
+
+    run = fake_running_run(store, ui_project, pid=999999, worker_started_at=1.0)
+    RunProcessManager(store).reconcile()
+
+    event = _finished_events(store, run.run_id)[0]
+    prepared = console_event(event, _Path(run.log_path))
+
+    assert prepared["label"] == "run interrupted"
+    assert "worker" in prepared["text"].lower(), prepared["text"]
+    assert prepared["status"] == STATUS_INTERRUPTED
+
+
+def test_a_normally_finished_run_still_renders_no_summary(
+    store: RunStore, ui_project: Path
+) -> None:
+    """The no-duplication rule for ordinary finishes must not regress.
+
+    A failed run's reason is the traceback the worker already printed into the
+    log; repeating it on the closing row said the same sentence twice.
+    """
+    from pathlib import Path as _Path
+
+    from kptn_server.routes.runs import console_event
+
+    run = fake_running_run(store, ui_project, pid=999999, worker_started_at=1.0)
+    event = store.append_event(
+        run.run_id,
+        EventKind.RUN_FINISHED.value,
+        payload={"status": STATUS_FAILED},
+    )
+
+    prepared = console_event(event, _Path(run.log_path))
+
+    assert prepared["label"] == "run failed"
+    assert prepared["text"] == ""
+
+
+def test_no_event_is_appended_when_the_worker_finished_first(
+    store: RunStore, ui_project: Path
+) -> None:
+    """Reconcile must not narrate an interruption that did not happen.
+
+    The worker can finish in the window between reconcile listing unfinished
+    runs and checking liveness. ``finish_run`` refuses, and the console must
+    not be told the worker vanished from a run that succeeded.
+    """
+    run = fake_running_run(store, ui_project, pid=999999, worker_started_at=1.0)
+    manager = RunProcessManager(store)
+    store.finish_run(run.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    assert manager.reconcile() == []
+    assert _finished_events(store, run.run_id) == []
+
+
+def test_the_signal_is_named_when_the_launcher_still_holds_the_handle(
+    store: RunStore, ui_project: Path
+) -> None:
+    """``-9`` versus ``-11`` is the difference between an OOM and a crash."""
+
+    class _KilledHandle:
+        returncode = -9
+
+        def poll(self) -> int:
+            return -9
+
+    run = fake_running_run(store, ui_project, pid=999999, worker_started_at=1.0)
+    manager = RunProcessManager(store)
+    manager._handles[run.run_id] = _KilledHandle()  # type: ignore[assignment]
+
+    manager.reconcile()
+
+    detail = str(_finished_events(store, run.run_id)[0].payload["detail"])
+    assert "signal 9" in detail, detail
+    assert "SIGKILL" in detail, detail

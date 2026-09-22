@@ -45,6 +45,7 @@ from typing import Callable
 
 import psutil
 
+from kptn.runner.events import EventKind
 from kptn_server.run_store import (
     STATUS_INTERRUPTED,
     TERMINAL_STATUSES,
@@ -52,6 +53,7 @@ from kptn_server.run_store import (
     RunRecord,
     RunStateError,
     RunStore,
+    RunStoreError,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -255,6 +257,14 @@ class RunProcessManager:
         for record in self._store.unfinished_runs():
             if self._looks_alive(record):
                 continue
+            # Before the status, because the store will not accept a
+            # ``run_finished`` event for a run that is already terminal --
+            # and that guard is what protects the case worth protecting: a
+            # worker that finished in the window between listing unfinished
+            # runs and checking liveness has already closed its own run, so
+            # this append is refused rather than narrating an interruption
+            # that never happened.
+            self._announce_interruption(record.run_id)
             if self._finish_quietly(record.run_id, STATUS_INTERRUPTED):
                 interrupted.append(record.run_id)
         self._reap_finished_handles()
@@ -363,6 +373,60 @@ class RunProcessManager:
             )
             return False
         return True
+
+    def _announce_interruption(self, run_id: str) -> None:
+        """Tell the run's own console why it stopped.
+
+        A SIGKILLed worker writes nothing at all -- no traceback, no closing
+        event, no exit status -- so without this the console simply stops
+        mid-output and only the page header changes. Reconciliation is the one
+        place that knows what happened, so it is the only place that can say.
+
+        Best effort by construction. The store refuses a ``run_finished``
+        event for a run that is no longer running, which is precisely the
+        signal that the worker closed the run itself in the meantime -- so a
+        refusal here means there was nothing to announce.
+        """
+        detail = (
+            "the worker process disappeared without recording an outcome"
+            f"{self._signal_note(run_id)} -- typically the kernel killed it "
+            "(out of memory), or the host restarted"
+        )
+        try:
+            self._store.append_event(
+                run_id,
+                EventKind.RUN_FINISHED.value,
+                payload={"status": STATUS_INTERRUPTED, "detail": detail},
+            )
+        except (RunStateError, RunNotFoundError, RunStoreError) as exc:
+            _LOGGER.debug(
+                "could not record why run %s was interrupted: %s", run_id, exc
+            )
+
+    def _signal_note(self, run_id: str) -> str:
+        """ ", killed by signal 9 (SIGKILL)" when the handle still knows.
+
+        Only available while the launcher that spawned the worker is the
+        process running this pass -- the handle does not survive a restart of
+        the UI server. When it is there it is the difference between an OOM
+        kill (9) and a crash in a native library (11), which is otherwise
+        unrecoverable after the fact.
+        """
+        handle = self._handles.get(run_id)
+        if handle is None:
+            return ""
+        try:
+            code = handle.poll()
+        except Exception:  # noqa: BLE001 - a diagnostic must not raise here
+            return ""
+        if code is None or code >= 0:
+            return ""
+        number = -code
+        try:
+            name = signal.Signals(number).name
+        except ValueError:
+            return f", killed by signal {number}"
+        return f", killed by signal {number} ({name})"
 
     def _reap_finished_handles(self) -> None:
         for run_id, proc in list(self._handles.items()):

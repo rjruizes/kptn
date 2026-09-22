@@ -268,10 +268,17 @@ def _summary(event: StoredEvent) -> str:
         # stream renders one event at a time, so the row would differ
         # depending on whether it arrived live or came back with a reload.
         #
-        # Nothing becomes unexplained. A failure outside any task has no task
-        # row to have shown it, but the worker prints the traceback into the
-        # captured log either way, so the reason is always on screen.
-        return ""
+        # Nothing becomes unexplained *when there is a worker left to
+        # explain itself*. A failure outside any task has no task row to have
+        # shown it, but the worker prints the traceback into the captured log
+        # either way.
+        #
+        # The exception is a worker that was killed outright: it printed
+        # nothing, and reconciliation is what closed the run. That path sets
+        # ``detail``, and it is the only one that does -- so rendering it here
+        # keeps ordinary finishes silent while the console still says why an
+        # interrupted run stopped.
+        return str(payload.get("detail") or "")
     if event.kind == EventKind.TASK_FINISHED.value:
         # No status: the label carries it.
         parts = [str(payload["error"])] if payload.get("error") else []
