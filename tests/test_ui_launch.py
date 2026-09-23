@@ -1,6 +1,6 @@
 """Tests for the ``kptn ui`` standalone launcher and the module entry point.
 
-The launcher is small but has four properties worth pinning down:
+The launcher is small but has five properties worth pinning down:
 
 1. It binds **loopback** by default. There is no authentication and no remote
    execution anywhere in this UI, so the default bind address is the only
@@ -16,6 +16,11 @@ The launcher is small but has four properties worth pinning down:
 4. ``python -m kptn ui`` works, because jupyter-server-proxy's config invokes
    the notebook environment's interpreter that way rather than relying on a
    console script being on ``PATH``.
+5. ``--projects-root`` builds the *multi-project* application instead, from a
+   working directory that is no project at all, for whoever ``--user`` (or
+   the environment) names. That is the production launch path, and
+   :func:`kptn_server.app.create_app_for_env` is the same decision made from
+   the environment for the ``--reload`` subprocess.
 
 No test here opens a real browser (an autouse fixture makes that fail loudly),
 starts a real server, or synchronizes on ``sleep``: the readiness probe, the
@@ -35,6 +40,7 @@ from typer.testing import CliRunner
 
 from kptn.cli import app
 from kptn.cli import commands as commands_module
+from tests.conftest import FIXTURE_PROJECT, copy_fixture_project
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -336,6 +342,259 @@ def test_browser_opener_runs_on_a_daemon_thread(
     thread.join(timeout=10)
     assert ran.is_set()
     assert not thread.is_alive()
+
+
+# -- --projects-root -------------------------------------------------------
+#
+# This is how the feature actually starts in production: jupyter-server-proxy
+# runs ``python -m kptn ui --projects-root ... --root-path {base_url}kptn``
+# from the notebook server's working directory, which names no project at
+# all. Nothing below binds a socket -- ``stub_uvicorn`` sees to that -- but
+# the application object handed to uvicorn is the real one.
+
+USER = "rruizesparza"
+
+
+@pytest.fixture
+def projects_root(tmp_path: Path) -> Path:
+    """A releases folder with one of this person's projects, and one of someone else's."""
+    root = tmp_path / "shared"
+    release = root / "r1"
+    release.mkdir(parents=True)
+    copy_fixture_project(FIXTURE_PROJECT, release, f"{USER}_main")
+    copy_fixture_project(FIXTURE_PROJECT, release, "someoneelse_main")
+    return root
+
+
+def _launched_app(stub_uvicorn: list[tuple[tuple, dict]]):
+    ((args, _kwargs),) = stub_uvicorn
+    assert args, "uvicorn.run was given no application"
+    return args[0]
+
+
+def test_projects_root_hands_uvicorn_a_multi_project_app(
+    tmp_path: Path,
+    projects_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_uvicorn: list[tuple[tuple, dict]],
+) -> None:
+    """The working directory names no project, and that must be fine."""
+    from fastapi import FastAPI
+
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["ui", "--no-open", "--projects-root", str(projects_root), "--user", USER],
+    )
+
+    assert result.exit_code == 0, result.output
+    application = _launched_app(stub_uvicorn)
+    assert isinstance(application, FastAPI)
+    # A multi-project app has a registry and no single resolved project.
+    assert application.state.registry.projects_root == projects_root
+    assert not hasattr(application.state, "project")
+    assert [entry.slug for entry in application.state.registry.entries()] == [
+        f"{USER}_main"
+    ]
+
+
+def test_projects_root_carries_the_proxy_prefix(
+    tmp_path: Path,
+    projects_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_uvicorn: list[tuple[tuple, dict]],
+) -> None:
+    """``--root-path`` and ``--projects-root`` are used together in production."""
+    monkeypatch.chdir(tmp_path)
+    prefix = "/notebook/user/rruizesparza/kptn"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "ui",
+            "--no-open",
+            "--projects-root",
+            str(projects_root),
+            "--user",
+            USER,
+            "--root-path",
+            prefix,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _launched_app(stub_uvicorn).state.base == prefix
+
+
+def test_projects_root_defaults_the_user_to_jupyterhub_user(
+    tmp_path: Path,
+    projects_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_uvicorn: list[tuple[tuple, dict]],
+) -> None:
+    """Under JupyterHub the single-user server is told whose it is."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JUPYTERHUB_USER", USER)
+    monkeypatch.setenv("USER", "someoneelse")
+
+    result = CliRunner().invoke(
+        app, ["ui", "--no-open", "--projects-root", str(projects_root)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _launched_app(stub_uvicorn).state.registry.user == USER
+
+
+def test_projects_root_falls_back_to_the_shell_user(
+    tmp_path: Path,
+    projects_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_uvicorn: list[tuple[tuple, dict]],
+) -> None:
+    """A plain shell has no ``JUPYTERHUB_USER``, and the flag stays optional."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("JUPYTERHUB_USER", raising=False)
+    monkeypatch.setenv("USER", USER)
+
+    result = CliRunner().invoke(
+        app, ["ui", "--no-open", "--projects-root", str(projects_root)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _launched_app(stub_uvicorn).state.registry.user == USER
+
+
+def test_an_explicit_user_wins_over_the_environment(
+    tmp_path: Path,
+    projects_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_uvicorn: list[tuple[tuple, dict]],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JUPYTERHUB_USER", "someoneelse")
+
+    result = CliRunner().invoke(
+        app,
+        ["ui", "--no-open", "--projects-root", str(projects_root), "--user", USER],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _launched_app(stub_uvicorn).state.registry.user == USER
+
+
+def test_projects_root_names_the_person_and_the_root_it_serves(
+    tmp_path: Path,
+    projects_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_uvicorn: list[tuple[tuple, dict]],
+) -> None:
+    """The one line printed has to say whose directories are on offer."""
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["ui", "--no-open", "--projects-root", str(projects_root), "--user", USER],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert USER in result.output
+    assert str(projects_root) in result.output
+
+
+def test_projects_root_starts_even_when_a_project_is_broken(
+    tmp_path: Path,
+    projects_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_uvicorn: list[tuple[tuple, dict]],
+) -> None:
+    """No fail-fast load: the list page reports each project's error instead.
+
+    Single-project mode exits non-zero on an unusable directory. Doing that
+    here would let one bad checkout keep a person out of all their others.
+    """
+    monkeypatch.chdir(tmp_path)
+    broken = projects_root / "r1" / f"{USER}_broken"
+    broken.mkdir()
+    (broken / "pyproject.toml").write_text("not = [valid", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["ui", "--no-open", "--projects-root", str(projects_root), "--user", USER],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(stub_uvicorn) == 1
+
+
+# -- create_app_for_env ----------------------------------------------------
+#
+# The ``--reload`` subprocess re-imports the app from an import string, which
+# carries no arguments, so the environment is the only channel. The launcher
+# writes it; this is the other half.
+
+
+def test_create_app_for_env_reads_the_projects_root_and_user(
+    tmp_path: Path, projects_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kptn_server.app import create_app_for_env
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("KPTN_UI_PROJECTS_ROOT", str(projects_root))
+    monkeypatch.setenv("KPTN_UI_USER", USER)
+    monkeypatch.setenv("KPTN_UI_ROOT_PATH", "/notebook/user/rruizesparza/kptn")
+
+    application = create_app_for_env()
+
+    assert application.state.registry.projects_root == projects_root
+    assert application.state.registry.user == USER
+    assert application.state.base == "/notebook/user/rruizesparza/kptn"
+    assert not hasattr(application.state, "project")
+
+
+def test_create_app_for_env_defaults_the_user_like_the_command_does(
+    tmp_path: Path, projects_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kptn_server.app import create_app_for_env
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KPTN_UI_USER", raising=False)
+    monkeypatch.setenv("JUPYTERHUB_USER", USER)
+    monkeypatch.setenv("KPTN_UI_PROJECTS_ROOT", str(projects_root))
+
+    assert create_app_for_env().state.registry.user == USER
+
+
+def test_create_app_for_env_serves_the_working_directory_without_a_root(
+    ui_project_cwd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ``KPTN_UI_PROJECTS_ROOT`` means the historical single-project app."""
+    from kptn_server.app import create_app_for_env
+
+    monkeypatch.delenv("KPTN_UI_PROJECTS_ROOT", raising=False)
+    monkeypatch.setenv("KPTN_UI_ROOT_PATH", "/notebook/user/rruizesparza/kptn")
+
+    application = create_app_for_env()
+
+    assert application.state.project.root == ui_project_cwd.resolve()
+    assert application.state.base == "/notebook/user/rruizesparza/kptn"
+    assert not hasattr(application.state, "registry")
+
+
+def test_create_app_for_env_needs_no_environment_at_all(
+    ui_project_cwd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A developer running ``kptn ui --reload`` sets none of these."""
+    from kptn_server.app import create_app_for_cwd, create_app_for_env
+
+    for name in ("KPTN_UI_PROJECTS_ROOT", "KPTN_UI_USER", "KPTN_UI_ROOT_PATH"):
+        monkeypatch.delenv(name, raising=False)
+
+    application = create_app_for_env()
+
+    assert application.state.project.root == ui_project_cwd.resolve()
+    assert application.state.base == ""
+    assert create_app_for_cwd is create_app_for_env
 
 
 # -- entry points ----------------------------------------------------------
