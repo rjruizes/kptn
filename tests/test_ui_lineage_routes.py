@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from kptn_server.app import create_app
+from kptn_server.app import create_app, create_multi_app
 from kptn_server.routes import inspect as inspect_routes
 from kptn_server.routes import lineage as lineage_routes
 
@@ -105,9 +105,11 @@ def test_module_opts_into_the_ui_hygiene_fixtures(
     assert request.node.get_closest_marker("ui_hygiene") is not None
 
 
-def _links(client: TestClient) -> dict[str, str]:
+def _links(
+    client: TestClient, path: str = "/walkthrough/task/build_widgets"
+) -> dict[str, str]:
     """``{label: href}`` for the output links on the task-detail page."""
-    body = client.get("/walkthrough/task/build_widgets").text
+    body = client.get(path).text
     return {
         match.group(2): match.group(1).replace("&amp;", "&")
         for match in re.finditer(
@@ -253,3 +255,68 @@ def test_a_config_path_spelled_with_dot_dot_still_resolves_to_the_project(
     response = client.get(f"/table-columns?configPath={equivalent}&table=main.widgets")
 
     assert response.status_code == 200, response.text
+
+
+# ---------------------------------------------------------------------------
+# The two links behind a prefix, and behind a prefix plus a project slug
+# ---------------------------------------------------------------------------
+#
+# These hrefs are built in Python, not in a template, so nothing prefixes
+# them for free -- the same trap ``_detail_url`` is documented for. Two
+# regressions lived here at once: the href was emitted root-absolute (so it
+# escaped the proxy under ``--root-path``), and the "does this app serve the
+# target" check compared the bare route path against the mounted one, so
+# under ``--projects-root`` -- where every project router is mounted at
+# ``/p/{slug}`` -- both links vanished from every task-detail page and the
+# lineage surface became reachable only by typing a URL.
+
+PREFIX = "/notebook/user/rruizesparza/kptn"
+USER = "rruizesparza"
+
+
+def test_the_output_links_carry_the_proxy_prefix(lineage_project: Path) -> None:
+    client = TestClient(create_app(lineage_project, root_path=PREFIX))
+
+    links = _links(client)
+
+    assert set(links) == {"Lineage", "Preview"}
+    assert links["Lineage"].startswith(f"{PREFIX}{inspect_routes.LINEAGE_PATH}?")
+    assert links["Preview"].startswith(f"{PREFIX}{inspect_routes.TABLE_PREVIEW_PATH}?")
+
+
+@pytest.fixture
+def lineage_projects_root(lineage_project: Path, tmp_path: Path) -> Path:
+    """A releases folder holding one of this person's working directories."""
+    import shutil
+
+    root = tmp_path / "shared"
+    (root / "r1").mkdir(parents=True)
+    shutil.copytree(lineage_project, root / "r1" / f"{USER}_main")
+    return root
+
+
+def test_the_output_links_are_offered_under_projects_root(
+    lineage_projects_root: Path,
+) -> None:
+    """The links have to survive the ``/p/<slug>`` mount, prefix and all."""
+    client = TestClient(create_multi_app(lineage_projects_root, USER, PREFIX))
+    project_base = f"{PREFIX}/p/{USER}_main"
+
+    links = _links(client, f"/p/{USER}_main/walkthrough/task/build_widgets")
+
+    assert set(links) == {"Lineage", "Preview"}
+    assert links["Lineage"].startswith(f"{project_base}{inspect_routes.LINEAGE_PATH}?")
+    assert links["Preview"].startswith(
+        f"{project_base}{inspect_routes.TABLE_PREVIEW_PATH}?"
+    )
+
+
+def test_a_projects_root_lineage_link_resolves(lineage_projects_root: Path) -> None:
+    """Follow it the way a reader would: the proxy strips ``PREFIX`` first."""
+    client = TestClient(create_multi_app(lineage_projects_root, USER, PREFIX))
+
+    href = _links(client, f"/p/{USER}_main/walkthrough/task/build_widgets")["Lineage"]
+    response = client.get(href[len(PREFIX) :])
+
+    assert response.status_code == 200, response.text
+    assert "<title>kptn Lineage</title>" in response.text

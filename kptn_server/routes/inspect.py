@@ -390,6 +390,20 @@ def _served_paths(request: Request) -> set[str]:
     }
 
 
+def _is_served(served: set[str], path: str) -> bool:
+    """Whether this application serves *path*, mount prefix or not.
+
+    Multi-project mode mounts every project-scoped router under
+    ``/p/{slug}``, so the recorded route path is ``/p/{slug}/lineage-page``
+    while :data:`LINEAGE_PATH` is the bare ``/lineage-page``. Comparing on the
+    suffix keeps the test prefix-free: this function never has to know what
+    the mount prefix is, which is the only reason the equality test it
+    replaces silently dropped both links from every task-detail page under
+    ``--projects-root``.
+    """
+    return any(route.endswith(path) for route in served)
+
+
 def _resolver() -> tuple[Any, Any] | None:
     """The retained service's table mapping and name normalizer, if available.
 
@@ -435,6 +449,11 @@ def output_links(
     what makes lineage and a preview meaningful for that name -- and this
     application has to actually serve the endpoint, or the link is a 404 with
     extra steps.
+
+    Both hrefs carry ``project_base`` for the same reason
+    :func:`_detail_url` does: they are built in Python rather than in a
+    template, so nothing prefixes them for free, and a root-absolute href
+    resolves against the proxy's host and leaves the proxy behind.
     """
     if not outputs:
         return {}
@@ -452,6 +471,7 @@ def output_links(
         return {}
 
     served = _served_paths(request)
+    project_base = ui(request).project_base
     targets = [
         (LINEAGE_PATH, "Lineage", False),
         (TABLE_PREVIEW_PATH, "Preview", True),
@@ -462,14 +482,13 @@ def output_links(
         if not normalized or normalized not in table_map:
             continue
         for path, label, needs_table in targets:
-            if path not in served:
+            if not _is_served(served, path):
                 continue
             query: dict[str, str] = {"configPath": str(config_path)}
             if needs_table:
                 query["table"] = output
-            links.setdefault(output, []).append(
-                {"href": f"{path}?{urllib.parse.urlencode(query)}", "label": label}
-            )
+            href = f"{project_base}{path}?{urllib.parse.urlencode(query)}"
+            links.setdefault(output, []).append({"href": href, "label": label})
     return links
 
 

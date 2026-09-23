@@ -1,9 +1,17 @@
 """Discovery of the kptn project the UI is serving.
 
-The web UI serves exactly one project: the directory the developer launched it
-from. :class:`ProjectContext` is the read-only answer to "which project, which
-pipeline, which profiles, and where does its UI state live" -- resolved once,
-at app-construction time, so a request handler never has to re-derive it.
+:class:`ProjectContext` is the read-only answer to "which project, which
+pipeline, which profiles, and where does its UI state live". A request handler
+never re-derives any of it.
+
+How many of these a process holds depends on how the UI was launched.
+:func:`kptn_server.app.create_app` serves one project -- the directory the
+developer launched from -- and resolves its context once, at app-construction
+time. ``kptn ui --projects-root`` offers several, each at ``/p/<slug>/``, and
+loads one at a time: :class:`~kptn_server.slot.ProjectSlot` builds the context
+for the project a request named and holds it until the next request names a
+different one. Either way exactly one project is loaded when a handler runs,
+which is why nothing below this line knows the difference.
 
 Two invariants are worth stating plainly, because everything above this module
 depends on them:

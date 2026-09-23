@@ -32,10 +32,13 @@
    * leaves the proxy. URLs that come from the server already carry it. */
   var BASE = (document.body && document.body.getAttribute("data-base")) || "";
 
-  // Two prefixes, for the same reason the templates have two: BASE reaches
-  // the app (its static mount lives there), PROJECT_BASE reaches the project
-  // being served. Everything this file builds is project-scoped except
-  // nothing -- but keeping both named makes the next URL obvious.
+  // Two prefixes, for the same reason the templates have two. BASE reaches
+  // the application itself -- the /static mount and /healthz live there and
+  // belong to no project. PROJECT_BASE reaches the project this page is
+  // showing: it is BASE plus /p/<slug> when one server offers several
+  // working directories, and identical to BASE when it serves just one.
+  // Every URL this file builds is project-scoped, so it uses PROJECT_BASE;
+  // naming both makes the choice explicit for the next one.
   var PROJECT_BASE =
     (document.body && document.body.getAttribute("data-project-base")) || BASE;
 

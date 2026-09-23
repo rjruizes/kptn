@@ -159,7 +159,7 @@ def ui(
         "--root-path",
         help=(
             "Path prefix a reverse proxy strips before requests arrive, e.g. "
-            "/notebook/user/me/vscode/proxy/8000. Emitted URLs gain it."
+            "/notebook/user/me/kptn. Emitted URLs gain it."
         ),
     ),
     projects_root: str = typer.Option(
@@ -178,7 +178,7 @@ def ui(
         help="Whose working directories to offer. Default: $JUPYTERHUB_USER, then $USER.",
     ),
 ) -> None:
-    """Serve the pipeline UI for the project in the current directory.
+    """Serve the pipeline UI for one project, or several under --projects-root.
 
     Loopback-bound with no authentication: this is a single developer's view
     of their own project, and it must not become an unauthenticated remote

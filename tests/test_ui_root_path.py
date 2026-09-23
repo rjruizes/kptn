@@ -3,7 +3,7 @@
 jupyter-server-proxy forwards a loopback port at a *path*, not a host: a
 notebook server configured to proxy this UI serves it at
 
-    https://<host>/notebook/user/<user>/vscode/proxy/37657/
+    https://<host>/notebook/user/<user>/kptn/
 
 and the proxy strips that prefix before the request reaches uvicorn. Routes
 therefore stay unprefixed -- but every URL the server *emits* must carry the
@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from kptn_server.app import create_app
 
-PREFIX = "/notebook/user/rruizesparza/vscode/proxy/37657"
+PREFIX = "/notebook/user/rruizesparza/kptn"
 
 
 @pytest.fixture
@@ -48,19 +48,50 @@ def test_asset_urls_carry_the_prefix(prefixed_client: TestClient) -> None:
     assert f'src="{PREFIX}/static/app.js"' in body
 
 
+def _sweep(client: TestClient, path: str) -> list[str]:
+    """Every root-absolute URL on *path* that does not start with the prefix."""
+    response = client.get(path)
+    assert response.status_code == 200, f"{path} -> {response.status_code}"
+    body = response.text
+    return [
+        f"{path}: {fragment}"
+        for attribute in ("href", "src", "action", "hx-get", "hx-post")
+        for fragment in _absolute_urls(body, attribute)
+        if not fragment.startswith(PREFIX)
+    ]
+
+
 def test_no_unprefixed_absolute_urls_remain(prefixed_client: TestClient) -> None:
     """A single missed URL is a broken link, so assert the absence directly.
 
     Root-absolute URLs are exactly the ones that escape the proxy. Anything
     starting with the prefix is fine, as is anything relative.
+
+    The sweep covers **every page this fixture project can reach**, not just
+    the landing page. It used to scan ``/`` alone, and the two links
+    :func:`kptn_server.routes.inspect.output_links` builds in Python are only
+    on a task-detail page -- so their missing prefix survived review after
+    review with a green suite. A page left out of this list is a page where
+    the next Python-built URL can forget its prefix unnoticed.
     """
-    body = prefixed_client.get("/").text
+    created = prefixed_client.post(
+        "/runs", data={"profile": "success"}, follow_redirects=False
+    )
+    run_id = created.headers["location"].rsplit("/", 1)[-1]
 
     offenders = [
-        fragment
-        for attribute in ("href", "src", "action", "hx-get", "hx-post")
-        for fragment in _absolute_urls(body, attribute)
-        if not fragment.startswith(PREFIX)
+        offender
+        for path in (
+            "/",
+            "/runs",
+            f"/runs/{run_id}",
+            "/plan",
+            "/walkthrough",
+            "/walkthrough/task/setup_task",
+            "/walkthrough/task/noisy_task",
+            "/walkthrough/task/noisy_task?profile=success",
+        )
+        for offender in _sweep(prefixed_client, path)
     ]
     assert offenders == []
 
@@ -236,10 +267,27 @@ def test_static_assets_use_the_proxy_prefix_not_the_project_prefix(
 
 
 def test_the_busy_link_carries_the_prefix(prefixed_client: TestClient) -> None:
-    """`app-bar__busy` was emitted root-absolute and escaped the proxy."""
-    body = prefixed_client.get("/").text
+    """`app-bar__busy` was emitted root-absolute and escaped the proxy.
 
-    assert 'href="/runs/' not in body
+    The link only has an ``href`` while a run is in progress -- with no
+    active run it renders ``href=""``, and an assertion about the *absence*
+    of a root-absolute URL passes against any implementation, including the
+    one this test exists to catch. So start a run first, and assert on what
+    the href actually is.
+    """
+    created = prefixed_client.post(
+        "/runs", data={"profile": "slow"}, follow_redirects=False
+    )
+    run_id = created.headers["location"].rsplit("/", 1)[-1]
+
+    try:
+        body = prefixed_client.get("/").text
+    finally:
+        prefixed_client.post(f"/runs/{run_id}/stop", follow_redirects=False)
+
+    assert 'class="app-bar__busy"' in body
+    assert f'href="{PREFIX}/runs/{run_id}"' in body
+    assert f'href="/runs/{run_id}"' not in body
 
 
 def test_body_carries_both_prefixes(prefixed_client: TestClient) -> None:
