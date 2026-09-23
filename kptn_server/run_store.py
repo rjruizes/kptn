@@ -3,7 +3,7 @@
 A detached worker process appends run lifecycle events here; the FastAPI UI
 reads the same database. All UI state lives on disk under
 ``<project_root>/.kptn/ui.db`` and ``<project_root>/.kptn/runs/`` so a run
-survives a browser, VS Code, or FastAPI restart -- nothing is kept in process
+survives a browser, notebook server, or FastAPI restart -- nothing is kept in process
 memory.
 
 Only one run may be active per canonical project path at a time, *among the

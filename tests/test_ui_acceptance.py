@@ -9,7 +9,7 @@ So this module runs the real thing. It starts ``python -m kptn ui --no-open``
 as a subprocess against a private copy of the fixture project, drives it over
 HTTP, and then kills *only the server* while a run is in flight -- the same
 thing that happens when a developer stops ``kptn ui``, saves a file and
-triggers a reload, or quits VS Code. A second server is started on the same
+triggers a reload, or the notebook server restarts. A second server is started on the same
 port, and the assertions after that point are the evidence: the worker is
 still alive, the run is still ``running``, releasing the fixture's sentinel
 still finishes it, and the history, console, warning anchors, plan and
@@ -233,8 +233,8 @@ def _start_run(client: httpx.Client, profile: str) -> str:
     )
     assert response.status_code == 303, response.text
     location = response.headers["location"]
-    # Relative by design: a root-absolute Location is re-prefixed by the
-    # proxy that serves this UI in VS Code for the Web, arriving doubled.
+    # Relative by design: a root-absolute Location is re-prefixed by
+    # jupyter-server-proxy, arriving doubled.
     # See tests/test_ui_root_path.py.
     assert location.startswith("runs/"), location
     return location.rsplit("/", 1)[-1]
@@ -455,9 +455,9 @@ def test_a_reader_goes_from_the_list_to_a_project_and_runs_it(
     """The whole path a person takes on their first visit.
 
     List -> a project's history -> start a run there. The redirect's
-    ``Location`` must be relative: a root-absolute one is re-prefixed by the
-    proxy that serves this UI in VS Code for the Web, arriving doubled --
-    see ``tests/test_ui_root_path.py``.
+    ``Location`` must be relative: a root-absolute one is re-prefixed by
+    jupyter-server-proxy, arriving doubled -- see
+    ``tests/test_ui_root_path.py``.
     """
     listing = multi_client.get("/")
     assert f'href="/p/{USER}_main/"' in listing.text

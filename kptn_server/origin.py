@@ -17,10 +17,10 @@ page submitted from a form some other origin submitted:
     from this application's own pages. Allowed.
 ``none``
     user-initiated with no initiator page -- a typed URL, a bookmark, and
-    what a non-browser client (``curl``, the VS Code extension, a test) sends
-    by sending nothing at all. Allowed: an absent header cannot be a
-    cross-site *browser* request, and refusing it would break every non-
-    browser caller for no gain.
+    what a non-browser client (``curl``, jupyter-server-proxy's own health
+    check, a test) sends by sending nothing at all. Allowed: an absent
+    header cannot be a cross-site *browser* request, and refusing it would
+    break every non-browser caller for no gain.
 ``same-site`` / ``cross-site``
     another origin drove this. Refused.
 

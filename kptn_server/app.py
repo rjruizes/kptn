@@ -17,8 +17,8 @@ server is up.
 That cadence lives here rather than in the supervisor on purpose.
 :class:`~kptn_server.processes.RunProcessManager` owns no threads and no
 timers, which is precisely why a worker it launched survives the manager being
-garbage-collected, the browser closing, VS Code quitting, and this server
-being stopped and started again. Something still has to notice a run whose
+garbage-collected, the browser closing, the notebook server restarting, and
+this server being stopped and started again. Something still has to notice a run whose
 worker a reboot or an OOM kill took out, though, or that project stays wedged
 behind its active-run lock forever. So the FastAPI lifespan runs one reconciliation pass
 at startup and another every
@@ -155,10 +155,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 def normalise_root_path(root_path: str) -> str:
     """A prefix that concatenates cleanly: leading slash, no trailing one.
 
-    ``vscode.env.asExternalUri`` yields a trailing slash, and templates join
-    with ``{{ base }}/static/...``, so an unnormalised value produces
-    ``//static`` -- a protocol-relative URL the browser sends to a host named
-    "static". Empty stays empty, which is the loopback default.
+    The proxy that resolves this path prefix can yield a trailing slash, and
+    templates join with ``{{ base }}/static/...``, so an unnormalised value
+    produces ``//static`` -- a protocol-relative URL the browser sends to a
+    host named "static". Empty stays empty, which is the loopback default.
     """
     trimmed = root_path.strip().rstrip("/")
     if not trimmed:
@@ -184,8 +184,8 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     table ``POST /runs`` consults before it creates anything.
 
     *base* is the path prefix every emitted URL must carry when the server is
-    reached through a path-prefixing proxy (VS Code for the Web forwards ports
-    at ``/.../proxy/<port>/``). It is an environment global, not a context
+    reached through a path-prefixing proxy (jupyter-server-proxy forwards
+    ports at ``/.../proxy/<port>/``). It is an environment global, not a context
     processor, because two run fragments are rendered with
     ``get_template(...).render(...)`` and never see a ``Request`` -- so
     request-scoped lookup would render empty in exactly those fragments.
@@ -227,7 +227,7 @@ def create_app(project_root: Path, root_path: str = "") -> FastAPI:
     Deliberately *not* passed to ``FastAPI(root_path=...)``. ASGI's
     ``root_path`` describes a proxy that forwards the original path intact and
     only names its prefix; jupyter-server-proxy, which is what serves this in
-    VS Code for the Web, strips the prefix instead. Setting it makes the
+    the notebook environment, strips the prefix instead. Setting it makes the
     ``/static`` mount insist on a prefix that never arrives -- 404 on every
     asset, the very failure this prefix exists to fix.
     """

@@ -21,14 +21,14 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 
 ## Languages
 - Python 3.11+ — Core CLI tool (`kptn/`), backend server (`kptn_server/`), AWS Lambda handlers, pipeline execution engine
-- TypeScript ^5.9 — VS Code extension (`kptn-vscode/`). The only TypeScript in the repo; the web UI is server-rendered HTML with vendored htmx/Alpine and has no build step
+- TypeScript — Astro config for the documentation site (`doc-site/tsconfig.json`, `doc-site/src/content.config.ts`); the web UI is server-rendered HTML with vendored htmx/Alpine and has no build step
 - R — Pipeline task execution via `Rscript` subprocess calls (supported through `RTaskNode` and `kptn/util/rscript.py`)
 - SQL — Pipeline tasks parsed for lineage analysis (`kptn/lineage/sql_lineage.py`)
 ## Runtime
 - Python ≥ 3.11 (required by `pyproject.toml`)
-- Node.js (for the VS Code extension build only; exact version not pinned)
+- Node.js (for the documentation site build only; exact version not pinned)
 - Python: `uv` — lockfile `uv.lock` present and committed
-- JavaScript: `npm` — one lockfile, `kptn-vscode/package-lock.json` (there is no root Node project)
+- JavaScript: `npm` — lockfile `doc-site/package-lock.json` (there is no root Node project)
 ## Frameworks
 - `typer` ≥ 0.12.5 — CLI interface (`kptn/cli/commands.py`, `kptn/cli/__init__.py`)
 - `pydantic` — Config schema validation (`kptn/profiles/schema.py`, throughout)
@@ -45,12 +45,9 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - `psutil` — inspecting and reconciling detached run workers (`kptn_server/processes.py`), installed via `kptn[web]` extra
 - `sqlglot` — SQL parsing behind lineage and table preview (`kptn/lineage/sql_lineage.py`), installed via `kptn[web]` extra
 - htmx and Alpine.js — vendored in `kptn_server/static/`, never loaded from a CDN. There is no frontend build step and no client framework: every page is server-rendered HTML
-- `typescript` ^5.9.3 — Static typing for the VS Code extension (`kptn-vscode/tsconfig.json`)
 - `ruff` 0.14.6 — Python linter and formatter (`[dependency-groups] dev`)
 - `ty` — Python type checker (Astral's type checker; dev dependency)
 - `pytest` 8.4.2 — Python test runner (`[dependency-groups] dev`)
-- `eslint` 9.13.0 — TypeScript linter for the VS Code extension (`kptn-vscode/eslint.config.mjs`)
-- `mocha` — Test runner for the VS Code extension (`npm test` in `kptn-vscode/`)
 ## Key Dependencies
 - `kptn/graph/` — Core pipeline graph model; `Graph`, `Pipeline`, `TaskNode`, `RTaskNode`, `SqlTaskNode` etc. define the execution DAG
 - `kptn/state_store/` — Pluggable state backend; SQLite (default) or DuckDB (`kptn/state_store/factory.py`)
@@ -72,16 +69,15 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Cloud: DynamoDB (table name via `DYNAMODB_TABLE_NAME` env var)
 - Python wheel: `hatchling` (packages `kptn/` and `kptn_server/`)
 - UI assets: no build. `kptn_server/templates`, `static`, and `migrations` are force-included into the wheel (`[tool.hatch.build.targets.wheel.force-include]`)
-- VS Code extension: TypeScript compiled to `kptn-vscode/out/`
 ## Platform Requirements
 - Python ≥ 3.11
 - `uv` for Python dependency management
-- Node.js + npm for the VS Code extension only
+- Node.js + npm for the documentation site only
 - Docker (for local DynamoDB via `docker-compose-ddb.yml`)
 - R (optional, only required if running R pipeline tasks via `Rscript`)
 - AWS (optional): DynamoDB for task state caching, ECR for Docker images, ECS/Batch via Step Functions
 - Prefect (optional): workflow orchestration; self-hosted Prefect server or Prefect Cloud
-- VS Code 1.100.1+ for the IDE extension (`kptn-vscode/`)
+- jupyter-server-proxy (optional): serves the pipeline UI in a JupyterHub notebook environment from a config file, invoking `kptn ui --root-path`
 <!-- GSD:stack-end -->
 
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
@@ -105,8 +101,6 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Tool: `ruff` (configured in `pyproject.toml`)
 - No explicit line-length config detected; ruff defaults apply
 - Trailing commas present in multi-line structures
-- Tool: `eslint` with `typescript-eslint` (VS Code extension only)
-- Config: `kptn-vscode/eslint.config.mjs`
 - All Python public functions have return type annotations (e.g., `-> None`, `-> str | None`, `-> list[AnyNode]`)
 - `from __future__ import annotations` present in ~38% of Python files — used in files with complex forward references (especially `kptn/runner/`, `kptn/graph/`, test files)
 - Union syntax: modern `X | Y` style (Python 3.10+) in new code
@@ -114,7 +108,7 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - `@dataclass` is the preferred way to define data-holding classes — e.g., `TaskNode`, `TaskSpec`, `Graph`, `RTaskSpec`
 - `field(default_factory=list)` used for mutable defaults
 ## Import Organization
-- Python only: absolute imports from `kptn` / `kptn_server`; the extension's TypeScript uses relative paths
+- Python only: absolute imports from `kptn` / `kptn_server`
 ## Error Handling
 - Wrap external calls in specific exception handlers, re-raise as domain exceptions:
 - `HashError` and `TaskError` propagated deliberately; other `Exception` types are wrapped
@@ -211,7 +205,7 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Location: `kptn_server/`
 - Contains: app factory (`app.py`), project discovery (`project.py`), SQLite run store (`run_store.py` + `migrations/`), detached worker lifecycle (`processes.py`, `worker.py`, `capture.py`), routers (`routes/`), retained lineage and table-preview helpers (`service.py`), Jinja2 templates (`templates/`), vendored assets (`static/`)
 - Depends on: `kptn/` package, `fastapi`, `uvicorn`, `jinja2`, `psutil`, `markdown-it-py`, `sqlglot` (the `kptn[web]` extra)
-- Used by: a browser, and the VS Code extension's webview — both against the same server started by `kptn ui`. There is no second frontend and no JSON-RPC protocol
+- Used by: a browser, direct or reached through jupyter-server-proxy — both against the same server started by `kptn ui`. There is no second frontend and no JSON-RPC protocol
 - Purpose: Legacy FastAPI WebSocket server, built for the removed React UI
 - Location: `kptn/watcher/`
 - Contains: FastAPI app with WebSocket support (`app.py`), local task enrichment (`local.py`), stack management (`stacks.py`), utilities (`util.py`), file watcher (`filewatcher/`)
@@ -221,15 +215,15 @@ load_asa24_raw >> validate_asa24_raw >> load_asa24_reports
 - Location: `kptn_server/templates/` and `kptn_server/static/`, served by `kptn ui`
 - Contains: server-rendered pages — run console, run history, plan, walkthrough, lineage, table preview — with htmx for fragment swaps and SSE for the live console
 - Depends on: `kptn_server/` only; vendored assets, no build step, no CDN
-- Used by: Browser, and the VS Code webview
-- Purpose: Open the pipeline UI inside VS Code — a thin launcher, not a second client
-- Location: `kptn-vscode/`
-- Contains: extension entry (`src/extension.ts`), server lifecycle (`src/server.ts`). Contributes one command, `kptn.openUI` ("kptn: Open Pipeline UI")
-- Communicates via: spawning `kptn ui --no-open`, polling `/healthz`, then showing the served URL in a webview
+- Used by: Browser, direct or reached through jupyter-server-proxy
+- Purpose: Serve the pipeline UI in a JupyterHub notebook environment — a config-driven launcher, not a second client
+- Location: jupyter-server-proxy's own config (outside this repo; see nph-curation's installer)
+- Contains: a `jupyter_server_config.py` entry that finds the interpreter, reserves a loopback port, resolves the external path prefix, and starts `kptn ui --root-path <prefix>`
+- Communicates via: spawning `kptn ui --root-path <prefix>`, then jupyter-server-proxy framing the served URL at that prefix
 - Depends on: Python runtime with `kptn[web]` installed
 ## Data Flow
 - UI state lives on the server, inside the project: `.kptn/ui.db` (run rows and console events) and `.kptn/runs/<run_id>.log` (raw captured output). Nothing else is written
-- A run is a detached child process, so it outlives the browser tab, VS Code, and a restart of the server itself. `RunProcessManager.reconcile()` marks a run whose worker is provably gone as `interrupted`, releasing the project lock
+- A run is a detached child process, so it outlives the browser tab, the notebook server, and a restart of the server itself. `RunProcessManager.reconcile()` marks a run whose worker is provably gone as `interrupted`, releasing the project lock
 - The run console is server-sent events over `GET /runs/{run_id}/events?after=<sequence>`, so reconnecting resumes without gaps or duplicates
 ## Key Abstractions
 - Purpose: Immutable DAG of task nodes; `Pipeline` adds a named `PipelineNode` sentinel head

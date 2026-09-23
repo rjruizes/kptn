@@ -3,7 +3,8 @@
 The worker is the process that actually executes a pipeline. Everything it
 produces -- stdout, stderr, ``warnings.warn`` calls, ``logging`` records at
 WARNING or above, and the runner's own structured events -- has to land in the
-durable run store, because the browser, VS Code, and FastAPI may all restart
+durable run store, because the browser, the notebook server, and FastAPI may
+all restart
 while the run is still going.
 
 The primary test drives a real ``python -m kptn_server.worker`` subprocess: the

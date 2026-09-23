@@ -8,8 +8,9 @@ The worker is deliberately the only process that touches a run's execution. It
 looks the run up by id, moves into the run's immutable project root, loads the
 project's pipeline, and calls :func:`kptn.run` with a
 :class:`~kptn_server.capture.RunStoreSink`. Everything it learns goes straight
-into the durable store, so the browser, VS Code, and the FastAPI service can
-all restart -- or never be running at all -- without the run noticing.
+into the durable store, so the browser, the notebook server, and the FastAPI
+service can all restart -- or never be running at all -- without the run
+noticing.
 
 A daemon thread heartbeats every two seconds while the run is in flight; a
 supervisor uses that heartbeat, together with the recorded PID, to tell a live

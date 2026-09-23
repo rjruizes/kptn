@@ -511,7 +511,7 @@ def render_lineage_page(
     is_webview: bool = False,
     fragment: bool = False,
 ) -> Tuple[str, int, int]:
-    """Render a lineage page via Jinja for web or VS Code webview."""
+    """Render a lineage page via Jinja for the browser, direct or proxied."""
     lineage_html, tables, edges = generate_lineage_html(config_path, graph)
     table_map = build_table_file_map(config_path)
     static_prefix = f"{base_url}/static" if base_url else "/static"

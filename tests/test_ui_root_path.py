@@ -1,7 +1,7 @@
 """Serving the UI behind a path-prefixing reverse proxy.
 
-VS Code for the Web forwards a loopback port at a *path*, not a host: the
-extension's webview frames
+jupyter-server-proxy forwards a loopback port at a *path*, not a host: a
+notebook server configured to proxy this UI serves it at
 
     https://<host>/notebook/user/<user>/vscode/proxy/37657/
 

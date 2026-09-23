@@ -13,9 +13,9 @@ The launcher is small but has four properties worth pinning down:
    factory that reads the working directory itself.
 3. It opens a browser only once the health endpoint answers, and ``--no-open``
    skips that machinery entirely.
-4. ``python -m kptn ui`` works, because the VS Code extension invokes the
-   selected interpreter that way rather than relying on a console script being
-   on ``PATH``.
+4. ``python -m kptn ui`` works, because jupyter-server-proxy's config invokes
+   the notebook environment's interpreter that way rather than relying on a
+   console script being on ``PATH``.
 
 No test here opens a real browser (an autouse fixture makes that fail loudly),
 starts a real server, or synchronizes on ``sleep``: the readiness probe, the
@@ -342,7 +342,7 @@ def test_browser_opener_runs_on_a_daemon_thread(
 
 
 def test_module_entry_point_exposes_the_ui_command() -> None:
-    """The VS Code extension runs ``python -m kptn ui`` with its interpreter."""
+    """jupyter-server-proxy runs ``python -m kptn ui`` with its interpreter."""
     result = subprocess.run(
         [sys.executable, "-m", "kptn", "--help"],
         cwd=REPO_ROOT,

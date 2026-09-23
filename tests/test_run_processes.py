@@ -1,7 +1,7 @@
 """Tests for detached worker launch, identity-safe stop, and reconciliation.
 
-Three things have to hold for a run to survive the browser, VS Code, and the
-FastAPI server all restarting:
+Three things have to hold for a run to survive the browser, the notebook
+server, and the FastAPI server all restarting:
 
 1. ``start()`` must detach the worker so nothing about the launcher's own
    lifetime can kill it.

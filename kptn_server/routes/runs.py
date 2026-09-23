@@ -2,8 +2,8 @@
 
 Every endpoint here rests on one idea: **nothing about a run lives in this
 process.** The run row, its event log, its captured output, and its stop
-intent are all on disk, so the browser, VS Code, and this server can each
-restart mid-run without losing a thing.
+intent are all on disk, so the browser, the notebook server, and this server
+can each restart mid-run without losing a thing.
 
 ``POST /runs``
     Validates the profile, creates the run row and the project lock, and only
@@ -24,9 +24,9 @@ restart mid-run without losing a thing.
     from the client on every connection -- ``Last-Event-ID`` on a reconnect,
     ``?after=`` on a first connection -- and the events come from
     :meth:`~kptn_server.run_store.RunStore.events_after`. A worker therefore
-    survives the browser closing, VS Code quitting, and this server
-    restarting: the new connection just resumes from the number the page
-    already has.
+    survives the browser closing, the notebook server restarting, and this
+    server restarting: the new connection just resumes from the number the
+    page already has.
 
 Two decisions worth stating outright.
 

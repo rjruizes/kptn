@@ -753,7 +753,7 @@ def test_nav_offers_the_history_alone(ui_project: Path) -> None:
 
 
 def test_the_old_runs_url_still_reaches_the_history(ui_project: Path) -> None:
-    """Bookmarks and the VS Code webview's links must not 404."""
+    """Bookmarks and links from the proxied notebook environment must not 404."""
     app = create_app(ui_project)
     record = app.state.store.create_run(
         RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")

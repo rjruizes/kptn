@@ -9,7 +9,7 @@ pipeline (a process that must not). Three operations make that split durable:
     its own session/process group on POSIX, a new process group on Windows,
     with all three standard streams pointed at the null device. Nothing about
     the launcher's own lifetime can then take the worker down, so the browser,
-    VS Code, and the server can all restart mid-run.
+    the notebook server, and this server can all restart mid-run.
 
 ``stop(run_id)``
     Signal *that* worker and nothing else. PIDs are recycled, so a recorded

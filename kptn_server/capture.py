@@ -1,6 +1,6 @@
 """Capture everything a pipeline worker produces and persist it durably.
 
-A detached worker must survive a browser, VS Code, or FastAPI restart, so
+A detached worker must survive a browser, notebook server, or FastAPI restart, so
 nothing it produces may live in process memory. This module supplies the two
 pieces that make that true:
 

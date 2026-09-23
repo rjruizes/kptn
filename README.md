@@ -309,8 +309,9 @@ kptn ui   [--port PORT] [--no-open]     # serve the pipeline UI for this project
 
 `kptn ui` serves a small web UI for the project in the current directory: start
 a run, watch its console live, read the plan, and walk the resolved pipeline
-with its documentation. It is the **only** supported UI, and the VS Code
-extension launches this same command rather than embedding a second one.
+with its documentation. It is the **only** supported UI, and
+jupyter-server-proxy launches this same command from a config file rather
+than embedding a second one.
 
 ```shell
 uv sync --extra web                    # or: pip install 'kptn[web]'
@@ -341,7 +342,7 @@ Loopback alone does not stop a *page you visit* from posting at the server:
 `POST /runs` is form-encoded, so a browser sends it cross-origin with no
 preflight. Every state-changing request is therefore refused when its
 `Sec-Fetch-Site` header says another origin initiated it. Requests with no
-such header — `curl`, the VS Code extension — are unaffected.
+such header — `curl`, jupyter-server-proxy's own health check — are unaffected.
 
 ### Where the UI keeps its state
 
@@ -375,7 +376,7 @@ into its own session and writes to `.kptn/ui.db` and its log file directly, so
 the run keeps going when you:
 
 - close the browser tab, or navigate away, or lose the SSE connection
-- quit VS Code
+- restart the notebook server behind the proxy
 - stop and restart `kptn ui`
 
 Reopening the run page picks the console back up where it left off. The stream
@@ -439,13 +440,15 @@ disabled, and no page in this UI edits a documentation file.
 Where a declared output can be resolved to a file through `kptn.yaml`, the task
 panel also links to its lineage graph and a preview of its rows.
 
-### VS Code
+### Behind jupyter-server-proxy
 
-The extension contributes one command, **`kptn: Open Pipeline UI`**
-(`kptn.openUI`). It runs `kptn ui --no-open` for the workspace folder, waits
-for `/healthz`, and opens the served URL in a webview — the same UI a browser
-gets, from the same server. Reusing the command focuses the existing view
-rather than starting a second server.
+In a JupyterHub notebook environment, jupyter-server-proxy takes over what a
+VS Code extension used to do by hand: it finds the interpreter, reserves a
+loopback port, resolves the external path prefix, and starts
+`kptn ui --root-path <prefix>` — the same UI a direct browser gets, from the
+same server, framed by the notebook's own page rather than a webview. See
+`--root-path`, `KPTN_UI_ROOT_PATH`, and `kptn ui --projects-root` for the
+pieces the proxy config drives.
 
 ### Terminal output is unchanged
 

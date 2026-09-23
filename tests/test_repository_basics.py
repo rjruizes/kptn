@@ -1,16 +1,14 @@
 """Basic smoke tests to validate the repository setup.
 
 Beyond the README check, this module pins the *shape* of the repository after
-the pipeline UI replaced the React application and the JSON-RPC VS Code
-backend. There is now exactly one supported UI command (``kptn ui``) and one
-VS Code launch path (the extension spawns that command and opens its URL in a
-webview), and the removed surfaces must not creep back: a second frontend
-would immediately drift from the served one, and a resurrected
-``api_jsonrpc.py`` would be a second protocol nobody maintains.
-
-The VS Code extension keeps its *own* ``package.json`` and ``package-lock.json``
--- deleting the root Node manifest must not take the extension with it -- so
-that pairing is asserted here too.
+the pipeline UI replaced the React application, the JSON-RPC backend a VS
+Code extension used to spawn, and -- once jupyter-server-proxy could do from
+a config file everything that extension did by hand -- the extension itself.
+There is now exactly one supported UI command (``kptn ui``), launched in a
+notebook environment by jupyter-server-proxy's config rather than by
+anything in this repository, and the removed surfaces must not creep back: a
+second frontend would immediately drift from the served one, and a
+resurrected ``api_jsonrpc.py`` would be a second protocol nobody maintains.
 """
 
 from __future__ import annotations
@@ -24,18 +22,12 @@ REMOVED_SURFACES = (
     ("ui", "the React application the served Jinja UI replaced"),
     ("kptn_server/api_jsonrpc.py", "the JSON-RPC protocol the HTTP UI replaced"),
     ("kptn_server/api_http.py", "the standalone HTTP app the shared app replaced"),
-    ("kptn-vscode/backend.py", "the JSON-RPC spawn shim the extension no longer uses"),
+    ("kptn-vscode/backend.py", "the JSON-RPC spawn shim the extension stopped using before it was removed"),
+    ("kptn-vscode", "the VS Code extension; jupyter-server-proxy now does from a config file everything it did by hand"),
     ("cypress", "the root Cypress harness for the deleted React application"),
     ("cypress.config.ts", "the root Cypress configuration"),
     ("package.json", "the root Node manifest for the deleted React application"),
     ("package-lock.json", "the root Node lockfile"),
-)
-
-#: The VS Code extension's own Node project, which must survive the root one.
-RETAINED_EXTENSION_FILES = (
-    "kptn-vscode/package.json",
-    "kptn-vscode/package-lock.json",
-    "kptn-vscode/src/extension.ts",
 )
 
 #: Developer-facing documentation. Every one of these is read by a human or an
@@ -113,7 +105,7 @@ def test_readme_present() -> None:
 
 
 def test_superseded_ui_surfaces_are_absent() -> None:
-    """One supported UI, one VS Code launch path -- and no leftovers."""
+    """One supported UI, launched from a notebook environment by jupyter-server-proxy -- and no leftovers."""
     surviving = [
         f"{path} ({reason})"
         for path, reason in REMOVED_SURFACES
@@ -122,10 +114,18 @@ def test_superseded_ui_surfaces_are_absent() -> None:
     assert not surviving, f"superseded surfaces still present: {surviving}"
 
 
-def test_the_vscode_extension_keeps_its_own_node_project() -> None:
-    """Removing the root Node manifest must not disarm the extension."""
-    for relative in RETAINED_EXTENSION_FILES:
-        assert (PROJECT_ROOT / relative).is_file(), f"missing {relative}"
+def test_the_vscode_extensions_own_files_stay_gone() -> None:
+    """Deleting the extension must not leave selective leftovers behind.
+
+    :data:`REMOVED_SURFACES` already checks the ``kptn-vscode`` directory
+    itself, but a directory check passes even if a future change recreates
+    the directory and repopulates only some of it -- an interpreter-finding
+    shim without its own manifest, say. Naming the files the extension's own
+    Node project depended on keeps that failure mode from creeping back in
+    unnoticed.
+    """
+    for relative in ("kptn-vscode/package.json", "kptn-vscode/package-lock.json", "kptn-vscode/src/extension.ts"):
+        assert not (PROJECT_ROOT / relative).exists(), f"leftover {relative}"
 
 
 def test_the_supported_ui_command_is_the_only_server_entry_point() -> None:
@@ -170,9 +170,9 @@ def test_every_documentation_file_scanned_above_exists() -> None:
 
     # Every removed surface contributes a name: directories as `<name>/`,
     # files as their basename. `package.json` and `package-lock.json` are the
-    # documented exception -- those basenames still exist under `kptn-vscode/`
-    # and `doc-site/`, so banning them outright would forbid documenting the
-    # Node projects the repository still has.
+    # documented exception -- those basenames still exist under `doc-site/`,
+    # so banning them outright would forbid documenting the Node project the
+    # repository still has.
     for path, _ in REMOVED_SURFACES:
         basename = path.rsplit("/", 1)[-1]
         if basename in {"package.json", "package-lock.json"}:
@@ -184,3 +184,4 @@ def test_every_documentation_file_scanned_above_exists() -> None:
     assert "ui/" in FORBIDDEN_IN_DOCUMENTATION
     assert "cypress/" in FORBIDDEN_IN_DOCUMENTATION
     assert "backend.py" in FORBIDDEN_IN_DOCUMENTATION
+    assert "kptn-vscode/" in FORBIDDEN_IN_DOCUMENTATION

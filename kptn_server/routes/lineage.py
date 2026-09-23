@@ -2,9 +2,9 @@
 
 These pages predate the pipeline UI. They were served by a second FastAPI
 application (``kptn_server.api_http``) built for the React frontend, and were
-reached either from that frontend or from the VS Code extension's JSON-RPC
-backend. Both of those are gone, and the plan for this UI is explicit that
-there is one supported frontend: so the *services* are retained and the
+reached either from that frontend or from the now-retired VS Code extension's
+JSON-RPC backend. Both of those are gone, and the plan for this UI is explicit
+that there is one supported frontend: so the *services* are retained and the
 *routes* move here, onto the same application, the same templates directory,
 and the same vendored assets as every other page.
 
@@ -30,14 +30,16 @@ payoff.
 
 **``configPath`` is validated against the served project.** The old
 standalone app took an arbitrary filesystem path in a query parameter, which
-made sense when it served a project picker and no project of its own. This app
-serves exactly one project, resolved once at construction, and
+made sense when it served a project picker and no project of its own. A
+single-process ``kptn ui`` invocation still resolves one project per request
+-- held by :class:`~kptn_server.slot.ProjectSlot` across the ``os.chdir``
+described above, even when ``kptn ui --projects-root`` serves several -- and
 :func:`kptn_server.routes.inspect.output_links` builds every link from that
-project's own ``kptn.yaml``. Accepting any other path would let a page loaded
+request's own ``kptn.yaml``. Accepting any other path would let a page loaded
 from anywhere in the browser point a loopback, unauthenticated server at an
 arbitrary file. The parameter is kept -- the lineage template's JavaScript
-threads it through its own URLs -- but a value that is not this project's
-config is refused.
+threads it through its own URLs -- but a value that is not the resolved
+project's config is refused.
 
 Errors render through :func:`kptn_server.routes.support.error_response` for
 the HTML routes, so a failure looks like every other failure in this UI, and

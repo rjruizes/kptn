@@ -1,13 +1,17 @@
 # kptn_server
 
 The FastAPI application behind `kptn ui`. One factory call
-(`kptn_server.app.create_app`) serves exactly one project: the directory the
-command was launched from.
+(`kptn_server.app.create_app`) serves one project: the directory the command
+was launched from. `kptn_server.app.create_multi_app` serves several -- the
+working directories one person has under a shared release folder -- for
+`kptn ui --projects-root`, which is how the app runs behind
+jupyter-server-proxy.
 
-There is one supported UI and one VS Code launch path. The React application,
-its root Cypress harness, and the JSON-RPC backend the extension used to spawn
-were all removed once this UI reached parity; the lineage and table-preview
-services they used are retained and are served by this same application.
+There is one supported UI. The React application, its root Cypress harness,
+the JSON-RPC backend a VS Code extension used to spawn, and the extension
+itself were all removed once this UI reached parity and jupyter-server-proxy
+took over launching it; the lineage and table-preview services the old
+backend used are retained and are served by this same application.
 
 ## Run the server
 
@@ -44,10 +48,10 @@ loads from a CDN.
 uv run --extra web pytest -q
 ```
 
-## VS Code extension
+## jupyter-server-proxy
 
-The extension is a thin launcher: it runs `kptn ui --no-open`, waits for
-`/healthz`, and opens the served URL in a webview.
-
-- Debug the extension: open `kptn-vscode/src/extension.ts` in VS Code and press `F5`
-- Package the extension for installation: `./kptn-vscode/scripts/package.sh`
+In a JupyterHub notebook environment, jupyter-server-proxy's config file
+finds the interpreter, reserves a loopback port, resolves the external path
+prefix, and starts `kptn ui --root-path <prefix>` -- what a VS Code extension
+used to do by hand before the extension was retired. See the README's
+"Behind jupyter-server-proxy" section.
