@@ -219,3 +219,31 @@ def test_redirects_are_prefix_independent(bare_client: TestClient) -> None:
     resolved = urljoin("http://127.0.0.1:8000/runs", response.headers["location"])
 
     assert resolved == f"http://127.0.0.1:8000/runs/{run_id}"
+
+
+def test_static_assets_use_the_proxy_prefix_not_the_project_prefix(
+    prefixed_client: TestClient,
+) -> None:
+    """`/static` is mounted on the app, not under a project.
+
+    This is why there are two prefixes rather than one: a project-scoped
+    stylesheet URL would 404 on every page.
+    """
+    body = prefixed_client.get("/").text
+
+    assert f'href="{PREFIX}/static/app.css"' in body
+    assert "/p/" not in body.split("<body")[0]
+
+
+def test_the_busy_link_carries_the_prefix(prefixed_client: TestClient) -> None:
+    """`app-bar__busy` was emitted root-absolute and escaped the proxy."""
+    body = prefixed_client.get("/").text
+
+    assert 'href="/runs/' not in body
+
+
+def test_body_carries_both_prefixes(prefixed_client: TestClient) -> None:
+    body = prefixed_client.get("/").text
+
+    assert f'data-base="{PREFIX}"' in body
+    assert f'data-project-base="{PREFIX}"' in body

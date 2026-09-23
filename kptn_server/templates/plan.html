@@ -38,7 +38,7 @@
       {% for row in rows %}
       <tr data-task="{{ row.task_name }}" data-action="{{ row.action }}">
         <td><span class="action action--{{ row.action | lower }}">{{ row.action }}</span></td>
-        <td><a href="{{ base }}/walkthrough/task/{{ row.task_name | urlencode }}{% if selected_profile %}?profile={{ selected_profile | urlencode }}{% endif %}"><code>{{ row.task_name }}</code></a></td>
+        <td><a href="{{ project_base }}/walkthrough/task/{{ row.task_name | urlencode }}{% if selected_profile %}?profile={{ selected_profile | urlencode }}{% endif %}"><code>{{ row.task_name }}</code></a></td>
         <td class="muted">{{ row.reason }}</td>
       </tr>
       {% endfor %}

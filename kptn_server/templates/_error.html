@@ -14,6 +14,15 @@
   {% include "_run_status.html" %}
   {% endif %}
   {% if error_run_id %}
-  <p class="notice__run">Run <a href="{{ base }}/runs/{{ error_run_id }}"><code>{{ error_run_id }}</code></a></p>
+  {#
+    ``project_base`` normally arrives from the page context processor, since
+    ``error_response`` always renders this through a ``Request``. It falls
+    back to the ``base`` environment global here only so a direct
+    ``get_template("_error.html").render(...)`` -- with neither a ``Request``
+    nor an explicit ``project_base`` -- still emits a prefixed link rather
+    than a bare one; that direct-render path is what
+    ``test_fragments_rendered_without_a_request_are_prefixed`` exercises.
+  #}
+  <p class="notice__run">Run <a href="{{ project_base | default(base) }}/runs/{{ error_run_id }}"><code>{{ error_run_id }}</code></a></p>
   {% endif %}
 </div>

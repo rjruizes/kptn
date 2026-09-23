@@ -14,7 +14,7 @@
 {% block content %}
 <section class="panel">
   <p>
-    <a href="{{ base }}/walkthrough{% if selected_profile %}?profile={{ selected_profile | urlencode }}{% endif %}">&larr; Back to the walkthrough</a>
+    <a href="{{ project_base }}/walkthrough{% if selected_profile %}?profile={{ selected_profile | urlencode }}{% endif %}">&larr; Back to the walkthrough</a>
   </p>
   <div id="task-detail">
     {% include "_task_detail.html" %}

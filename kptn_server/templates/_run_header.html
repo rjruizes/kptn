@@ -49,7 +49,7 @@
   #}
   <div class="run-header__top">
   <h2 class="run-header__crumbs">
-    <a href="{{ base }}/{% if run.profile %}?profile={{ run.profile | urlencode }}{% endif %}">Runs</a>
+    <a href="{{ project_base }}/{% if run.profile %}?profile={{ run.profile | urlencode }}{% endif %}">Runs</a>
     <span class="run-header__crumb-separator" aria-hidden="true">/</span>
     {% if run.profile %}<code>{{ run.profile }}</code>
     {% else %}<span class="muted">no profile</span>{% endif %}
@@ -80,7 +80,7 @@
     and so no ``active_run`` -- the button comes back enabled, which is right
     the instant a run ends, and the poll corrects it if another has started.
   #}
-  <form class="run-header__retry" method="post" action="{{ base }}/runs">
+  <form class="run-header__retry" method="post" action="{{ project_base }}/runs">
     <input type="hidden" name="profile" value="{{ run.profile or '' }}">
     <button type="submit" data-run-control {% if active_run %}disabled{% endif %}>
       Retry
@@ -93,7 +93,7 @@
     with no ``.button`` class to keep in sync, and it stays a plain GET that
     works with JavaScript off.
   #}
-  <form class="run-header__log" method="get" action="{{ base }}/runs/{{ run.run_id }}/log">
+  <form class="run-header__log" method="get" action="{{ project_base }}/runs/{{ run.run_id }}/log">
     <button type="submit">Download raw log</button>
   </form>
 
@@ -124,7 +124,7 @@
   #}
   <div class="run-actions">
     {% if not is_terminal %}
-    <form class="run-actions__stop" method="post" action="{{ base }}/runs/{{ run.run_id }}/stop">
+    <form class="run-actions__stop" method="post" action="{{ project_base }}/runs/{{ run.run_id }}/stop">
       <button type="submit" class="button button--danger">Stop</button>
     </form>
     {% endif %}
@@ -155,7 +155,7 @@
       keeps running, keeps writing to the log, and may still be touching this
       project's outputs. Check for it yourself before starting another run.
     </p>
-    <form method="post" action="{{ base }}/runs/{{ run.run_id }}/force-finish">
+    <form method="post" action="{{ project_base }}/runs/{{ run.run_id }}/force-finish">
       <label for="force-finish-confirm">
         Type <code>{{ force_finish_confirmation }}</code> to confirm
       </label>

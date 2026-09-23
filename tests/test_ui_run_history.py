@@ -1205,7 +1205,11 @@ def test_run_page_and_stream_render_one_run_header(
     """
     page = client.get(f"/runs/{completed_run.run_id}").text
     fragment = render_region(
-        app.state.templates, store, "run_header", store.get_run(completed_run.run_id)
+        app.state.templates,
+        store,
+        "run_header",
+        store.get_run(completed_run.run_id),
+        "",
     )
 
     assert fragment.strip() in page

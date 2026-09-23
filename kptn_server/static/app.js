@@ -32,9 +32,16 @@
    * leaves the proxy. URLs that come from the server already carry it. */
   var BASE = (document.body && document.body.getAttribute("data-base")) || "";
 
+  // Two prefixes, for the same reason the templates have two: BASE reaches
+  // the app (its static mount lives there), PROJECT_BASE reaches the project
+  // being served. Everything this file builds is project-scoped except
+  // nothing -- but keeping both named makes the next URL obvious.
+  var PROJECT_BASE =
+    (document.body && document.body.getAttribute("data-project-base")) || BASE;
+
   var FOLLOW_STORAGE_KEY = "kptn.followOutput";
   var RECONNECT_DELAY_MS = 1000;
-  var ACTIVE_RUN_URL = BASE + "/active-run";
+  var ACTIVE_RUN_URL = PROJECT_BASE + "/active-run";
   var ACTIVE_RUN_POLL_MS = 3000;
 
   /* Every event name the server can send. EventSource dispatches by name, so
@@ -306,7 +313,7 @@
         /* Property assignments, never markup: the run id is the only value
          * that moves, and it goes in through `href`. */
         busy.href = state.run_id
-          ? BASE + "/runs/" + encodeURIComponent(state.run_id)
+          ? PROJECT_BASE + "/runs/" + encodeURIComponent(state.run_id)
           : "";
         busy.hidden = !state.active;
       }

@@ -407,6 +407,7 @@ def render_region(
     store: RunStore,
     name: str,
     record: RunRecord,
+    project_base: str,
 ) -> str:
     """Render one of the run page's replaceable regions from the store.
 
@@ -416,6 +417,14 @@ def render_region(
     the moment either surface changes, and drifts invisibly: the symptom is a
     header that is merely out of date, which is the bug these frames exist to
     fix.
+
+    ``project_base`` is required rather than defaulted. This call has no
+    ``Request`` and so no context processor to supply it -- a default of
+    ``""`` would silently emit unprefixed URLs from exactly the fragment that
+    cannot be caught by the usual per-page checks. Passed into the render
+    context, it shadows the ``base`` environment global by name, which is
+    what lets a Python-side render carry the *project's* prefix without
+    touching ``_build_templates``.
     """
     if name == "run_header":
         context: dict[str, Any] = {
@@ -428,6 +437,7 @@ def render_region(
             # went terminal under an open stream -- invisible on a reload,
             # which is where a reader would go looking for the bug.
             "counters": counters(store.event_counts(record.run_id)),
+            "project_base": project_base,
         }
     else:
         raise ValueError(f"no such run-page region: {name!r}")
@@ -435,14 +445,18 @@ def render_region(
 
 
 def _region_frame(
-    templates: Jinja2Templates, store: RunStore, name: str, record: RunRecord
+    templates: Jinja2Templates,
+    store: RunStore,
+    name: str,
+    record: RunRecord,
+    project_base: str,
 ) -> str:
     # No ``id:`` field, for the same reason the status frame carries none:
     # this is not a stored event, and letting it set ``Last-Event-ID`` would
     # corrupt the client's resume cursor.
     payload = {
         "target": REGION_EVENT_TARGETS[name],
-        "html": render_region(templates, store, name, record),
+        "html": render_region(templates, store, name, record, project_base),
     }
     return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
 
@@ -1185,6 +1199,7 @@ async def event_frames(
     store: RunStore,
     templates: Jinja2Templates,
     run_id: str,
+    project_base: str,
     *,
     after: int = 0,
 ) -> AsyncIterator[str]:
@@ -1225,7 +1240,7 @@ async def event_frames(
             # has to act on.
             for name in REGION_EVENT_TARGETS:
                 yield await asyncio.to_thread(
-                    _region_frame, templates, store, name, record
+                    _region_frame, templates, store, name, record, project_base
                 )
             yield _status_frame(templates, record)
             return
@@ -1251,6 +1266,7 @@ def run_events(request: Request, run_id: str, after: str | None = None):
             store,
             ui(request).templates,
             run_id,
+            ui(request).project_base,
             after=_cursor(request, after),
         ),
         media_type="text/event-stream",

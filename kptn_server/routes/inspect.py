@@ -279,11 +279,14 @@ def _inspection(project: ProjectContext, profile: str | None) -> PipelineInspect
 
 
 def _detail_url(name: str, profile: str | None, base: str = "") -> str:
-    """The walkthrough link for *name*, carrying the proxy prefix.
+    """The walkthrough link for *name*, carrying the project's prefix.
 
     This one is built in Python rather than in a template, so it does not get
-    ``{{ base }}`` for free -- and it is handed straight to htmx as
-    ``hx-get``, which would fetch it from the proxy's host without the prefix.
+    ``{{ project_base }}`` for free -- and it is handed straight to htmx as
+    ``hx-get``, which would fetch it from the proxy's host without the
+    prefix. The parameter keeps the name ``base`` (its signature is a
+    published interface); callers pass ``project_base``, since this is a page
+    link and not one of the asset URLs that stay pinned to the proxy prefix.
     """
     query = urllib.parse.urlencode({"profile": profile}) if profile else ""
     path = f"{base}/walkthrough/task/{urllib.parse.quote(name, safe='')}"

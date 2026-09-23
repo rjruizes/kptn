@@ -33,7 +33,7 @@
         data-run-id="{{ entry.run.run_id }}"
         data-status="{{ entry.run.status }}">
       <span class="status status--{{ entry.run.status }}">{{ entry.run.status }}</span>
-      <a class="run-history__link" href="{{ base }}/runs/{{ entry.run.run_id }}"><code>{{ entry.run.run_id }}</code></a>
+      <a class="run-history__link" href="{{ project_base }}/runs/{{ entry.run.run_id }}"><code>{{ entry.run.run_id }}</code></a>
       <time class="run-history__when" datetime="{{ entry.run.created_at }}">{{ entry.run.created_at }}</time>
 
       {% if entry.run.profile %}
@@ -58,7 +58,7 @@
 
       {{ warning_badge(entry.warnings) }}
 
-      <a class="run-history__log" href="{{ base }}/runs/{{ entry.run.run_id }}/log">log</a>
+      <a class="run-history__log" href="{{ project_base }}/runs/{{ entry.run.run_id }}/log">log</a>
     </li>
     {% endfor %}
   </ol>

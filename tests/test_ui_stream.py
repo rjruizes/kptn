@@ -400,7 +400,7 @@ def test_event_stream_closes_on_a_terminal_run_with_no_run_finished_event(
     _install_clock(monkeypatch, clock)
 
     frames = _drain(
-        runs_module.event_frames(store, app.state.templates, record.run_id, after=0)
+        runs_module.event_frames(store, app.state.templates, record.run_id, "", after=0)
     )
 
     assert clock.delays == [], "a terminal run's stream must close without polling"
@@ -428,7 +428,7 @@ def test_event_stream_streams_events_appended_while_it_is_open(
 
     joined = "".join(
         _drain(
-            runs_module.event_frames(store, app.state.templates, record.run_id, after=0)
+            runs_module.event_frames(store, app.state.templates, record.run_id, "", after=0)
         )
     )
 
@@ -462,7 +462,7 @@ def test_event_stream_polls_and_heartbeats_on_its_declared_intervals(
     _install_clock(monkeypatch, clock)
 
     frames = _drain(
-        runs_module.event_frames(store, app.state.templates, record.run_id, after=0)
+        runs_module.event_frames(store, app.state.templates, record.run_id, "", after=0)
     )
 
     assert clock.delays and set(clock.delays) == {0.1}
@@ -492,7 +492,7 @@ def test_event_stream_reads_its_intervals_from_the_module_constants(
     _install_clock(monkeypatch, clock)
 
     frames = _drain(
-        runs_module.event_frames(store, app.state.templates, record.run_id, after=0)
+        runs_module.event_frames(store, app.state.templates, record.run_id, "", after=0)
     )
 
     assert set(clock.delays) == {2.5}
