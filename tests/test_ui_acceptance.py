@@ -41,12 +41,17 @@ import time
 from pathlib import Path
 from typing import Callable, Iterator, TypeVar
 
+from unittest.mock import MagicMock
+
 import httpx
 import psutil
 import pytest
+from fastapi.testclient import TestClient
 
+from kptn_server.processes import ProcessIdentity
 from kptn_server.project import UI_DATABASE_RELATIVE_PATH
 from kptn_server.run_store import RunStore
+from tests.test_ui_multi_project import USER, projects_root
 
 pytestmark = pytest.mark.ui_hygiene
 
@@ -407,3 +412,88 @@ def test_a_run_survives_the_server_that_started_it(
         # and the project is unlocked again: a third run is accepted.
         third = _start_run(client, "success")
         _await_terminal(client, third, "a run started after the restart to finish")
+
+
+# -- the project switch, walked as a reader would ---------------------------
+#
+# ``kptn ui --projects-root`` serves several of a person's working
+# directories behind one server, each at ``/p/<slug>/``. Everything above
+# this section proves the single-project server; these two prove the switch
+# itself -- reached in-process through ``create_multi_app`` rather than a
+# subprocess, because what is under test is routing and isolation between
+# projects, not the durability claim the rest of this module exists for.
+
+
+@pytest.fixture
+def multi_client(projects_root: Path) -> TestClient:
+    from kptn_server.app import create_multi_app
+
+    return TestClient(create_multi_app(projects_root, USER))
+
+
+def _stub_supervisor(client: TestClient, slug: str) -> None:
+    """Open *slug*'s project, then swap its supervisor for a stub.
+
+    A request has to reach the project once for ``app.state.managers`` to
+    hold an entry for it at all (it is populated lazily, per slug, on first
+    resolution). What is under test here is routing and per-project
+    isolation, not process supervision, so the real ``RunProcessManager`` is
+    replaced before any run is started -- without this a "started" run
+    spawns a real detached worker for a pipeline this test never finishes
+    waiting on, which the ``reap_spawned_workers`` hygiene fixture flags as
+    a leak.
+    """
+    client.get(f"/p/{slug}/")
+    manager = MagicMock()
+    manager.start.return_value = ProcessIdentity(pid=4321, started_at=1.0)
+    client.app.state.managers[slug] = manager  # type: ignore[attr-defined]
+
+
+def test_a_reader_goes_from_the_list_to_a_project_and_runs_it(
+    multi_client: TestClient,
+) -> None:
+    """The whole path a person takes on their first visit.
+
+    List -> a project's history -> start a run there. The redirect's
+    ``Location`` must be relative: a root-absolute one is re-prefixed by the
+    proxy that serves this UI in VS Code for the Web, arriving doubled --
+    see ``tests/test_ui_root_path.py``.
+    """
+    listing = multi_client.get("/")
+    assert f'href="/p/{USER}_main/"' in listing.text
+
+    _stub_supervisor(multi_client, f"{USER}_main")
+
+    history = multi_client.get(f"/p/{USER}_main/")
+    assert history.status_code == 200
+
+    started = multi_client.post(
+        f"/p/{USER}_main/runs", data={"profile": ""}, follow_redirects=False
+    )
+    assert started.status_code in (302, 303)
+    assert started.headers["location"].startswith("runs/"), started.headers["location"]
+
+    # The run just started shows up in the project it was started in --
+    # without this, the isolation test below would pass vacuously against an
+    # implementation that never renders a run-history link anywhere at all.
+    assert "run-history__link" in multi_client.get(f"/p/{USER}_main/").text
+
+
+def test_a_run_in_one_project_is_absent_from_the_other(
+    multi_client: TestClient,
+) -> None:
+    """Starting a run in one project must not leak into another's history.
+
+    Asserted on ``run-history__link``, not on the word "runs" -- "runs"
+    appears on nearly any page in this UI (the nav link, the form action,
+    the redirect target) and would pass even against a shared store.
+    """
+    _stub_supervisor(multi_client, f"{USER}_main")
+
+    multi_client.post(
+        f"/p/{USER}_main/runs", data={"profile": ""}, follow_redirects=False
+    )
+
+    other = multi_client.get(f"/p/{USER}_featureA/")
+
+    assert "run-history__link" not in other.text
