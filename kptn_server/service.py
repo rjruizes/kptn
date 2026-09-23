@@ -17,16 +17,17 @@ the ``web`` extra -- which declares it.
 **On the ``os.chdir`` in the three entry points below.** Each one chdirs into
 the project directory and restores the original in a ``finally``, because
 ``read_config`` and the DuckDB connection factory both resolve relative paths
-against the working directory. That is process-global state, and on the shared
-UI application it is safe for one reason worth stating rather than
-rediscovering: these routes only ever chdir to *the served project's own root*
-(``routes/lineage.py`` refuses any other ``configPath``), the app serves
-exactly one project for its lifetime, and every request handler that reaches
-here is synchronous -- FastAPI runs a non-``async def`` endpoint in a
-threadpool, but the chdir is bracketed and the destination is identical for
-every concurrent caller, so no request can observe a directory other than the
-one it wanted. A route that accepted an arbitrary path, or a second served
-project, would break that argument.
+against the working directory. That is process-global state, and it used to be
+safe because the application served exactly one project for its lifetime: every
+concurrent caller chdir'd to the same place.
+
+That argument no longer holds on its own -- ``kptn ui --projects-root`` serves
+several projects from one process -- so it is carried by a lock instead. Every
+route in :mod:`kptn_server.routes.lineage` holds
+:class:`~kptn_server.slot.ProjectSlot` across its call into this module, and
+the slot admits one project at a time. Adding an entry point here that a route
+calls outside that lock would reintroduce exactly the bug: a request observing
+another project's working directory, intermittently, under load.
 """
 
 from __future__ import annotations

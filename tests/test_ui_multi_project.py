@@ -9,6 +9,7 @@ person's own directories from the latest release that has one, each at
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -217,3 +218,117 @@ def test_a_cross_origin_post_to_a_project_is_still_refused(
 
     assert response.status_code == 403, response.text
     assert REFUSAL_TITLE in response.text
+
+
+# -- the lineage routes chdir; the slot has to be held across that ---------
+#
+# ``kptn_server.service`` chdirs into the served project because
+# ``read_config`` and the DuckDB connection factory resolve relative paths
+# against the working directory. That used to be safe because the app served
+# one project for its lifetime; under ``--projects-root`` it is safe only
+# because ``kptn_server/routes/lineage.py`` holds the slot across the whole
+# call into that module, not merely across the project lookup.
+
+
+def _lineage_url(slug: str, config: Path) -> str:
+    return f"/p/{slug}/lineage-page?configPath={config}"
+
+
+def test_the_lineage_page_serves_each_project_from_its_own_checkout(
+    client: TestClient, projects_root: Path
+) -> None:
+    """Each project's lineage page reads that project's own ``kptn.yaml``."""
+    main_config = projects_root / "r2" / f"{USER}_main" / "kptn.yaml"
+    feature_config = projects_root / "r2" / f"{USER}_featureA" / "kptn.yaml"
+
+    first = client.get(_lineage_url(f"{USER}_main", main_config))
+    second = client.get(_lineage_url(f"{USER}_featureA", feature_config))
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+
+def test_the_working_directory_is_restored_after_a_lineage_request(
+    client: TestClient, projects_root: Path
+) -> None:
+    """A leaked chdir would break every later request, and the test process."""
+    import os
+
+    config = projects_root / "r2" / f"{USER}_main" / "kptn.yaml"
+    before = os.getcwd()
+
+    response = client.get(_lineage_url(f"{USER}_main", config))
+
+    assert response.status_code == 200, response.text
+    assert os.getcwd() == before
+
+
+def test_concurrent_lineage_requests_do_not_interleave_directories(
+    client: TestClient, projects_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The slot must be held across the chdir, not just the project lookup.
+
+    ``generate_lineage_html`` chdirs into the project and then calls
+    ``read_config``. Pausing the *first* project's request there, mid-call,
+    and only then firing the *second* project's request tells us, by whether
+    the second request can complete while the first is still paused, whether
+    the slot is held for the whole call. An implementation that releases the
+    slot after the project lookup (the bug this test exists to catch) lets
+    the second request run straight through -- chdir included -- while the
+    first sits paused with the working directory set to its own project;
+    that would make ``second_completed_while_first_was_paused`` true, and
+    this test would fail. Holding the slot across the call blocks the second
+    request at ``ProjectSlot.use`` until the first is entirely done, so it
+    cannot even attempt its own chdir while the first is paused -- the only
+    way this test passes.
+    """
+    import threading
+
+    from kptn.read_config import read_config as real_read_config
+    from kptn_server import service
+
+    reached_pause = threading.Event()
+    release_pause = threading.Event()
+    calls: list[None] = []
+
+    def paced_read_config() -> object:
+        calls.append(None)
+        if len(calls) == 1:
+            reached_pause.set()
+            release_pause.wait(timeout=5)
+        return real_read_config()
+
+    monkeypatch.setattr(service, "read_config", paced_read_config)
+
+    main_config = projects_root / "r2" / f"{USER}_main" / "kptn.yaml"
+    feature_config = projects_root / "r2" / f"{USER}_featureA" / "kptn.yaml"
+    results: dict[str, Any] = {}
+
+    def call_main() -> None:
+        results["main"] = client.get(_lineage_url(f"{USER}_main", main_config))
+
+    def call_feature() -> None:
+        results["feature"] = client.get(
+            _lineage_url(f"{USER}_featureA", feature_config)
+        )
+
+    first = threading.Thread(target=call_main)
+    first.start()
+    assert reached_pause.wait(timeout=5), "first request never reached the pause"
+
+    second = threading.Thread(target=call_feature)
+    second.start()
+    second.join(timeout=0.5)
+    second_completed_while_first_was_paused = not second.is_alive()
+
+    release_pause.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not second_completed_while_first_was_paused, (
+        "the second project's request completed while the first was still "
+        "paused inside its own chdir -- the slot was not held across the "
+        "service call"
+    )
+    assert results["main"].status_code == 200, results["main"].text
+    assert results["feature"].status_code == 200, results["feature"].text

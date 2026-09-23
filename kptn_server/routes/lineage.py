@@ -82,15 +82,19 @@ def project_config_path(project: ProjectContext) -> Path:
     return project.root / PROFILE_CONFIG_FILENAME
 
 
-def _accepted_config(request: Request, config_path: str) -> Path | None:
-    """*config_path* if it is the served project's config, else ``None``.
+def _accepted_config(project: ProjectContext, config_path: str) -> Path | None:
+    """*config_path* if it is *project*'s config, else ``None``.
 
     Resolved before comparison so that a path spelled with ``..`` or through
     a symlink cannot dodge the check. ``ProjectContext.root`` is already
     canonical, which is what makes the comparison meaningful.
+
+    Takes an already-resolved :class:`ProjectContext` rather than a
+    ``Request``, because every caller is already inside its own
+    ``ui(request).project()`` block: entering the slot a second time here
+    would deadlock -- ``ProjectSlot``'s lock is not reentrant.
     """
-    with ui(request).project() as project:
-        expected = project_config_path(project)
+    expected = project_config_path(project)
     try:
         candidate = Path(config_path).resolve()
     except OSError:  # pragma: no cover - defensive
@@ -135,23 +139,24 @@ def _service() -> Any:
 def _render_lineage(
     request: Request, configPath: str, graph: Optional[str], *, fragment: bool
 ) -> HTMLResponse:
-    config = _accepted_config(request, configPath)
-    if config is None:
-        return _refuse_foreign_config(request)
-    try:
-        html, _, _ = _service().render_lineage_page(
-            config, graph, base_url="", fragment=fragment
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001 - any analyzer failure is one page
-        return error_response(
-            request,
-            status_code=500,
-            title="Lineage could not be built",
-            detail=f"{type(exc).__name__}: {exc}",
-            nav_active="docs",
-        )
+    with ui(request).project() as project:
+        config = _accepted_config(project, configPath)
+        if config is None:
+            return _refuse_foreign_config(request)
+        try:
+            html, _, _ = _service().render_lineage_page(
+                config, graph, base_url="", fragment=fragment
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - any analyzer failure is one page
+            return error_response(
+                request,
+                status_code=500,
+                title="Lineage could not be built",
+                detail=f"{type(exc).__name__}: {exc}",
+                nav_active="docs",
+            )
     return HTMLResponse(content=html)
 
 
@@ -191,29 +196,30 @@ def table_preview_fragment(
     an error -- that is what ``get_duckdb_preview`` reports, and "not built
     yet" is an ordinary state for a project someone has not run.
     """
-    config = _accepted_config(request, configPath)
-    if config is None:
-        return _refuse_foreign_config(request)
-    service = _service()
-    try:
-        payload = service.get_duckdb_preview(config, table)
-    except FileNotFoundError as exc:
-        return error_response(
-            request,
-            status_code=404,
-            title="No such table to preview",
-            detail=str(exc),
-            nav_active="docs",
-        )
-    except Exception as exc:  # noqa: BLE001 - any preview failure is one panel
-        return error_response(
-            request,
-            status_code=500,
-            title="The preview could not be read",
-            detail=f"{type(exc).__name__}: {exc}",
-            nav_active="docs",
-        )
-    return HTMLResponse(content=service.render_table_preview_fragment(payload))
+    with ui(request).project() as project:
+        config = _accepted_config(project, configPath)
+        if config is None:
+            return _refuse_foreign_config(request)
+        service = _service()
+        try:
+            payload = service.get_duckdb_preview(config, table)
+        except FileNotFoundError as exc:
+            return error_response(
+                request,
+                status_code=404,
+                title="No such table to preview",
+                detail=str(exc),
+                nav_active="docs",
+            )
+        except Exception as exc:  # noqa: BLE001 - any preview failure is one panel
+            return error_response(
+                request,
+                status_code=500,
+                title="The preview could not be read",
+                detail=f"{type(exc).__name__}: {exc}",
+                nav_active="docs",
+            )
+        return HTMLResponse(content=service.render_table_preview_fragment(payload))
 
 
 @router.get("/table-columns")
@@ -223,17 +229,18 @@ def table_columns(
     table: str,
 ) -> dict[str, object]:
     """Column names for *table*. Called by the lineage page's JavaScript."""
-    config = _accepted_config(request, configPath)
-    if config is None:
-        raise HTTPException(status_code=400, detail=FOREIGN_CONFIG_DETAIL)
-    try:
-        return _service().get_duckdb_table_columns(config, table)
-    except HTTPException:
-        raise
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    with ui(request).project() as project:
+        config = _accepted_config(project, configPath)
+        if config is None:
+            raise HTTPException(status_code=400, detail=FOREIGN_CONFIG_DETAIL)
+        try:
+            return _service().get_duckdb_table_columns(config, table)
+        except HTTPException:
+            raise
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/table-preview-query")
@@ -243,23 +250,24 @@ def table_preview_query(request: Request, body: TablePreviewQuery) -> dict[str, 
     Single-statement enforcement and the injected row limit live in
     ``service._prepare_client_sql``; this route adds only the project check.
     """
-    config = _accepted_config(request, body.configPath)
-    if config is None:
-        raise HTTPException(status_code=400, detail=FOREIGN_CONFIG_DETAIL)
-    try:
-        return _service().get_duckdb_preview(
-            config,
-            body.table,
-            sql=body.sql,
-            limit=body.limit or 50,
-            requested_columns=body.columns,
-        )
-    except HTTPException:
-        raise
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    with ui(request).project() as project:
+        config = _accepted_config(project, body.configPath)
+        if config is None:
+            raise HTTPException(status_code=400, detail=FOREIGN_CONFIG_DETAIL)
+        try:
+            return _service().get_duckdb_preview(
+                config,
+                body.table,
+                sql=body.sql,
+                limit=body.limit or 50,
+                requested_columns=body.columns,
+            )
+        except HTTPException:
+            raise
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 __all__ = [
