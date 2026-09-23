@@ -208,7 +208,7 @@ def test_a_foreign_config_path_is_refused_by_every_lineage_route(
         response = client.get(url)
         assert response.status_code == 400, url
         # The title renders HTML-escaped, so assert on the detail sentence.
-        assert "only read that project" in response.text, url
+        assert "only read the resolved project" in response.text, url
 
     columns = client.get(f"/table-columns?configPath={foreign}&table=main.widgets")
     assert columns.status_code == 400

@@ -33,7 +33,8 @@ standalone app took an arbitrary filesystem path in a query parameter, which
 made sense when it served a project picker and no project of its own. A
 single-process ``kptn ui`` invocation still resolves one project per request
 -- held by :class:`~kptn_server.slot.ProjectSlot` across the ``os.chdir``
-described above, even when ``kptn ui --projects-root`` serves several -- and
+described in :mod:`kptn_server.service`, even when ``kptn ui --projects-root``
+serves several -- and
 :func:`kptn_server.routes.inspect.output_links` builds every link from that
 request's own ``kptn.yaml``. Accepting any other path would let a page loaded
 from anywhere in the browser point a loopback, unauthenticated server at an
@@ -64,8 +65,7 @@ router = APIRouter()
 
 #: Shown when a request names a config file that is not the served project's.
 FOREIGN_CONFIG_DETAIL = (
-    "This server serves one project, and these views only read that project's "
-    "own {filename}."
+    "These views only read the resolved project's own {filename}."
 ).format(filename=PROFILE_CONFIG_FILENAME)
 
 

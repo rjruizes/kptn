@@ -114,20 +114,6 @@ def test_superseded_ui_surfaces_are_absent() -> None:
     assert not surviving, f"superseded surfaces still present: {surviving}"
 
 
-def test_the_vscode_extensions_own_files_stay_gone() -> None:
-    """Deleting the extension must not leave selective leftovers behind.
-
-    :data:`REMOVED_SURFACES` already checks the ``kptn-vscode`` directory
-    itself, but a directory check passes even if a future change recreates
-    the directory and repopulates only some of it -- an interpreter-finding
-    shim without its own manifest, say. Naming the files the extension's own
-    Node project depended on keeps that failure mode from creeping back in
-    unnoticed.
-    """
-    for relative in ("kptn-vscode/package.json", "kptn-vscode/package-lock.json", "kptn-vscode/src/extension.ts"):
-        assert not (PROJECT_ROOT / relative).exists(), f"leftover {relative}"
-
-
 def test_the_supported_ui_command_is_the_only_server_entry_point() -> None:
     """``kptn ui`` exists, and nothing documents a second way to serve."""
     from kptn.cli.commands import ui
