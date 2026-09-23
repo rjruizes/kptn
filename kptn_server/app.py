@@ -82,23 +82,25 @@ async def _sleep(delay: float) -> None:
 def _supervisors(app: FastAPI) -> list[RunProcessManager]:
     """Every supervisor this server has opened, for one reconciliation pass.
 
-    Single-project mode keeps its one supervisor on ``app.state.processes``
-    and that attribute stays authoritative, because tests -- and the launcher
-    itself, in principle -- swap a supervisor in *after* the app is built by
-    assigning it. Reading the dictionary there instead would keep handing the
-    loop the original one.
+    Each factory sets ``app.state.supervisors`` to a callable that answers
+    this for the shape it built, and this function only calls it. Sniffing
+    ``app.state`` for whichever attribute happens to be set would make "where
+    do the supervisors live" a question with two answers -- and the mode that
+    lost would lose *silently*, reconciling one project forever while the
+    rest stayed wedged.
 
-    Multi-project mode has no single supervisor: there is one per project,
-    created the first time that project is served, so the loop walks the ones
-    that exist. A project nobody has opened has no store connection and no
-    runs to reconcile, so iterating the opened ones is the whole job.
+    It is a callable and not a list because both answers are live. Single-
+    project mode reads ``app.state.processes`` on every pass, because tests
+    -- and the launcher, in principle -- swap a supervisor in *after* the app
+    is built by assigning it, and a captured value would keep handing the
+    loop the original one. Multi-project mode has one supervisor per project,
+    created the first time that project is served, so the set grows while the
+    server runs. A project nobody has opened has no store connection and no
+    runs to reconcile, so walking the opened ones is the whole job.
 
     Reconciliation needs no pipeline and never touches the slot.
     """
-    single = getattr(app.state, "processes", None)
-    if single is not None:
-        return [single]
-    return list(app.state.managers.values())
+    return list(app.state.supervisors())
 
 
 async def _reconcile_periodically(app: FastAPI) -> None:
@@ -257,8 +259,12 @@ def create_app(project_root: Path, root_path: str = "") -> FastAPI:
     app.state.processes = processes
     app.state.base = base
     app.state.templates = _build_templates(base)
-    app.state.stores = {entry.slug: store}
-    app.state.managers = {entry.slug: processes}
+    # The one supervisor, read fresh on every reconciliation pass rather than
+    # captured: swapping ``app.state.processes`` after construction is how a
+    # test -- and, in principle, the launcher -- substitutes one, and the loop
+    # has to follow. This attribute is the *only* place the loop looks; there
+    # is deliberately no second copy of it in a dictionary to go stale.
+    app.state.supervisors = lambda: [app.state.processes]
 
     # Registered *before* the resolver below, and therefore inside it.
     #
@@ -359,8 +365,15 @@ def create_multi_app(
     # One store and one supervisor per project, all live at once: they hold a
     # SQLite path and a process table, and neither imports project code. Only
     # the pipeline is limited to one, through the slot above.
+    #
+    # ``app.state.processes`` is deliberately *not* set here and must never
+    # be: there is no single supervisor on this server, and an attribute
+    # named as if there were is exactly the thing a later change would reach
+    # for. The reconciliation loop asks ``supervisors()`` and nothing else,
+    # so it walks every project that has been opened.
     app.state.stores = {}
     app.state.managers = {}
+    app.state.supervisors = lambda: list(app.state.managers.values())
 
     def resolve_project(request: Request) -> None:
         """Turn the URL's ``{slug}`` into this request's project.
