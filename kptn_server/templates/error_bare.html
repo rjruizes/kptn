@@ -1,0 +1,35 @@
+{#
+  An error on a page that has no project.
+
+  The only page in this UI that is not project-scoped is the project list of
+  a multi-project server -- and the one error that can reach it is the
+  cross-origin refusal, which ``enforce_same_origin`` returns before any
+  router (and therefore before the dependency that resolves a project) has
+  run. ``error.html`` cannot serve it: that shell extends ``base.html``,
+  whose app bar reads ``project.display_name`` and ``project.profiles``, and
+  a missing project would turn the defence's 403 into a 500 -- the refusal
+  becoming the failure.
+
+  So: the same notice, in the same stylesheet, with no app bar. There is no
+  project to name and nothing on this page to run.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ error_title }} - kptn</title>
+  <link rel="stylesheet" href="{{ base }}/static/app.css">
+</head>
+<body data-base="{{ base }}">
+  <header class="app-bar">
+    <div class="app-bar__inner"><strong>kptn</strong></div>
+  </header>
+
+  <main class="app-main">
+    <section class="panel">
+      {% include "_error.html" %}
+    </section>
+  </main>
+</body>
+</html>

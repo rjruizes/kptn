@@ -4,9 +4,13 @@ This package is the single place the app factory looks for pages, so adding a
 surface means adding a router here and listing it in :func:`register_routers`
 -- the factory itself never needs to change.
 
-The router in this module holds the health endpoint the standalone launcher
-polls before it opens a browser, and the active-run probe the app bar polls
-to know whether this project is busy. ``/`` is the run history and is
+This module holds two routers, and the split is load-bearing. ``router``
+carries the health endpoint the standalone launcher polls before it opens a
+browser, and it must answer *without* a project: jupyter-server-proxy's
+readiness probe has no way to know which of several working directories to
+name. ``project_router`` carries the active-run probe the app bar polls to
+know whether this project is busy, and it goes under the project prefix with
+every other project-scoped surface. ``/`` is the run history and is
 served, with the rest of the run surface, by :mod:`kptn_server.routes.runs`; the plan
 view and the pipeline walkthrough live in
 :mod:`kptn_server.routes.inspect`; the retained lineage and table-preview
@@ -15,12 +19,19 @@ surfaces live in :mod:`kptn_server.routes.lineage`.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, FastAPI, Request
+from typing import Sequence
+
+from fastapi import APIRouter, Depends, FastAPI, Request
 
 from kptn_server.context import ui
 from kptn_server.routes import inspect, lineage, runs
 
+#: Endpoints that answer without a project. Mounted unprefixed in both modes.
 router = APIRouter()
+
+#: Endpoints that need a project, and are mounted under ``/p/{slug}`` when
+#: the server offers more than one.
+project_router = APIRouter()
 
 
 @router.get("/healthz")
@@ -33,7 +44,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/active-run")
+@project_router.get("/active-run")
 def active_run(request: Request) -> dict[str, object]:
     """Whether this project has a run in progress, and which one.
 
@@ -56,12 +67,27 @@ def active_run(request: Request) -> dict[str, object]:
     return {"active": record is not None, "run_id": record.run_id if record else None}
 
 
-def register_routers(app: FastAPI) -> None:
-    """Attach every UI router to *app*."""
-    app.include_router(router)
-    app.include_router(runs.router)
-    app.include_router(inspect.router)
-    app.include_router(lineage.router)
+def register_routers(
+    app: FastAPI,
+    prefix: str = "",
+    dependencies: Sequence[Depends] | None = None,
+) -> None:
+    """Attach every project-scoped UI router to *app*, optionally prefixed.
+
+    ``/healthz`` is deliberately not among them: it must answer without a
+    project, because server-proxy's readiness probe cannot know a slug. The
+    factory includes :data:`router` itself, unprefixed, in both modes.
+
+    *dependencies* is how multi-project mode turns the ``{slug}`` in *prefix*
+    into the request's project before any handler runs -- so no handler
+    signature changes and no handler learns that more than one project
+    exists.
+    """
+    shared = {"prefix": prefix, "dependencies": list(dependencies or [])}
+    app.include_router(project_router, **shared)
+    app.include_router(runs.router, **shared)
+    app.include_router(inspect.router, **shared)
+    app.include_router(lineage.router, **shared)
 
 
-__all__ = ["register_routers", "router"]
+__all__ = ["project_router", "register_routers", "router"]

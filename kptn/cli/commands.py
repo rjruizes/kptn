@@ -162,13 +162,34 @@ def ui(
             "/notebook/user/me/vscode/proxy/8000. Emitted URLs gain it."
         ),
     ),
+    projects_root: str = typer.Option(
+        "",
+        "--projects-root",
+        help=(
+            "Serve every kptn project you have under this directory, chosen "
+            "from the UI, instead of the one in the working directory. For "
+            "running behind jupyter-server-proxy, where the working "
+            "directory is the notebook server's."
+        ),
+    ),
+    user: str = typer.Option(
+        "",
+        "--user",
+        help="Whose working directories to offer. Default: $JUPYTERHUB_USER, then $USER.",
+    ),
 ) -> None:
     """Serve the pipeline UI for the project in the current directory.
 
     Loopback-bound with no authentication: this is a single developer's view
     of their own project, and it must not become an unauthenticated remote
     pipeline runner. Nothing here accepts a project path from the network --
-    the served project is always ``Path.cwd()``.
+    the served project is always ``Path.cwd()``, or, with ``--projects-root``,
+    one of the directories that flag named on the command line.
+
+    ``--projects-root`` exists for jupyter-server-proxy, where the working
+    directory belongs to the notebook server and names no project at all: the
+    UI then offers the working directories ``--user`` has under that root,
+    each at ``/p/<slug>/``.
 
     ``--reload`` is for working on kptn itself. Jinja already re-reads its
     templates from disk, so without it a long-running server picks up markup
@@ -187,15 +208,27 @@ def ui(
         )
         raise typer.Exit(code=1)
 
-    project_root = Path.cwd()
-    try:
-        application = create_app(project_root, root_path)
-    except ProjectError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(code=1)
-
     url = f"http://{host}:{port}/"
-    typer.echo(f"kptn UI for {project_root} on {url}")
+
+    if projects_root:
+        # No fail-fast load here, deliberately: there is no one project whose
+        # brokenness should stop a server that offers several, and the list
+        # page reports each one's error where it can be read.
+        from kptn_server.app import create_multi_app
+        from kptn_server.registry import default_user
+
+        chosen_user = user or default_user()
+        application = create_multi_app(Path(projects_root), chosen_user, root_path)
+        typer.echo(f"kptn UI for {chosen_user} under {projects_root} on {url}")
+    else:
+        project_root = Path.cwd()
+        try:
+            application = create_app(project_root, root_path)
+        except ProjectError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(code=1)
+        typer.echo(f"kptn UI for {project_root} on {url}")
+
     if open_browser:
         _start_browser_opener(url)
 
@@ -213,8 +246,12 @@ def ui(
         # the app in a fresh subprocess; the environment is the only channel.
         if root_path:
             os.environ["KPTN_UI_ROOT_PATH"] = root_path
+        if projects_root:
+            os.environ["KPTN_UI_PROJECTS_ROOT"] = projects_root
+            if user:
+                os.environ["KPTN_UI_USER"] = user
         uvicorn.run(
-            "kptn_server.app:create_app_for_cwd",
+            "kptn_server.app:create_app_for_env",
             factory=True,
             reload=True,
             reload_dirs=_ui_source_directories(),

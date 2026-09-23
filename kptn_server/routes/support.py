@@ -51,9 +51,28 @@ def error_response(
     which is what the conflict response needs -- the run holding the lock is
     the thing the reader has to act on. *nav_active* keeps the nav's current
     marker on the section the reader was in when the error happened.
+
+    **The project is optional here, and that is not a nicety.** One error is
+    raised before any project has been resolved: ``enforce_same_origin``
+    refuses a cross-origin state-changing request in middleware, ahead of
+    every router -- and therefore ahead of the dependency that turns a
+    ``/p/{slug}`` into a project, and on the multi-project server's project
+    list there is no project to resolve at all. ``error.html`` extends
+    ``base.html``, whose app bar reads ``project.display_name``, so rendering
+    that shell with no project raises out of the middleware and the caller
+    gets a 500: the cross-origin defence turned into the failure it exists to
+    prevent. So a project-less request gets ``error_bare.html`` and the
+    environment off ``app.state``.
     """
-    template = "_error.html" if is_fragment_request(request) else "error.html"
-    return ui(request).templates.TemplateResponse(
+    current = getattr(request.state, "ui", None)
+    if current is None:
+        templates = request.app.state.templates
+        shell = "error_bare.html"
+    else:
+        templates = current.templates
+        shell = "error.html"
+    template = "_error.html" if is_fragment_request(request) else shell
+    return templates.TemplateResponse(
         request,
         template,
         {

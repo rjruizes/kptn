@@ -88,6 +88,22 @@ pre {
   margin: 0 auto;
 }
 
+/* The project list's own chrome: the release it is showing, and the list
+   itself. A bare <ul> is already legible, so this is spacing only. */
+.app-bar__release {
+  color: var(--muted, #666);
+  margin-left: 0.5rem;
+}
+
+.project-list {
+  list-style: none;
+  padding: 0;
+}
+
+.project-list__item {
+  padding: 0.5rem 0;
+}
+
 .app-bar__profile {
   display: flex;
   gap: var(--control-gap);

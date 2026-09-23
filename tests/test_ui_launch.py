@@ -175,7 +175,7 @@ def test_reload_hands_uvicorn_an_import_string_factory(
 
     assert result.exit_code == 0, result.output
     (args, kwargs) = stub_uvicorn[0]
-    assert args[0] == "kptn_server.app:create_app_for_cwd"
+    assert args[0] == "kptn_server.app:create_app_for_env"
     assert kwargs["factory"] is True
     assert kwargs["reload"] is True
 

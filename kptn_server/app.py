@@ -1,7 +1,15 @@
 """FastAPI application factory for the shared pipeline UI.
 
-One factory call serves one project. ``create_app`` resolves the project,
-opens its durable run store, builds the worker supervisor, mounts the vendored
+``create_app`` serves one project, chosen by the launcher from the working
+directory. ``create_multi_app`` serves several -- the working directories one
+person has under a shared release folder -- each at ``/p/<slug>/``, because
+behind jupyter-server-proxy the process's working directory belongs to the
+notebook server and names no project at all. Both build the same routers over
+the same per-request context; the difference is only where the project comes
+from.
+
+``create_app`` resolves the project, opens its durable run store, builds the
+worker supervisor, mounts the vendored
 assets, registers the page routers, and -- the part with real teeth -- drives
 :meth:`RunProcessManager.reconcile` on a fixed cadence for as long as the
 server is up.
@@ -37,7 +45,8 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -47,8 +56,8 @@ from kptn_server.context import RequestUI, RequestUIMiddleware
 from kptn_server.origin import enforce_same_origin
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
 from kptn_server.project import ProjectContext
-from kptn_server.registry import ProjectEntry
-from kptn_server.routes import register_routers
+from kptn_server.registry import ProjectEntry, ProjectRegistry
+from kptn_server.routes import register_routers, router as health_router
 from kptn_server.run_store import RunStore
 from kptn_server.slot import ProjectSlot
 
@@ -70,6 +79,28 @@ async def _sleep(delay: float) -> None:
     await asyncio.sleep(delay)
 
 
+def _supervisors(app: FastAPI) -> list[RunProcessManager]:
+    """Every supervisor this server has opened, for one reconciliation pass.
+
+    Single-project mode keeps its one supervisor on ``app.state.processes``
+    and that attribute stays authoritative, because tests -- and the launcher
+    itself, in principle -- swap a supervisor in *after* the app is built by
+    assigning it. Reading the dictionary there instead would keep handing the
+    loop the original one.
+
+    Multi-project mode has no single supervisor: there is one per project,
+    created the first time that project is served, so the loop walks the ones
+    that exist. A project nobody has opened has no store connection and no
+    runs to reconcile, so iterating the opened ones is the whole job.
+
+    Reconciliation needs no pipeline and never touches the slot.
+    """
+    single = getattr(app.state, "processes", None)
+    if single is not None:
+        return [single]
+    return list(app.state.managers.values())
+
+
 async def _reconcile_periodically(app: FastAPI) -> None:
     """Run one reconciliation pass immediately, then one per interval.
 
@@ -81,21 +112,24 @@ async def _reconcile_periodically(app: FastAPI) -> None:
     ``reconcile`` is synchronous and touches SQLite, so it goes to a worker
     thread rather than blocking the event loop. A failing pass is logged and
     retried on the next tick -- a transient "database is locked" must not take
-    reconciliation out for the rest of the session.
+    reconciliation out for the rest of the session, and one project's bad
+    pass must not stop the projects after it in the same tick.
     """
     while True:
-        manager = app.state.processes
-        try:
-            interrupted = await asyncio.to_thread(manager.reconcile)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - the loop must outlive one bad pass
-            _LOGGER.exception("run reconciliation pass failed; retrying next tick")
-        else:
-            for run_id in interrupted:
-                _LOGGER.warning(
-                    "run %s was marked interrupted: its worker is gone", run_id
+        for manager in _supervisors(app):
+            try:
+                interrupted = await asyncio.to_thread(manager.reconcile)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - the loop must outlive one bad pass
+                _LOGGER.exception(
+                    "run reconciliation pass failed; retrying next tick"
                 )
+            else:
+                for run_id in interrupted:
+                    _LOGGER.warning(
+                        "run %s was marked interrupted: its worker is gone", run_id
+                    )
         await _sleep(RECONCILE_INTERVAL_SECONDS)
 
 
@@ -275,27 +309,147 @@ def create_app(project_root: Path, root_path: str = "") -> FastAPI:
     app.add_middleware(RequestUIMiddleware, resolver=resolve_ui)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    # ``/healthz`` is not among the project-scoped routers any more -- it has
+    # to answer without a project in multi-project mode -- so single-project
+    # mode includes it here, unprefixed, keeping both endpoints where they
+    # have always been.
+    app.include_router(health_router)
     register_routers(app)
     return app
 
 
-def create_app_for_cwd() -> FastAPI:
-    """Build the UI application for the project in the working directory.
+def create_multi_app(
+    projects_root: Path, user: str, root_path: str = ""
+) -> FastAPI:
+    """Build a UI serving the working directories *user* has under *projects_root*.
 
-    The name ``kptn ui --reload`` points uvicorn at. The reloader re-imports
-    the application in a fresh subprocess after every change, so it needs an
-    import string rather than the object the launcher normally hands over --
-    and an import string cannot carry the project root as an argument.
+    The routers are the single-project ones, mounted under ``/p/{slug}``. A
+    dependency turns the slug into the project, its store and its supervisor,
+    and puts them on the request -- so no handler signature changes and no
+    handler learns that more than one project exists.
 
-    Reading ``Path.cwd()`` here is the same rule the launcher itself follows
-    ("the served project is always the working directory"), and the reload
-    subprocess inherits that directory, so both paths serve the same project.
+    What is *not* here is a sub-application per project. Each would need its
+    own loaded pipeline, and two loaded pipelines in one process is the
+    silent-wrong-code bug :mod:`kptn_server.slot` exists to prevent.
 
-    ``KPTN_UI_ROOT_PATH`` carries the proxy prefix across the same boundary,
-    for the same reason: an import string cannot take arguments, and the
-    subprocess inherits the environment.
+    Unlike :func:`create_app` this does not fail when a project is unusable:
+    there is no one project whose brokenness should stop the server, and the
+    list page reports each one's error where it can be read.
+
+    A slug from a URL is a key in the registry's dictionary and is never
+    joined onto a path. That is the whole of the traversal defence, and it is
+    why a miss is a 404 rather than an attempt to read somewhere.
     """
-    return create_app(Path.cwd(), os.environ.get("KPTN_UI_ROOT_PATH", ""))
+    base = normalise_root_path(root_path)
+    registry = ProjectRegistry(projects_root, user)
+    registry.scan()
+    slot = ProjectSlot()
+
+    app = FastAPI(
+        title="kptn",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=_lifespan,
+    )
+    app.state.base = base
+    app.state.registry = registry
+    app.state.slot = slot
+    app.state.templates = _build_templates(base)
+    # One store and one supervisor per project, all live at once: they hold a
+    # SQLite path and a process table, and neither imports project code. Only
+    # the pipeline is limited to one, through the slot above.
+    app.state.stores = {}
+    app.state.managers = {}
+
+    def resolve_project(request: Request) -> None:
+        """Turn the URL's ``{slug}`` into this request's project.
+
+        A FastAPI dependency and deliberately not a ``BaseHTTPMiddleware``:
+        a second one of those in this stack wedges any request whose endpoint
+        raises a ``BaseException`` that is not an ``Exception``, which is a
+        thing ``tests/test_ui_runs.py`` does on purpose. See
+        :class:`~kptn_server.context.RequestUIMiddleware` for the mechanism.
+
+        Writing ``request.state.ui`` here writes into the ASGI scope, which
+        the handler's own ``Request`` reads back -- the same channel the
+        single-project resolver uses.
+        """
+        slug = request.path_params["slug"]
+        entry = registry.resolve(slug)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"No such project: {slug}")
+        store = app.state.stores.get(entry.slug)
+        if store is None:
+            store = RunStore(entry.database_path)
+            app.state.stores[entry.slug] = store
+            app.state.managers[entry.slug] = RunProcessManager(store)
+        request.state.ui = RequestUI(
+            entry=entry,
+            store=store,
+            processes=app.state.managers[entry.slug],
+            slot=slot,
+            base=base,
+            project_base=f"{base}/p/{entry.slug}",
+            templates=app.state.templates,
+        )
+
+    # Same ordering argument as in ``create_app``: the origin check must run
+    # before any router, and its refusal is a rendered page. Here the page it
+    # renders is the project-less shell, because the dependency that would
+    # have named a project runs inside the router the check refuses to reach.
+    # See :func:`kptn_server.routes.support.error_response`.
+    app.middleware("http")(enforce_same_origin)
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @app.get("/", response_class=HTMLResponse)
+    def project_list(request: Request) -> HTMLResponse:
+        """Which working directory to open.
+
+        Rescans on every view so a fresh checkout appears without a restart.
+        Needs no pipeline, and so never takes the slot.
+        """
+        entries = registry.scan()
+        return app.state.templates.TemplateResponse(
+            request,
+            "projects.html",
+            {
+                "entries": entries,
+                "release": registry.release,
+                "projects_root": str(projects_root),
+                "user": user,
+            },
+        )
+
+    app.include_router(health_router)  # project-independent, stays unprefixed
+    register_routers(
+        app, prefix="/p/{slug}", dependencies=[Depends(resolve_project)]
+    )
+    return app
+
+
+def create_app_for_env() -> FastAPI:
+    """Build the application the ``--reload`` subprocess should serve.
+
+    The reloader re-imports the app from an import string in a fresh
+    subprocess, and an import string carries no arguments. The environment is
+    the only channel, and the subprocess inherits both it and the working
+    directory.
+    """
+    projects_root = os.environ.get("KPTN_UI_PROJECTS_ROOT", "")
+    root_path = os.environ.get("KPTN_UI_ROOT_PATH", "")
+    if projects_root:
+        from kptn_server.registry import default_user  # noqa: PLC0415
+
+        user = os.environ.get("KPTN_UI_USER") or default_user()
+        return create_multi_app(Path(projects_root), user, root_path)
+    return create_app(Path.cwd(), root_path)
+
+
+#: Historical name for the reload entry point, kept because it is the import
+#: string older invocations pass to uvicorn -- and because reading
+#: ``Path.cwd()`` is still exactly what it does when no projects root is set.
+create_app_for_cwd = create_app_for_env
 
 
 __all__ = [
@@ -304,5 +458,7 @@ __all__ = [
     "TEMPLATES_DIR",
     "create_app",
     "create_app_for_cwd",
+    "create_app_for_env",
+    "create_multi_app",
     "normalise_root_path",
 ]
