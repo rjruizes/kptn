@@ -41,12 +41,8 @@ kptn = "kptn.cli:app"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build]
-exclude = [
-    "example/nibrs",
-    ".worktrees",
-    "docs/superpowers",
-]
+[tool.hatch.build.targets.sdist]
+only-include = ["kptn", "kptn_server", "README.md", "LICENSE"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
