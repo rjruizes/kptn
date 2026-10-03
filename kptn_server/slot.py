@@ -30,6 +30,7 @@ every SSE stream.
 
 from __future__ import annotations
 
+import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -63,15 +64,33 @@ class ProjectSlot:
         about to use a ``Pipeline`` whose modules a concurrent switch would
         pull out from under it, and -- in the lineage routes -- to chdir.
 
+        The body also runs **in the project's directory**, and the load does
+        too. Every other way kptn runs pipeline code starts there -- the CLI
+        because the reader ``cd``s into the project, run workers because they
+        are spawned with ``cwd=project_root`` -- so a pipeline may reasonably
+        resolve a path relative to it, at import time or later. nph-curation's
+        does: its setup module installs ``soda`` from ``../../packages``, and
+        from the Jupyter server's ``/home/jovyan`` that is ``/packages``, so the
+        import failed with "No module named 'soda'". Single-project mode never
+        hit this because ``kptn ui`` was launched from the project. The working
+        directory is process-global state of exactly the kind this lock
+        already guards, so it is set and restored here, under the lock.
+
         Raises :class:`~kptn_server.project.ProjectError` if the project
         cannot be loaded, leaving the slot empty rather than holding a
-        half-loaded context that a later request would treat as current.
+        half-loaded context that a later request would treat as current. The
+        working directory is restored on every exit, including that one.
         """
         with self._lock:
-            if self._context is None or self._context.root != entry.root:
-                self._context = None
-                self._context = ProjectContext.load(entry.root)
-            yield self._context
+            previous = os.getcwd()
+            os.chdir(entry.root)
+            try:
+                if self._context is None or self._context.root != entry.root:
+                    self._context = None
+                    self._context = ProjectContext.load(entry.root)
+                yield self._context
+            finally:
+                os.chdir(previous)
 
 
 __all__ = ["ProjectSlot"]

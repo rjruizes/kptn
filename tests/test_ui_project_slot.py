@@ -165,3 +165,83 @@ def test_a_broken_project_raises_and_leaves_the_slot_empty(tmp_path: Path) -> No
             pass
 
     assert slot.loaded_root is None
+
+
+def _elsewhere(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Put the process somewhere that is not a project, as the proxy does.
+
+    jupyter-server-proxy starts ``kptn ui`` with the Jupyter server's working
+    directory -- ``/home/jovyan`` on the box -- not the project's.
+    """
+    elsewhere = (tmp_path / "elsewhere").resolve()
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    return elsewhere
+
+
+def test_a_pipeline_that_reads_a_relative_path_at_import_time_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure that surfaced on the box, reduced to its mechanism.
+
+    nph-curation's pipeline imports a setup module that looks for
+    ``../../packages`` relative to the working directory. Every other way kptn
+    loads a pipeline runs it from the project root -- the CLI because the
+    reader ``cd``s there, run workers because they are spawned with
+    ``cwd=project_root`` -- so a relative path at import time is a reasonable
+    thing for a pipeline to do. The UI must honour the same invariant.
+    """
+    project = copy_fixture_project(FIXTURE_PROJECT, tmp_path, "relative")
+    (project / "marker.txt").write_text("found")
+    source = project / "ui_pipeline.py"
+    # Appended, not prepended: the fixture opens with a ``from __future__``
+    # import, which must stay first. Module-level code still runs at import.
+    source.write_text(
+        source.read_text()
+        + '\nMARKER = open("marker.txt").read()  # relative, as a pipeline may\n'
+    )
+    _elsewhere(tmp_path, monkeypatch)
+
+    with ProjectSlot().use(make_entry(project)) as loaded:
+        assert loaded.root == project.resolve()
+
+
+def test_the_body_runs_in_the_project_directory(
+    two_projects, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rendering a plan or a task runs project code too, not only the import."""
+    alpha, _ = two_projects
+    elsewhere = _elsewhere(tmp_path, monkeypatch)
+
+    with ProjectSlot().use(alpha):
+        assert Path.cwd().resolve() == alpha.root
+
+    assert Path.cwd().resolve() == elsewhere
+
+
+def test_the_working_directory_is_restored_when_the_body_raises(
+    two_projects, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alpha, _ = two_projects
+    elsewhere = _elsewhere(tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError):
+        with ProjectSlot().use(alpha):
+            raise RuntimeError("a handler failed mid-render")
+
+    assert Path.cwd().resolve() == elsewhere
+
+
+def test_the_working_directory_is_restored_when_the_load_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.conftest import BROKEN_FIXTURE_PROJECT
+
+    broken = make_entry(copy_fixture_project(BROKEN_FIXTURE_PROJECT, tmp_path, "broken"))
+    elsewhere = _elsewhere(tmp_path, monkeypatch)
+
+    with pytest.raises(ProjectError):
+        with ProjectSlot().use(broken):
+            pass
+
+    assert Path.cwd().resolve() == elsewhere
