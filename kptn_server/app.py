@@ -55,9 +55,10 @@ from starlette.types import Scope
 from kptn_server.context import RequestUI, RequestUIMiddleware
 from kptn_server.origin import enforce_same_origin
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
-from kptn_server.project import ProjectContext
+from kptn_server.project import ProjectContext, ProjectError
 from kptn_server.registry import ProjectEntry, ProjectRegistry
 from kptn_server.routes import register_routers, router as health_router
+from kptn_server.routes.support import error_response
 from kptn_server.run_store import RunStore
 from kptn_server.slot import ProjectSlot
 
@@ -211,6 +212,36 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     return templates
 
 
+def _unloadable_project(request: Request, exc: Exception) -> HTMLResponse:
+    """Report a project whose pipeline will not load, as a page naming why.
+
+    In multi-project mode nothing imports a project's pipeline until the first
+    page that needs the graph -- the plan, the walkthrough, a lineage view --
+    so an import that fails does so inside a request, from inside
+    :meth:`~kptn_server.slot.ProjectSlot.use`. The registry cannot see it
+    coming: it reads ``pyproject.toml`` as text, by design, so the project is
+    listed and its run history renders like any other.
+
+    Every such page enters the slot with ``with ui(request).project() as
+    project:``, and the load happens as the ``with`` is entered -- before any
+    ``try`` inside it. One handler here catches it for all of them, rather
+    than each route growing its own. By the time it runs, the ``with`` has
+    exited and the slot's lock is released, and ``error_response`` reads only
+    the request's project entry and store, so rendering this cannot re-enter
+    the slot.
+
+    Single-project mode loads at construction and fails the launcher instead,
+    so it never reaches here; registering it there too costs nothing and
+    keeps the two factories answering the same way.
+    """
+    return error_response(
+        request,
+        status_code=500,
+        title="This project could not be loaded",
+        detail=str(exc),
+    )
+
+
 def create_app(project_root: Path, root_path: str = "") -> FastAPI:
     """Build the UI application for the project rooted at *project_root*.
 
@@ -289,6 +320,7 @@ def create_app(project_root: Path, root_path: str = "") -> FastAPI:
     # See :mod:`kptn_server.origin` for why ``Sec-Fetch-Site`` is the check
     # and why safe methods are exempt.
     app.middleware("http")(enforce_same_origin)
+    app.add_exception_handler(ProjectError, _unloadable_project)
 
     def resolve_ui(scope: Scope) -> RequestUI:
         # Single-project mode: one project for the process's lifetime, so the
@@ -413,6 +445,7 @@ def create_multi_app(
     # have named a project runs inside the router the check refuses to reach.
     # See :func:`kptn_server.routes.support.error_response`.
     app.middleware("http")(enforce_same_origin)
+    app.add_exception_handler(ProjectError, _unloadable_project)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/", response_class=HTMLResponse)

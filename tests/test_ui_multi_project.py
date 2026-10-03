@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from kptn_server.app import create_multi_app
 from kptn_server.origin import REFUSAL_TITLE
 from kptn_server.processes import ProcessIdentity
-from tests.conftest import FIXTURE_PROJECT, copy_fixture_project
+from tests.conftest import BROKEN_FIXTURE_PROJECT, FIXTURE_PROJECT, copy_fixture_project
 
 # This module builds real apps and loads real pipelines, so it opts into the
 # fixtures that undo what that does to the process -- ``sys.modules``,
@@ -332,3 +332,38 @@ def test_concurrent_lineage_requests_do_not_interleave_directories(
     )
     assert results["main"].status_code == 200, results["main"].text
     assert results["feature"].status_code == 200, results["feature"].text
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "plan",
+        "walkthrough",
+        "walkthrough/task/anything",
+        # configPath is a required query parameter; without it FastAPI
+        # answers 422 before the handler -- and so before the slot -- runs.
+        "lineage-page?configPath=kptn.yaml",
+    ],
+)
+def test_a_project_whose_pipeline_will_not_import_says_why(
+    tmp_path: Path, page: str
+) -> None:
+    """A broken pipeline is reported on the page, not as a bare 500.
+
+    The registry reads pyproject.toml as text and cannot know a pipeline is
+    broken until something imports it -- and in multi-project mode nothing
+    does until the first page that needs the graph. Single-project mode
+    loaded at startup, so a broken pipeline stopped the launcher and no
+    handler ever saw one. Here the load happens inside a request, so the
+    failure has to come back as a page that names it: otherwise the reader
+    gets "Internal Server Error" and nothing to act on.
+    """
+    root = tmp_path / "shared"
+    copy_fixture_project(BROKEN_FIXTURE_PROJECT, root / "r1", f"{USER}_broken")
+    client = TestClient(create_multi_app(root, USER))
+
+    response = client.get(f"/p/{USER}_broken/{page}")
+
+    assert response.status_code == 500
+    assert response.text.strip() != "Internal Server Error"
+    assert "Could not load the pipeline" in response.text
