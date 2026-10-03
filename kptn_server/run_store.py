@@ -18,9 +18,12 @@ Invalid run state transitions (e.g. finishing an already-terminal run) raise
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import threading
 import uuid
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -199,16 +202,52 @@ def _required_dt(value: str | None) -> datetime:
     return datetime.fromisoformat(value)
 
 
+class _ThreadConnection:
+    """One thread's connection, closed when the thread that owns it ends.
+
+    Held only by that thread's ``threading.local`` slot (the store keeps a
+    weak reference, for :meth:`RunStore.close`), so when the thread exits --
+    the UI's thread pool retires idle workers -- the slot is cleared, this is
+    collected, and the connection is closed rather than kept open for the
+    life of the process.
+    """
+
+    __slots__ = ("conn", "pid", "__weakref__")
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.pid = os.getpid()
+
+    def close(self) -> None:
+        try:
+            self.conn.close()
+        except sqlite3.Error:
+            pass
+
+    def __del__(self) -> None:
+        self.close()
+
+
+def _close_all(held: weakref.WeakSet[_ThreadConnection]) -> None:
+    for entry in list(held):
+        entry.close()
+
+
 class RunStore:
     """SQLite-backed store for pipeline run history."""
 
     def __init__(self, path: Path | str) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
+        self._held: weakref.WeakSet[_ThreadConnection] = weakref.WeakSet()
+        # Closes what is still open when the store is collected (or at exit),
+        # rather than leaving each connection to its own finalizer.
+        weakref.finalize(self, _close_all, self._held)
         # Apply the migration (idempotently) up front so later connections
         # never race on schema creation.
-        conn = self._connect()
-        conn.close()
+        conn = self._acquire()
+        self._release(conn)
 
     @property
     def path(self) -> Path:
@@ -216,9 +255,80 @@ class RunStore:
         return self._path
 
     # -- connection management ------------------------------------------------
+    #
+    # One connection per thread, opened on first use and kept for as long as
+    # the thread lives. Opening is the expensive part where it matters: on an
+    # NFS-mounted project every fcntl lock is a network round trip, and a
+    # WAL-mode open-and-close took ~220ms there against ~10ms for a read on a
+    # connection already open. A connection per *call* put that on every page
+    # render, every stream poll, and every line of captured worker output.
+    #
+    # Per thread because a sqlite3 connection must not be used by two threads
+    # at once, and the UI calls the store from a thread pool. Nothing goes
+    # stale by being kept: in autocommit mode each statement or BEGIN starts
+    # a fresh read of the database, so another process's commits are seen on
+    # the next call exactly as they were with a new connection.
+
+    def _acquire(self) -> sqlite3.Connection:
+        """This thread's connection, opened on first use."""
+        held: _ThreadConnection | None = getattr(self._local, "held", None)
+        # A forked child inherits the parent's thread-local; a SQLite
+        # connection must never be used across fork, so it gets its own.
+        if held is None or held.pid != os.getpid():
+            held = _ThreadConnection(self._connect())
+            self._local.held = held
+            self._held.add(held)
+        return held.conn
+
+    def _release(self, conn: sqlite3.Connection) -> None:
+        """Hand a connection back after a call; it stays open for the next one.
+
+        Every write path rolls back on failure, but a ROLLBACK can itself
+        fail. A connection left inside a transaction would hold SQLite's write
+        lock for as long as the thread lives and fail its next BEGIN, so a
+        transaction still open here is rolled back -- and if even that fails,
+        the connection is dropped rather than reused.
+        """
+        if not conn.in_transaction:
+            return
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            held = getattr(self._local, "held", None)
+            if held is not None and held.conn is conn:
+                self._local.held = None
+                self._held.discard(held)
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+
+    def _open_connections(self) -> list[sqlite3.Connection]:
+        """The connections still open, for tests and diagnostics."""
+        return [entry.conn for entry in list(self._held)]
+
+    def close(self) -> None:
+        """Close every connection this store has opened, on any thread.
+
+        Optional: connections are closed anyway when their thread ends or the
+        store is collected. A store used after ``close`` reopens.
+        """
+        _close_all(self._held)
+        self._held.clear()
+        # A fresh thread-local, so every thread -- not only this one -- opens
+        # a new connection on its next call instead of reusing a closed one.
+        self._local = threading.local()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._path, timeout=5.0, isolation_level=None)
+        """Open and configure a new connection.
+
+        ``check_same_thread=False`` only so that :meth:`close` may close a
+        connection from a thread other than the one that opened it; each
+        connection is still used by exactly one thread.
+        """
+        conn = sqlite3.connect(
+            self._path, timeout=5.0, isolation_level=None, check_same_thread=False
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
@@ -301,7 +411,7 @@ class RunStore:
         runs_dir.mkdir(parents=True, exist_ok=True)
         log_path = runs_dir / f"{run_id}.log"
 
-        conn = self._connect()
+        conn = self._acquire()
         try:
             conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
@@ -346,7 +456,7 @@ class RunStore:
                 pass
             raise
         finally:
-            conn.close()
+            self._release(conn)
 
         return RunRecord(
             run_id=run_id,
@@ -380,7 +490,7 @@ class RunStore:
         event_timestamp = timestamp or datetime.now(timezone.utc)
         payload = payload or {}
 
-        conn = self._connect()
+        conn = self._acquire()
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -469,7 +579,7 @@ class RunStore:
                 pass
             raise
         finally:
-            conn.close()
+            self._release(conn)
 
         return StoredEvent(
             run_id=run_id,
@@ -500,7 +610,7 @@ class RunStore:
         so a freshly spawned worker is never mistaken for a stale one.
         """
         beat = timestamp or datetime.now(timezone.utc)
-        conn = self._connect()
+        conn = self._acquire()
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -533,7 +643,7 @@ class RunStore:
                 pass
             raise
         finally:
-            conn.close()
+            self._release(conn)
         return self._row_to_run(row)
 
     def heartbeat(self, run_id: str, *, timestamp: datetime | None = None) -> bool:
@@ -551,7 +661,7 @@ class RunStore:
         beat = timestamp or datetime.now(timezone.utc)
         terminal = tuple(sorted(TERMINAL_STATUSES))
         placeholders = ", ".join("?" for _ in terminal)
-        conn = self._connect()
+        conn = self._acquire()
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -576,11 +686,11 @@ class RunStore:
                 pass
             raise
         finally:
-            conn.close()
+            self._release(conn)
         return updated
 
     def request_stop(self, run_id: str) -> RunRecord:
-        conn = self._connect()
+        conn = self._acquire()
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -611,7 +721,7 @@ class RunStore:
                 pass
             raise
         finally:
-            conn.close()
+            self._release(conn)
         return self._row_to_run(row)
 
     def finish_run(
@@ -626,7 +736,7 @@ class RunStore:
             raise RunStateError(f"{status!r} is not a terminal status")
         finished_at = timestamp or datetime.now(timezone.utc)
 
-        conn = self._connect()
+        conn = self._acquire()
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -660,24 +770,24 @@ class RunStore:
                 pass
             raise
         finally:
-            conn.close()
+            self._release(conn)
         return self._row_to_run(row)
 
     # -- reads -------------------------------------------------------------
 
     def get_run(self, run_id: str) -> RunRecord | None:
-        conn = self._connect()
+        conn = self._acquire()
         try:
             row = conn.execute(
                 "SELECT * FROM runs WHERE run_id = ?", (run_id,)
             ).fetchone()
         finally:
-            conn.close()
+            self._release(conn)
         return self._row_to_run(row) if row is not None else None
 
     def active_run(self, project_root: Path | str) -> RunRecord | None:
         canonical_root = Path(project_root).resolve()
-        conn = self._connect()
+        conn = self._acquire()
         try:
             row = conn.execute(
                 """
@@ -688,7 +798,7 @@ class RunStore:
                 (str(canonical_root),),
             ).fetchone()
         finally:
-            conn.close()
+            self._release(conn)
         return self._row_to_run(row) if row is not None else None
 
     def list_runs(
@@ -697,7 +807,7 @@ class RunStore:
         *,
         limit: int | None = None,
     ) -> list[RunRecord]:
-        conn = self._connect()
+        conn = self._acquire()
         try:
             query = "SELECT * FROM runs"
             params: list[object] = []
@@ -711,7 +821,7 @@ class RunStore:
                 params.append(limit)
             rows = conn.execute(query, params).fetchall()
         finally:
-            conn.close()
+            self._release(conn)
         return [self._row_to_run(row) for row in rows]
 
     def unfinished_runs(
@@ -731,15 +841,15 @@ class RunStore:
             query += " AND project_root = ?"
             params.append(str(Path(project_root).resolve()))
         query += " ORDER BY created_at ASC, run_id ASC"
-        conn = self._connect()
+        conn = self._acquire()
         try:
             rows = conn.execute(query, params).fetchall()
         finally:
-            conn.close()
+            self._release(conn)
         return [self._row_to_run(row) for row in rows]
 
     def events_after(self, run_id: str, after_sequence: int = 0) -> list[StoredEvent]:
-        conn = self._connect()
+        conn = self._acquire()
         try:
             rows = conn.execute(
                 """
@@ -750,7 +860,7 @@ class RunStore:
                 (run_id, after_sequence),
             ).fetchall()
         finally:
-            conn.close()
+            self._release(conn)
         return [self._row_to_event(row) for row in rows]
 
     def event_counts(self, run_id: str) -> dict[tuple[str, str | None], int]:
@@ -781,7 +891,7 @@ class RunStore:
         poll.
         """
         placeholders = ", ".join("?" for _ in COUNTED_EVENT_KINDS)
-        conn = self._connect()
+        conn = self._acquire()
         try:
             rows = conn.execute(
                 f"""
@@ -795,11 +905,11 @@ class RunStore:
                 (run_id, *COUNTED_EVENT_KINDS),
             ).fetchall()
         finally:
-            conn.close()
+            self._release(conn)
         return {(row["kind"], row["status"]): row["total"] for row in rows}
 
     def warning_groups(self, run_id: str) -> list[WarningGroup]:
-        conn = self._connect()
+        conn = self._acquire()
         try:
             rows = conn.execute(
                 """
@@ -810,7 +920,7 @@ class RunStore:
                 (run_id, EventKind.WARNING.value),
             ).fetchall()
         finally:
-            conn.close()
+            self._release(conn)
 
         groups: dict[tuple[str | None, str, str], _WarningTally] = {}
         order: list[tuple[str | None, str, str]] = []

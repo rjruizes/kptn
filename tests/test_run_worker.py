@@ -961,6 +961,8 @@ def test_heartbeat_holds_a_write_transaction_across_its_status_check(
 
     heartbeat_store = RunStore(run.db_path)
     monkeypatch.setattr(RunStore, "_connect", racing_connect)
+    # The store keeps its connection, so drop the one it opened unpatched.
+    heartbeat_store.close()
 
     result = heartbeat_store.heartbeat(run.run_id)
     monkeypatch.undo()

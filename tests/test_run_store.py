@@ -528,3 +528,126 @@ def test_the_stores_event_vocabulary_comes_from_the_runner() -> None:
                 f"{kind.value!r} is spelled as a literal in run_store.py; "
                 "derive it from EventKind instead"
             )
+
+
+# --- connection reuse ---------------------------------------------------- #
+#
+# On an NFS-mounted project, opening a connection in WAL mode costs ~180ms and
+# closing one ~40ms -- every fcntl lock is a network round trip. A store that
+# opened a connection per call made every UI page and every captured output
+# line pay that, so the store keeps one connection per thread instead.
+
+
+def _counting_connect(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    opened: list[object] = []
+    real_connect = sqlite3.connect
+
+    def counting(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", counting)
+    return opened
+
+
+def test_store_reuses_one_connection_per_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened = _counting_connect(monkeypatch)
+    store = RunStore(tmp_path / "ui.db")
+    run = store.create_run(request(tmp_path))
+    store.append_event(run.run_id, "run_started")
+    for _ in range(10):
+        store.get_run(run.run_id)
+        store.events_after(run.run_id, 0)
+        store.active_run(tmp_path)
+    assert len(opened) == 1
+
+    other_thread: list[int] = []
+    worker = threading.Thread(
+        target=lambda: other_thread.append(len(store.list_runs()))
+    )
+    worker.start()
+    worker.join(timeout=10)
+    assert other_thread == [1]
+    assert len(opened) == 2
+
+
+def test_reused_connection_sees_writes_from_other_connections(tmp_path: Path) -> None:
+    db = tmp_path / "ui.db"
+    reader = RunStore(db)
+    writer = RunStore(db)
+    run = writer.create_run(request(tmp_path))
+    writer.append_event(run.run_id, "run_started")
+    assert reader.get_run(run.run_id).status == STATUS_RUNNING  # type: ignore[union-attr]
+
+    writer.finish_run(run.run_id, STATUS_SUCCEEDED)
+    record = reader.get_run(run.run_id)
+    assert record is not None and record.status == STATUS_SUCCEEDED
+    assert reader.active_run(tmp_path) is None
+
+
+def test_an_abandoned_transaction_does_not_poison_the_reused_connection(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "ui.db")
+    run = store.create_run(request(tmp_path))
+    conn = store._acquire()  # noqa: SLF001 - simulating a call that died mid-transaction
+    conn.execute("BEGIN IMMEDIATE")
+    store._release(conn)  # noqa: SLF001
+
+    store.append_event(run.run_id, "run_started")
+    assert store.get_run(run.run_id).status == STATUS_RUNNING  # type: ignore[union-attr]
+    # And the write lock was really let go: a second connection can write.
+    RunStore(tmp_path / "ui.db").finish_run(run.run_id, STATUS_STOPPED)
+
+
+def test_close_closes_every_thread_connection(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "ui.db")
+    store.list_runs()
+    used, release = threading.Event(), threading.Event()
+
+    def hold_a_connection() -> None:
+        store.list_runs()
+        used.set()
+        release.wait(10)  # still alive, so its connection is still open
+
+    worker = threading.Thread(target=hold_a_connection)
+    worker.start()
+    assert used.wait(10)
+    connections = store._open_connections()  # noqa: SLF001
+    assert len(connections) == 2
+
+    store.close()
+    release.set()
+    worker.join(timeout=10)
+
+    for conn in connections:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+    # A closed store reopens on next use rather than failing.
+    assert store.list_runs() == []
+
+
+def test_a_finished_threads_connection_is_closed_not_kept(tmp_path: Path) -> None:
+    """The UI's thread pool retires idle threads; their connections must go too."""
+    import gc
+
+    store = RunStore(tmp_path / "ui.db")
+    opened: list[sqlite3.Connection] = []
+
+    def use_store() -> None:
+        store.list_runs()
+        opened.append(store._acquire())  # noqa: SLF001 - the connection this thread got
+
+    for _ in range(5):
+        worker = threading.Thread(target=use_store)
+        worker.start()
+        worker.join(timeout=10)
+    gc.collect()
+
+    assert len(store._open_connections()) == 1  # noqa: SLF001 - only this thread's
+    for conn in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
