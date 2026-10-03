@@ -43,6 +43,20 @@
     (document.body && document.body.getAttribute("data-project-base")) || BASE;
 
   var FOLLOW_STORAGE_KEY = "kptn.followOutput";
+  var SOUND_STORAGE_KEY = "kptn.runSound";
+
+  /* The end of a run, heard: two short sine tones, rising for a run that
+   * succeeded and falling for any other ending (failed, errored, interrupted,
+   * stopped) -- the same completed/failed split VS Code's task signals make.
+   * Generated rather than shipped, so there is no audio file to vendor. */
+  var TONES_SUCCEEDED = [523.25, 783.99]; /* C5 up to G5 */
+  var TONES_ENDED_OTHERWISE = [392.0, 261.63]; /* G4 down to C4 */
+  var TONE_SECONDS = 0.18;
+  var TONE_SPACING_SECONDS = 0.14;
+  var TONE_VOLUME = 0.2;
+  /* How late a tone may still start after the run ended. Past this the reader
+   * has moved on, and a chime would announce nothing. */
+  var TONE_DEADLINE_MS = 1500;
   var RECONNECT_DELAY_MS = 1000;
   var ACTIVE_RUN_URL = PROJECT_BASE + "/active-run";
   var ACTIVE_RUN_POLL_MS = 3000;
@@ -120,12 +134,12 @@
     }
   }
 
-  function setUpFollowToggle(toggle) {
+  function setUpRememberedToggle(toggle, storageKey) {
     if (!toggle) {
       return;
     }
     try {
-      var stored = window.localStorage.getItem(FOLLOW_STORAGE_KEY);
+      var stored = window.localStorage.getItem(storageKey);
       if (stored !== null) {
         toggle.checked = stored === "true";
       }
@@ -134,11 +148,94 @@
     }
     toggle.addEventListener("change", function () {
       try {
-        window.localStorage.setItem(FOLLOW_STORAGE_KEY, String(toggle.checked));
+        window.localStorage.setItem(storageKey, String(toggle.checked));
       } catch (err) {
         /* Not being able to remember the choice is not a reason to refuse it. */
       }
     });
+  }
+
+  var audio = null;
+
+  function audioContext() {
+    /* Made on first use, never at load: a context created before the page
+     * may play sound starts suspended, and there is nothing to create one
+     * for until a run is watched. */
+    if (audio === null) {
+      var Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) {
+        return null;
+      }
+      try {
+        audio = new Context();
+      } catch (err) {
+        return null;
+      }
+    }
+    return audio;
+  }
+
+  function unlockSoundOnFirstGesture() {
+    /* Browsers let a page play sound only after the reader has clicked or
+     * typed on it. Reaching the run page by pressing Run carries that over
+     * (checked in Chrome), so this is for a run page reached some other way
+     * -- a reopened tab. The first click or keypress, anywhere, unlocks it. */
+    function unlock() {
+      document.removeEventListener("pointerdown", unlock, true);
+      document.removeEventListener("keydown", unlock, true);
+      var context = audioContext();
+      if (context && context.state === "suspended") {
+        context.resume().catch(function () {});
+      }
+    }
+    document.addEventListener("pointerdown", unlock, true);
+    document.addEventListener("keydown", unlock, true);
+  }
+
+  function playTones(frequencies) {
+    var context = audioContext();
+    if (!context) {
+      return;
+    }
+    var requested = Date.now();
+
+    function play() {
+      /* Still blocked, or allowed only much later: stay silent. A suspended
+       * context would otherwise hold the tones and sound them whenever the
+       * reader next happened to click. */
+      if (context.state !== "running" || Date.now() - requested > TONE_DEADLINE_MS) {
+        return;
+      }
+      var start = context.currentTime + 0.02;
+      for (var i = 0; i < frequencies.length; i += 1) {
+        var at = start + i * TONE_SPACING_SECONDS;
+        var oscillator = context.createOscillator();
+        var envelope = context.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequencies[i];
+        /* Fade in and out: a sine that starts or stops at full volume clicks. */
+        envelope.gain.setValueAtTime(0.0001, at);
+        envelope.gain.exponentialRampToValueAtTime(TONE_VOLUME, at + 0.015);
+        envelope.gain.exponentialRampToValueAtTime(0.0001, at + TONE_SECONDS);
+        oscillator.connect(envelope);
+        envelope.connect(context.destination);
+        oscillator.start(at);
+        oscillator.stop(at + TONE_SECONDS + 0.02);
+      }
+    }
+
+    if (context.state === "running") {
+      play();
+    } else {
+      context.resume().then(play, function () {});
+    }
+  }
+
+  function announceRunEnd(status, toggle) {
+    if (toggle && !toggle.checked) {
+      return;
+    }
+    playTones(status === "succeeded" ? TONES_SUCCEEDED : TONES_ENDED_OTHERWISE);
   }
 
   function initConsole() {
@@ -150,13 +247,17 @@
     var list = document.getElementById("console-events");
     var empty = document.getElementById("console-empty");
     var follow = document.getElementById("follow-output");
-    setUpFollowToggle(follow);
+    setUpRememberedToggle(follow, FOLLOW_STORAGE_KEY);
+    var sound = document.getElementById("run-sound");
+    setUpRememberedToggle(sound, SOUND_STORAGE_KEY);
 
     if (console_.getAttribute("data-terminal") === "true") {
       /* Already over. Its whole history is on the page, and its status came
-       * from the run row -- there is nothing left to stream. */
+       * from the run row -- there is nothing left to stream, and no ending
+       * left to hear. */
       return;
     }
+    unlockSoundOnFirstGesture();
 
     var source = null;
     var closed = false;
@@ -205,6 +306,7 @@
         if (source) {
           source.close();
         }
+        announceRunEnd(frame.status, sound);
       }
     }
 

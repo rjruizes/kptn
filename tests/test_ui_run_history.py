@@ -1244,7 +1244,7 @@ def test_log_download_sits_in_the_header_after_retry(
     It used to live in the console bar, beside "Follow output". They are not
     the same kind of thing: one decides where output goes on screen, the
     other takes the run away with you, next to Retry. The console bar keeps
-    only the toggle.
+    only the toggles for watching the output.
     """
     body = client.get(f"/runs/{completed_run.run_id}").text
 
@@ -1359,3 +1359,24 @@ def test_log_download_keeps_bytes_no_event_accounts_for(client, store, app) -> N
 
     assert "accounted for\n" in body
     assert "written behind the capture's back\n" in body
+
+
+def test_a_live_run_offers_a_sound_toggle_that_is_on_by_default(
+    client, active_run: RunRecord
+) -> None:
+    """A run that ends while its page is open plays a tone; the reader can mute it.
+
+    The toggle sits in the console bar beside "Follow output", is on unless
+    the reader has turned it off, and is remembered the way Follow is. The
+    tones are made by app.js from the stream's final status frame, so there is
+    no server-side output to assert on beyond the control itself.
+    """
+    body = client.get(f"/runs/{active_run.run_id}").text
+
+    bar = re.search(r'<header class="console__bar">(.*?)</header>', body, re.S)
+    assert bar, "the console bar is gone"
+    toggle = re.search(r'<input[^>]*\bid="run-sound"[^>]*>', bar.group(1))
+    assert toggle, "no Sound toggle in the console bar"
+    assert 'type="checkbox"' in toggle.group(0)
+    assert re.search(r"\bchecked\b", toggle.group(0)), "Sound is not on by default"
+    assert "Sound" in bar.group(1)
