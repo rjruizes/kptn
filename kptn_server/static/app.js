@@ -262,12 +262,50 @@
     var source = null;
     var closed = false;
 
+    /* Rows from the stream wait here and are added once per animation frame.
+     * Following the output means scrolling to the bottom, and reading the
+     * page's height forces a layout of the whole console: per row, that was
+     * ~20ms at 8,000 rows on a fast laptop, so a chatty run outpaced the
+     * browser and froze the tab for tens of seconds. Per frame, the cost is
+     * paid once however many rows arrived. A hidden tab gets no frames and
+     * so does no layout at all until it is looked at. */
+    var queued = [];
+    var queuedSequences = {};
+    var flushScheduled = false;
+    var nextFrame =
+      window.requestAnimationFrame ||
+      function (callback) {
+        return window.setTimeout(callback, 16);
+      };
+
     function appendEvent(event) {
       var frame = JSON.parse(event.data);
-      if (document.getElementById("event-" + frame.sequence)) {
+      if (
+        queuedSequences[frame.sequence] ||
+        document.getElementById("event-" + frame.sequence)
+      ) {
         return; /* A resumed stream may overlap by one; never duplicate. */
       }
-      list.appendChild(fragmentFrom(frame.html));
+      queuedSequences[frame.sequence] = true;
+      queued.push(frame);
+      if (!flushScheduled) {
+        flushScheduled = true;
+        nextFrame(flushQueued);
+      }
+    }
+
+    function flushQueued() {
+      flushScheduled = false;
+      if (!queued.length) {
+        return;
+      }
+      var rows = document.createDocumentFragment();
+      for (var i = 0; i < queued.length; i += 1) {
+        rows.appendChild(fragmentFrom(queued[i].html));
+      }
+      queued = [];
+      queuedSequences = {};
+      list.appendChild(rows);
       if (empty) {
         empty.remove();
         empty = null;
@@ -280,7 +318,20 @@
       }
     }
 
+    function streamCursor() {
+      /* Rows still waiting for a frame count as received: reconnecting from
+       * the list alone would ask for them again. */
+      var cursor = resumeFrom(console_, list);
+      for (var i = 0; i < queued.length; i += 1) {
+        cursor = Math.max(cursor, queued[i].sequence);
+      }
+      return cursor;
+    }
+
     function applyRegion(event) {
+      /* Rows first: a region or status frame describes the run *after* the
+       * events sent before it, and must not land ahead of them. */
+      flushQueued();
       /* Server-rendered and already escaped, like every other frame: the
        * region is swapped wholesale, never assembled here. */
       var frame = JSON.parse(event.data);
@@ -291,6 +342,7 @@
     }
 
     function applyStatus(event) {
+      flushQueued();
       var frame = JSON.parse(event.data);
       var current = document.getElementById("run-status");
       if (current) {
@@ -315,7 +367,7 @@
         return;
       }
       source = new EventSource(
-        console_.getAttribute("data-stream-url") + "?after=" + resumeFrom(console_, list)
+        console_.getAttribute("data-stream-url") + "?after=" + streamCursor()
       );
       for (var i = 0; i < EVENT_KINDS.length; i += 1) {
         source.addEventListener(EVENT_KINDS[i], appendEvent);
