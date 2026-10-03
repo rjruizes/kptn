@@ -44,6 +44,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 exclude = [
     "example/nibrs",
+    ".worktrees",
+    "docs/superpowers",
 ]
 
 [tool.hatch.metadata]
