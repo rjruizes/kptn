@@ -528,12 +528,15 @@ def test_capture_buffers_partial_lines_until_newline_or_exit(
     run = create_fixture_run(ui_project, profile="success")
     run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
 
-    with capture_worker_output(run.store, run.run_id, run.log_path):
+    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
         sys.stdout.write("par")
+        capture.sink.flush()
         assert log_events(run) == []
         sys.stdout.write("tial\n")
+        capture.sink.flush()
         assert len(log_events(run)) == 1
         sys.stdout.write("trailing without newline")
+        capture.sink.flush()
         assert len(log_events(run)) == 1
 
     events = log_events(run)
@@ -1009,3 +1012,144 @@ def test_capture_preserves_project_configured_warning_filters(
         "RuntimeWarning",
         "RuntimeWarning",
     ]
+
+
+# -- batched persistence of captured output --------------------------------
+#
+# One store transaction per captured line cost ~20ms on an NFS-mounted
+# project (a write lock and an fsync, each a network round trip), which both
+# slowed the pipeline down to the speed of its own logging and starved the UI
+# of the same lock. Output is now written in batches.
+
+
+def _counting_store_writes(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
+    calls: dict[str, list[str]] = {"append_event": [], "append_events": []}
+    real_one, real_many = RunStore.append_event, RunStore.append_events
+
+    def one(self, run_id, kind, **kwargs):
+        calls["append_event"].append(kind)
+        return real_one(self, run_id, kind, **kwargs)
+
+    def many(self, run_id, events):
+        calls["append_events"].append(",".join(e.kind for e in events))
+        return real_many(self, run_id, events)
+
+    monkeypatch.setattr(RunStore, "append_event", one)
+    monkeypatch.setattr(RunStore, "append_events", many)
+    return calls
+
+
+def test_capture_writes_a_burst_of_output_in_a_few_transactions(
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+    calls = _counting_store_writes(monkeypatch)
+
+    with capture_worker_output(run.store, run.run_id, run.log_path):
+        for index in range(300):
+            print(f"line {index}")
+        warnings.warn("one warning among the output", UserWarning)
+
+    assert calls["append_event"] == []
+    assert 1 <= len(calls["append_events"]) <= 5
+    events = log_events(run)
+    assert [run.slice_log(e) for e in events][:300] == [f"line {i}\n" for i in range(300)]
+    # Contiguous spans and contiguous sequences, exactly as unbatched.
+    assert all(a.log_end == b.log_start for a, b in zip(events, events[1:]))
+    sequences = [e.sequence for e in run.events()]
+    assert sequences == list(range(1, len(sequences) + 1))
+    assert [str(e.payload["message"]) for e in warning_events(run)] == [
+        "one warning among the output"
+    ]
+
+
+def test_captured_output_reaches_the_store_without_an_explicit_flush(
+    ui_project: Path,
+) -> None:
+    """The console is live: pending output is written on a short timer."""
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+
+    with capture_worker_output(run.store, run.run_id, run.log_path):
+        print("arrives on its own")
+        deadline = time.monotonic() + 5
+        while not log_events(run) and time.monotonic() < deadline:
+            time.sleep(POLL_INTERVAL_SECONDS)
+        seen = [run.slice_log(e) for e in log_events(run)]
+
+    assert seen == ["arrives on its own\n"]
+
+
+def test_pending_output_is_written_before_a_state_changing_event(
+    ui_project: Path,
+) -> None:
+    """A task's output must never be sequenced after the event that ends it."""
+    run = create_fixture_run(ui_project, profile="success")
+
+    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+        capture.sink.emit(_run_event(EventKind.RUN_STARTED))
+        print("before the task")
+        capture.sink.emit(_run_event(EventKind.TASK_STARTED))
+        print("inside the task")
+        capture.sink.emit(_run_event(EventKind.TASK_FINISHED, status="succeeded"))
+
+    assert [(e.kind, run.slice_log(e) if e.kind == "log" else None) for e in run.events()] == [
+        (EventKind.RUN_STARTED.value, None),
+        (EventKind.LOG.value, "before the task\n"),
+        (EventKind.TASK_STARTED.value, None),
+        (EventKind.LOG.value, "inside the task\n"),
+        (EventKind.TASK_FINISHED.value, None),
+    ]
+
+
+def test_a_failed_batch_write_is_raised_to_the_worker(
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A durable failure on the flush thread is not swallowed."""
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+
+    def failing(self, run_id, events):
+        raise RunStoreError("simulated batch failure")
+
+    monkeypatch.setattr(RunStore, "append_events", failing)
+
+    with pytest.raises(DurableWriteFailed):
+        with capture_worker_output(run.store, run.run_id, run.log_path):
+            print("cannot be stored")
+            time.sleep(1.0)  # several flush ticks: the failure happens off-thread
+            print("the next write reports it")
+
+
+def test_worker_records_errored_when_captured_output_cannot_be_stored(
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+
+    def failing(self, run_id, events):
+        raise RunStoreError("simulated batch failure")
+
+    monkeypatch.setattr(RunStore, "append_events", failing)
+
+    exit_code = worker.main(["--db", str(run.db_path), "--run-id", run.run_id])
+
+    assert exit_code == worker.EXIT_DURABLE_WRITE_FAILURE
+    monkeypatch.undo()
+    record = RunStore(run.db_path).get_run(run.run_id)
+    assert record is not None
+    assert record.status == STATUS_ERRORED
+
+
+def test_worker_sequences_task_output_inside_its_task(ui_project: Path) -> None:
+    """Runner events and captured output share one ordered stream."""
+    run = create_fixture_run(ui_project, profile="success")
+
+    assert run_worker(run).returncode == 0
+
+    events = run.events()
+    started = next(e.sequence for e in events if e.kind == EventKind.TASK_STARTED.value and e.task_name == "noisy_task")
+    finished = next(e.sequence for e in events if e.kind == EventKind.TASK_FINISHED.value and e.task_name == "noisy_task")
+    task_output = [e.sequence for e in log_events(run) if e.task_name == "noisy_task"]
+    assert task_output
+    assert all(started < sequence < finished for sequence in task_output)

@@ -45,7 +45,6 @@ import kptn
 from kptn.project import load_pipeline
 from kptn_server.capture import (
     DurableWriteFailed,
-    RunStoreSink,
     capture_worker_output,
     durable,
 )
@@ -223,14 +222,17 @@ def execute_run(
         heartbeat = _Heartbeat(store, run_id, heartbeat_interval)
         heartbeat.start()
 
-        with capture_worker_output(store, run_id, record.log_path):
+        with capture_worker_output(store, run_id, record.log_path) as capture:
             try:
                 pipeline = load_pipeline(record.project_root)
                 kptn.run(
                     pipeline,
                     profile=record.profile,
                     force=record.force,
-                    event_sink=RunStoreSink(store, run_id),
+                    # The capture's own sink, so runner events and captured
+                    # output are sequenced by one writer: a task's output is
+                    # always written before the event that ends it.
+                    event_sink=capture.sink,
                     run_id=run_id,
                 )
             except DurableWriteFailed:

@@ -630,6 +630,73 @@ def test_close_closes_every_thread_connection(tmp_path: Path) -> None:
     assert store.list_runs() == []
 
 
+# --- batched appends ----------------------------------------------------- #
+
+
+def test_append_events_writes_a_batch_with_contiguous_sequences(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    from kptn_server.run_store import PendingEvent
+
+    store = RunStore(tmp_path / "ui.db")
+    run = store.create_run(request(tmp_path))
+    store.append_event(run.run_id, "run_started")
+    at = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+    stored = store.append_events(
+        run.run_id,
+        [
+            PendingEvent("log", at, "load", {"stream": "stdout"}, 0, 6),
+            PendingEvent("warning", at, "load", {"message": "careful"}),
+            PendingEvent("log", at, None, {"stream": "stderr"}, 6, 10),
+        ],
+    )
+
+    assert [e.sequence for e in stored] == [2, 3, 4]
+    events = store.events_after(run.run_id, 1)
+    assert [(e.sequence, e.kind, e.task_name) for e in events] == [
+        (2, "log", "load"),
+        (3, "warning", "load"),
+        (4, "log", None),
+    ]
+    assert (events[0].log_start, events[0].log_end) == (0, 6)
+    assert events[1].payload == {"message": "careful"}
+    assert store.get_run(run.run_id).heartbeat_at == at  # type: ignore[union-attr]
+    assert store.append_events(run.run_id, []) == []
+
+
+def test_append_events_refuses_lifecycle_kinds(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    from kptn_server.run_store import PendingEvent
+
+    store = RunStore(tmp_path / "ui.db")
+    run = store.create_run(request(tmp_path))
+    now = datetime.now(timezone.utc)
+    for kind in ("run_started", "task_started", "run_finished"):
+        with pytest.raises(ValueError):
+            store.append_events(run.run_id, [PendingEvent(kind, now)])
+    assert store.events_after(run.run_id, 0) == []
+
+
+def test_append_events_rejects_the_whole_batch_for_a_finished_run(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    from kptn_server.run_store import PendingEvent
+
+    store = RunStore(tmp_path / "ui.db")
+    run = store.create_run(request(tmp_path))
+    store.append_event(run.run_id, "run_started")
+    store.finish_run(run.run_id, STATUS_INTERRUPTED)
+    now = datetime.now(timezone.utc)
+
+    with pytest.raises(RunStateError):
+        store.append_events(run.run_id, [PendingEvent("log", now), PendingEvent("log", now)])
+    with pytest.raises(RunNotFoundError):
+        store.append_events("nope", [PendingEvent("log", now)])
+    assert [e.kind for e in store.events_after(run.run_id, 0)] == ["run_started"]
+
+
 def test_a_finished_threads_connection_is_closed_not_kept(tmp_path: Path) -> None:
     """The UI's thread pool retires idle threads; their connections must go too."""
     import gc

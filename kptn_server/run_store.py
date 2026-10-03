@@ -27,7 +27,7 @@ import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from kptn.runner.events import EventKind
 
@@ -127,6 +127,34 @@ class StoredEvent:
     payload: Mapping[str, JSONValue]
     log_start: int | None
     log_end: int | None
+
+
+@dataclass(frozen=True)
+class PendingEvent:
+    """An event waiting to be written by :meth:`RunStore.append_events`.
+
+    Carries its own timestamp because it is written later than it happened.
+    """
+
+    kind: str
+    timestamp: datetime
+    task_name: str | None = None
+    payload: Mapping[str, JSONValue] = field(default_factory=dict)
+    log_start: int | None = None
+    log_end: int | None = None
+
+
+#: Kinds that move a run's state machine. :meth:`RunStore.append_events`
+#: refuses them: each has its own transition rule in
+#: :meth:`RunStore.append_event`, and a batch is for the high-volume kinds
+#: that only stamp the heartbeat.
+_STATE_CHANGING_KINDS = frozenset(
+    {
+        EventKind.RUN_STARTED.value,
+        EventKind.TASK_STARTED.value,
+        EventKind.RUN_FINISHED.value,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -592,6 +620,96 @@ class RunStore:
             log_end=log_end,
         )
 
+    def append_events(
+        self, run_id: str, events: Sequence[PendingEvent]
+    ) -> list[StoredEvent]:
+        """Append several events in one transaction, in the order given.
+
+        For the capture layer's ``log`` and ``warning`` events, which arrive a
+        line at a time: one transaction per line costs a write lock and an
+        fsync per line, ~20ms each on NFS, and a worker printing quickly spent
+        its time waiting on the store. All of *events* land with contiguous
+        sequence numbers, or -- if the run is gone or already terminal --
+        none of them do.
+
+        State-changing kinds are refused with ``ValueError``; send those
+        through :meth:`append_event`.
+        """
+        if not events:
+            return []
+        refused = sorted({e.kind for e in events} & _STATE_CHANGING_KINDS)
+        if refused:
+            raise ValueError(
+                f"append_events does not accept state-changing kinds: {refused}"
+            )
+
+        conn = self._acquire()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                conn.execute("ROLLBACK")
+                raise RunNotFoundError(f"no such run: {run_id}")
+            if row["status"] in TERMINAL_STATUSES:
+                conn.execute("ROLLBACK")
+                raise RunStateError(
+                    f"run {run_id} cannot accept events in terminal status {row['status']!r}"
+                )
+            first = conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM run_events WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+            conn.executemany(
+                """
+                INSERT INTO run_events (
+                    run_id, sequence, timestamp, kind, task_name, payload_json,
+                    log_start, log_end
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        first + offset,
+                        _dt_to_text(event.timestamp),
+                        event.kind,
+                        event.task_name,
+                        json.dumps(dict(event.payload)),
+                        event.log_start,
+                        event.log_end,
+                    )
+                    for offset, event in enumerate(events)
+                ],
+            )
+            conn.execute(
+                "UPDATE runs SET heartbeat_at = ? WHERE run_id = ?",
+                (_dt_to_text(events[-1].timestamp), run_id),
+            )
+            conn.execute("COMMIT")
+        except BaseException:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            self._release(conn)
+
+        return [
+            StoredEvent(
+                run_id=run_id,
+                sequence=first + offset,
+                timestamp=event.timestamp,
+                kind=event.kind,
+                task_name=event.task_name,
+                payload=event.payload,
+                log_start=event.log_start,
+                log_end=event.log_end,
+            )
+            for offset, event in enumerate(events)
+        ]
+
     def record_worker_start(
         self,
         run_id: str,
@@ -968,6 +1086,7 @@ class RunStore:
 __all__ = [
     "COUNTED_EVENT_KINDS",
     "ActiveRunError",
+    "PendingEvent",
     "RunNotFoundError",
     "RunRecord",
     "RunRequest",

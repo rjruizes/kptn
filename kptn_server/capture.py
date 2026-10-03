@@ -40,6 +40,7 @@ import sys
 import threading
 import warnings
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, TextIO
 
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
     from _typeshed import SupportsWrite
 
 from kptn.runner.events import EventKind, JSONValue, RunEvent, current_task_name
-from kptn_server.run_store import RunStore, RunStoreError
+from kptn_server.run_store import PendingEvent, RunStore, RunStoreError
 
 STREAM_STDOUT = "stdout"
 STREAM_STDERR = "stderr"
@@ -129,23 +130,142 @@ def durable(action):
 # -- durable sink ---------------------------------------------------------
 
 
+#: How long captured output may wait before it is written to the store. The
+#: console shows it no sooner than this.
+FLUSH_INTERVAL_SECONDS = 0.25
+
+#: Pending events that make the writing thread flush on the spot rather than
+#: wait for the timer, so a burst of output cannot grow the buffer unbounded.
+MAX_PENDING_EVENTS = 1000
+
+#: Kinds a batching sink buffers. Everything else changes what the UI shows
+#: about the run's state, and is written at once -- after whatever is pending.
+_BATCHED_KINDS = frozenset({EventKind.LOG.value, EventKind.WARNING.value})
+
+
 class RunStoreSink:
     """Persist runner events, captured output, and warnings into a run store.
 
     Satisfies the :class:`~kptn.runner.events.EventSink` protocol, so it can be
     handed straight to ``kptn.run(..., event_sink=...)``.
+
+    With *flush_interval* set, ``log`` and ``warning`` events are buffered and
+    written together by :meth:`flush` -- on a background timer started by
+    :meth:`start`, before any other event, at :data:`MAX_PENDING_EVENTS`, and
+    on :meth:`close`. One transaction per captured line held the store's write
+    lock for every ``print`` and, on an NFS-mounted project, cost ~20ms each.
+    Order is unchanged: buffered events are written in arrival order and
+    always before the next state-changing event. Without *flush_interval*
+    every event is written as it arrives.
+
+    A failed write is never swallowed. On the calling thread it raises
+    :class:`DurableWriteFailed`; on the timer thread it is kept, and raised to
+    the next caller of any method here.
     """
 
-    def __init__(self, store: RunStore, run_id: str) -> None:
+    def __init__(
+        self, store: RunStore, run_id: str, *, flush_interval: float | None = None
+    ) -> None:
         self._store = store
         self._run_id = run_id
+        self._flush_interval = flush_interval
+        self._pending: list[PendingEvent] = []
+        self._pending_lock = threading.Lock()
+        # Held across a store write, so that sequence numbers follow the order
+        # events were handed to this sink. Reentrant: a state-changing emit
+        # flushes and then appends under one hold.
+        self._write_lock = threading.RLock()
+        # Set while this thread is inside a store write. Output produced
+        # there is buffered, never flushed: a nested flush would open a second
+        # transaction on the connection that already has one open.
+        self._writing = threading.local()
+        self._failure: DurableWriteFailed | None = None
+        self._stop = threading.Event()
+        self._flusher: threading.Thread | None = None
 
     @property
     def run_id(self) -> str:
         return self._run_id
 
     def _append(self, kind: str, **kwargs) -> None:
-        durable(lambda: self._store.append_event(self._run_id, kind, **kwargs))
+        self._raise_failure()
+        with self._write_lock:
+            self.flush()
+            self._writing.active = True
+            try:
+                durable(lambda: self._store.append_event(self._run_id, kind, **kwargs))
+            finally:
+                self._writing.active = False
+
+    def _buffer(self, kind: str, **kwargs) -> None:
+        if self._flush_interval is None:
+            self._append(kind, **kwargs)
+            return
+        self._raise_failure()
+        kwargs.setdefault("timestamp", datetime.now(timezone.utc))
+        with self._pending_lock:
+            self._pending.append(PendingEvent(kind=kind, **kwargs))
+            full = len(self._pending) >= MAX_PENDING_EVENTS
+        if full:
+            self.flush()
+
+    def _raise_failure(self) -> None:
+        if self._failure is not None:
+            raise self._failure
+
+    def flush(self) -> None:
+        """Write every buffered event now, in one transaction."""
+        if getattr(self._writing, "active", False):
+            return
+        with self._write_lock:
+            self._raise_failure()
+            with self._pending_lock:
+                batch, self._pending = self._pending, []
+            if not batch:
+                return
+            self._writing.active = True
+            try:
+                durable(lambda: self._store.append_events(self._run_id, batch))
+            except DurableWriteFailed as exc:
+                self._failure = exc
+                raise
+            finally:
+                self._writing.active = False
+
+    def start(self) -> None:
+        """Start the background flush timer, for a sink with a flush interval."""
+        if self._flush_interval is None or self._flusher is not None:
+            return
+        self._flusher = threading.Thread(
+            target=self._flush_periodically,
+            name=f"kptn-flush-{self._run_id}",
+            daemon=True,
+        )
+        self._flusher.start()
+
+    def _flush_periodically(self) -> None:
+        assert self._flush_interval is not None
+        while not self._stop.wait(self._flush_interval):
+            # The same guard as every other persistence path: output this
+            # thread produces while writing is dropped, never re-captured.
+            with _Reentry(_store_write_reentry) as entered:
+                if not entered:
+                    continue
+                try:
+                    self.flush()
+                except DurableWriteFailed:
+                    return  # kept in self._failure for the worker's thread
+                except Exception as exc:  # noqa: BLE001 - must reach the worker
+                    self._failure = DurableWriteFailed(exc)
+                    return
+
+    def close(self) -> None:
+        """Stop the timer and write whatever is still buffered."""
+        self._stop.set()
+        if self._flusher is not None:
+            self._flusher.join()
+            self._flusher = None
+        self.flush()
 
     def emit(self, event: RunEvent) -> None:
         """Translate one runner event into a durable row.
@@ -154,8 +274,10 @@ class RunStoreSink:
         that is what lets captured log and warning events interleave with
         runner events in the order they actually happened.
         """
-        self._append(
-            str(event.kind),
+        kind = str(event.kind)
+        write = self._buffer if kind in _BATCHED_KINDS else self._append
+        write(
+            kind,
             timestamp=event.timestamp,
             task_name=event.task_name,
             payload=dict(event.payload),
@@ -172,7 +294,7 @@ class RunStoreSink:
     ) -> None:
         """Record a span of captured output by its byte offsets in the log."""
         payload: dict[str, JSONValue] = {"stream": stream, "severity": severity}
-        self._append(
+        self._buffer(
             EventKind.LOG.value,
             task_name=task_name,
             payload=payload,
@@ -200,7 +322,7 @@ class RunStoreSink:
             "filename": filename,
             "lineno": lineno,
         }
-        self._append(
+        self._buffer(
             EventKind.WARNING.value,
             task_name=task_name,
             payload=payload,
@@ -483,7 +605,7 @@ def capture_worker_output(
     Streams, the root logging handler, and ``warnings.showwarning`` are all
     restored on the way out, including when the body raises.
     """
-    sink = RunStoreSink(store, run_id)
+    sink = RunStoreSink(store, run_id, flush_interval=FLUSH_INTERVAL_SECONDS)
     state = LogWriteState(sink, Path(log_path))
 
     original_stdout: TextIO = sys.stdout
@@ -549,6 +671,7 @@ def capture_worker_output(
         sys.stdout = captured_stdout
         sys.stderr = captured_stderr
         root_logger.addHandler(handler)
+        sink.start()
         try:
             yield WorkerCapture(
                 sink=sink,
@@ -565,6 +688,9 @@ def capture_worker_output(
                 # writable -- the run is not yet in a terminal status.
                 captured_stdout.close()
                 captured_stderr.close()
+                # After the streams, whose close releases trailing partial
+                # lines into the buffer; before the worker records an outcome.
+                sink.close()
             finally:
                 state.close()
 
@@ -572,7 +698,9 @@ def capture_worker_output(
 __all__ = [
     "CapturedTextIO",
     "DurableWriteFailed",
+    "FLUSH_INTERVAL_SECONDS",
     "LogWriteState",
+    "MAX_PENDING_EVENTS",
     "RunStoreSink",
     "SEVERITY_OUTPUT",
     "SEVERITY_STDERR",
