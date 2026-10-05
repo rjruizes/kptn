@@ -396,6 +396,59 @@ def test_stop_refuses_to_signal_a_reused_pid(store: RunStore, ui_project: Path) 
     assert victim.status() != psutil.STATUS_ZOMBIE
 
 
+def _exited(process: psutil.Process) -> bool:
+    try:
+        return process.status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are POSIX")
+def test_stop_signals_only_a_run_that_does_not_lead_its_process_group(
+    store: RunStore, ui_project: Path
+) -> None:
+    """A ``kptn run`` under a wrapper (``uv run``, a shell script) shares its
+    group with the wrapper; Stop must end the run, not whatever started it."""
+    wrapper = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess, sys, time\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+            "print(child.pid, flush=True)\n"
+            "time.sleep(300)\n",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+    assert wrapper.stdout is not None
+    run_process = psutil.Process(int(wrapper.stdout.readline()))
+    assert os.getpgid(run_process.pid) == wrapper.pid
+    run = fake_running_run(
+        store,
+        ui_project,
+        pid=run_process.pid,
+        worker_started_at=run_process.create_time(),
+        heartbeat_at=datetime.now(timezone.utc),
+    )
+
+    try:
+        assert RunProcessManager(store).stop(run.run_id) is True
+
+        # The wrapper never reaps its child, so "exited" means a zombie.
+        wait_until(
+            lambda: _exited(run_process),
+            message="the run's process to exit after SIGTERM",
+        )
+        assert wrapper.poll() is None, "stop() signalled the run's wrapper too"
+    finally:
+        os.killpg(wrapper.pid, signal.SIGKILL)
+        wrapper.wait(timeout=30)
+
+
 def test_stop_records_the_stop_request_even_without_a_worker(
     store: RunStore, ui_project: Path
 ) -> None:

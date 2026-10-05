@@ -9,6 +9,7 @@ memory.
 Only one run may be active per canonical project path at a time, *among the
 runs this store knows about*. Creating a second run for a project that
 already has one raises :class:`ActiveRunError`. ``kptn run`` in a terminal
+records its run here too, and so takes the same lock; ``kptn run --no-record``
 never reaches this store and is therefore neither blocked by the lock nor
 counted by it.
 Invalid run state transitions (e.g. finishing an already-terminal run) raise

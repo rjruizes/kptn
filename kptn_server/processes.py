@@ -235,11 +235,15 @@ class RunProcessManager:
         try:
             if os.name == "nt":  # pragma: no cover - POSIX CI
                 os.kill(identity.pid, signal.CTRL_BREAK_EVENT)
-            else:
-                # The worker leads its own process group, so this reaches the
+            elif os.getpgid(identity.pid) == identity.pid:
+                # A UI worker leads its own process group, so this reaches the
                 # worker and anything it spawned (an R or SQL subprocess),
                 # without ever touching the launcher's own group.
-                os.killpg(os.getpgid(identity.pid), signal.SIGTERM)
+                os.killpg(identity.pid, signal.SIGTERM)
+            else:
+                # A ``kptn run`` started from a script or wrapper (``uv run``)
+                # shares its group with them; only the run itself is stopped.
+                os.kill(identity.pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError, OSError) as exc:
             _LOGGER.warning("could not signal worker pid %s: %s", identity.pid, exc)
             return False

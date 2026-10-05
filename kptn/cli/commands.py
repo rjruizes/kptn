@@ -5,16 +5,20 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from urllib.parse import urljoin
 
 import typer
 
 from kptn.exceptions import ProfileError, ProjectConfigError
+from kptn.graph.pipeline import Pipeline
 from kptn.project import load_pipeline
 from kptn.runner.api import resolve_pipeline
 from kptn.runner.api import run as _run_pipeline
 import kptn.runner.plan as runner_plan
+
+if TYPE_CHECKING:
+    from kptn_server.run_store import RunStore
 
 app = typer.Typer()
 
@@ -23,12 +27,27 @@ app = typer.Typer()
 def run(
     profile: str | None = typer.Option(None, "--profile"),
     force: bool = typer.Option(False, "--force"),
+    record: bool = typer.Option(
+        True,
+        "--record/--no-record",
+        help=(
+            "Keep this run and its log in the project's run history, where "
+            "`kptn ui` shows them, as it does for runs it starts itself."
+        ),
+    ),
 ) -> None:
     project_root = Path.cwd()
     try:
         pipeline = load_pipeline(project_root)
     except ProjectConfigError as e:
         raise typer.BadParameter(str(e)) from e
+
+    if record:
+        exit_code = _run_recorded(pipeline, project_root, profile=profile, force=force)
+        if exit_code is not None:
+            if exit_code:
+                raise typer.Exit(code=exit_code)
+            return
 
     try:
         _run_pipeline(pipeline, profile=profile, force=force)
@@ -37,6 +56,70 @@ def run(
         raise typer.Exit(code=1)
     except Exception:
         raise typer.Exit(code=1)
+
+
+def _run_recorded(
+    pipeline: Pipeline, project_root: Path, *, profile: str | None, force: bool
+) -> int | None:
+    """Run *pipeline* in this process, recorded as a UI-started run would be.
+
+    The run, its events, and its captured output go to the project's run store
+    (``.kptn/ui.db`` and ``.kptn/runs/<run_id>.log``) through the UI worker's
+    own :func:`~kptn_server.worker.execute_run`, so ``kptn ui`` lists the run
+    and serves its log like any other. Output still reaches the terminal.
+
+    Returns the exit code, or ``None`` when the store cannot be opened -- the
+    run then goes ahead unrecorded rather than not at all.
+    """
+    import sqlite3
+
+    from kptn_server.project import UI_DATABASE_RELATIVE_PATH
+    from kptn_server.run_store import ActiveRunError, RunRequest, RunStore
+    from kptn_server.worker import execute_run
+
+    database = project_root / UI_DATABASE_RELATIVE_PATH
+    try:
+        store = RunStore(database)
+    except (sqlite3.Error, OSError) as e:
+        typer.echo(f"kptn: not recording this run, cannot open {database}: {e}", err=True)
+        return None
+
+    request = RunRequest(
+        project_root=project_root,
+        pipeline=pipeline.name,
+        profile=profile,
+        force=force,
+    )
+    try:
+        try:
+            record = store.create_run(request)
+        except ActiveRunError:
+            # The run holding the lock may have died with no UI server around
+            # to notice; clear it the way that server would, then ask again.
+            _reconcile(store)
+            record = store.create_run(request)
+    except ActiveRunError as e:
+        typer.echo(
+            f"{e}\nWait for it to finish, stop it from `kptn ui`, or pass "
+            "--no-record to run alongside it. A run that was killed releases "
+            "the project once its heartbeat is 15 seconds old.",
+            err=True,
+        )
+        return 1
+
+    try:
+        return execute_run(store, record, echo=True, pipeline=pipeline)
+    finally:
+        store.close()
+
+
+def _reconcile(store: RunStore) -> None:
+    """Mark runs whose process is gone as interrupted, releasing their lock."""
+    try:
+        from kptn_server.processes import RunProcessManager
+    except ImportError:  # pragma: no cover - psutil comes with the web extra
+        return
+    RunProcessManager(store).reconcile()
 
 
 @app.command()

@@ -441,6 +441,11 @@ class CapturedTextIO(io.TextIOBase):
 
     Partial lines are buffered until a newline arrives or the stream is closed,
     so one ``print()`` produces one durable ``log`` event rather than two.
+
+    With *echo*, every write is also passed straight through to *original* --
+    unbuffered, so a ``\r`` progress bar still animates. That is how ``kptn
+    run`` keeps its terminal while recording the same log a UI run gets; the
+    detached worker has no terminal and never echoes.
     """
 
     def __init__(
@@ -450,11 +455,13 @@ class CapturedTextIO(io.TextIOBase):
         stream: str,
         severity: str,
         original: TextIO | None = None,
+        echo: bool = False,
     ) -> None:
         self._state = state
         self._stream = stream
         self._severity = severity
         self._original = original
+        self._echo = echo and original is not None
         self._buffer = ""
         self._buffer_lock = threading.RLock()
 
@@ -482,9 +489,21 @@ class CapturedTextIO(io.TextIOBase):
         return False
 
     def isatty(self) -> bool:
+        # An echoing stream answers for the terminal it echoes to, so a
+        # pipeline looks the same under ``kptn run`` as it always did.
+        if self._echo:
+            assert self._original is not None
+            return self._original.isatty()
         return False
 
     def fileno(self) -> int:
+        if self._echo:
+            # A terminal run has a real descriptor to give, and refusing it
+            # would break tasks (``subprocess.run(stdout=sys.stdout)``,
+            # ``faulthandler``) that work under plain ``kptn run``. What is
+            # written there reaches the terminal but not the log.
+            assert self._original is not None
+            return self._original.fileno()
         # Deliberately unsupported: handing out the real descriptor would let a
         # caller write bytes that bypass the capture layer entirely.
         raise io.UnsupportedOperation("captured streams have no file descriptor")
@@ -492,10 +511,20 @@ class CapturedTextIO(io.TextIOBase):
     # -- writing ---------------------------------------------------------
 
     def write(self, text: str) -> int:
+        return self._write(text, echo=self._echo)
+
+    def write_log_only(self, text: str) -> int:
+        """Persist *text* without echoing it, for text the terminal already has."""
+        return self._write(text, echo=False)
+
+    def _write(self, text: str, *, echo: bool) -> int:
         if not isinstance(text, str):
             raise TypeError(f"write() requires str, not {type(text).__name__}")
         if not text:
             return 0
+        if echo:
+            assert self._original is not None
+            self._original.write(text)
         with self._buffer_lock:
             self._buffer += text
             newline_index = self._buffer.rfind("\n")
@@ -511,12 +540,15 @@ class CapturedTextIO(io.TextIOBase):
             self.write(line)
 
     def flush(self) -> None:
-        """No-op by design.
+        """Flush the echo, if any; never the log.
 
         ``print(..., flush=True)`` is common, and flushing a partial line would
         split a single logical line across several durable events. Partial
         lines are released on the next newline or when the stream is closed.
         """
+        if self._echo:
+            assert self._original is not None
+            self._original.flush()
 
     def close(self) -> None:
         with self._buffer_lock:
@@ -565,7 +597,14 @@ class StructuredWarningHandler(logging.Handler):
         # it is not wrapped here -- wrapping the whole method would block the
         # mirror write and the text would never reach the log.
         if self._mirror is not None:
-            self._mirror.write(self.format(record) + "\n")
+            text = self.format(record) + "\n"
+            log_only = getattr(self._mirror, "write_log_only", None)
+            if log_only is not None and self._shown_elsewhere(record):
+                # Another handler already printed it; an echoing mirror would
+                # print it to the terminal a second time.
+                log_only(text)
+            else:
+                self._mirror.write(text)
         with _Reentry(_store_write_reentry) as entered:
             if not entered:
                 return
@@ -578,6 +617,22 @@ class StructuredWarningHandler(logging.Handler):
                 filename=record.pathname,
                 lineno=record.lineno,
             )
+
+    def _shown_elsewhere(self, record: logging.LogRecord) -> bool:
+        """Would *record* reach a handler other than this one?
+
+        The same walk ``Logger.callHandlers`` makes. When it finds nothing,
+        ``logging.lastResort`` would have printed the record had this handler
+        not been installed, and the mirror is what stands in for it.
+        """
+        logger: logging.Logger | None = logging.getLogger(record.name)
+        while logger is not None:
+            if any(handler is not self for handler in logger.handlers):
+                return True
+            if not logger.propagate:
+                return False
+            logger = logger.parent
+        return False
 
 
 @dataclass
@@ -599,8 +654,14 @@ def capture_worker_output(
     store: RunStore,
     run_id: str,
     log_path: Path | str,
+    *,
+    echo: bool = False,
 ) -> Iterator[WorkerCapture]:
     """Capture stdout, stderr, ``warnings``, and ``logging`` for a worker run.
+
+    With *echo*, captured output also goes on to the streams it replaced (see
+    :class:`CapturedTextIO`); ``kptn run`` uses it to record a run without
+    taking its terminal away.
 
     Streams, the root logging handler, and ``warnings.showwarning`` are all
     restored on the way out, including when the body raises.
@@ -615,15 +676,21 @@ def capture_worker_output(
         stream=STREAM_STDOUT,
         severity=SEVERITY_OUTPUT,
         original=original_stdout,
+        echo=echo,
     )
     captured_stderr = CapturedTextIO(
         state,
         stream=STREAM_STDERR,
         severity=SEVERITY_STDERR,
         original=original_stderr,
+        echo=echo,
     )
     handler = StructuredWarningHandler(sink, mirror=captured_stderr)
     root_logger = logging.getLogger()
+    # Warnings echoed to the terminal so far. The "always" filter below makes
+    # every occurrence reach the log; the terminal keeps Python's default of
+    # showing each one once per location.
+    echoed_warnings: set[tuple[str, type[Warning], str, int]] = set()
 
     def _showwarning(
         message: Warning | str,
@@ -640,9 +707,13 @@ def capture_worker_output(
         # stdlib code (sqlite3 adapters among it) does warn from inside the
         # persistence path, and the appended "always" filter suppresses none
         # of it.
-        captured_stderr.write(
-            warnings.formatwarning(message, category, filename, lineno, line)
-        )
+        text = warnings.formatwarning(message, category, filename, lineno, line)
+        key = (str(message), category, str(filename), int(lineno))
+        if key in echoed_warnings:
+            captured_stderr.write_log_only(text)
+        else:
+            echoed_warnings.add(key)
+            captured_stderr.write(text)
         with _Reentry(_store_write_reentry) as entered:
             if not entered:
                 return

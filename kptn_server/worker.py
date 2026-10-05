@@ -16,6 +16,10 @@ A daemon thread heartbeats every two seconds while the run is in flight; a
 supervisor uses that heartbeat, together with the recorded PID, to tell a live
 worker from one a host reboot killed.
 
+``kptn run`` calls :func:`execute_run` in its own process with ``echo=True``,
+so a terminal run is recorded exactly as a UI run is while its output still
+goes to the terminal.
+
 Exit codes:
 
 ===== ==========================================================
@@ -38,11 +42,13 @@ import sys
 import threading
 import traceback
 from pathlib import Path
-
-import psutil
+from typing import TYPE_CHECKING
 
 import kptn
+from kptn.exceptions import ProfileError
 from kptn.project import load_pipeline
+from kptn.runner.console import ConsoleEventSink
+from kptn.runner.events import EventSink, RunEvent
 from kptn_server.capture import (
     DurableWriteFailed,
     capture_worker_output,
@@ -58,6 +64,17 @@ from kptn_server.run_store import (
     RunStore,
     RunStoreError,
 )
+
+if TYPE_CHECKING:
+    from kptn.graph.pipeline import Pipeline
+
+try:
+    import psutil
+except ImportError:  # pragma: no cover - depends on install extras
+    # ``kptn run`` reaches this module without the web extra. Such a run
+    # records no process identity: the UI cannot stop it, and tells it from a
+    # dead one by its heartbeat alone.
+    psutil = None  # ty: ignore[invalid-assignment]
 
 #: The plan fixes the worker heartbeat at two seconds. Staleness grace periods
 #: and reconciliation cadence belong to the supervisor, not here.
@@ -178,6 +195,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+class _ConsoleTee:
+    """Hand each event to the run store, then to the terminal's console sink."""
+
+    def __init__(self, store_sink: EventSink, console: ConsoleEventSink) -> None:
+        self._store_sink = store_sink
+        self._console = console
+
+    def emit(self, event: RunEvent) -> None:
+        self._store_sink.emit(event)
+        self._console.emit(event)
+
+
 def _fail_usage(message: str) -> int:
     print(f"kptn worker: {message}", file=sys.stderr, flush=True)
     return EXIT_USAGE
@@ -188,8 +217,17 @@ def execute_run(
     record: RunRecord,
     *,
     heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
+    echo: bool = False,
+    pipeline: Pipeline | None = None,
 ) -> int:
-    """Run one pipeline to completion and record its outcome durably."""
+    """Run one pipeline to completion and record its outcome durably.
+
+    With *echo*, output also goes to the streams this was called with, and the
+    ``[RUN]``/``[SKIP]`` progress lines are printed there as ``kptn run``
+    prints them -- to the terminal only, since the log is rendered with them
+    from the event stream. *pipeline* spares a caller that has already loaded
+    the project from loading it twice.
+    """
     run_id = record.run_id
     status = STATUS_SUCCEEDED
     exit_code = EXIT_SUCCESS
@@ -206,25 +244,30 @@ def execute_run(
 
     try:
         os.chdir(record.project_root)
+        console = ConsoleEventSink(sys.stdout, sys.stderr) if echo else None
         # ``worker_started_at`` is the OS process-creation timestamp, NOT
         # "when we got here": the supervisor compares it against
         # ``psutil.Process(pid).create_time()`` before it signals anything, so
         # both sides have to mean the same thing or PID-reuse safety degrades
         # into "signal whatever holds this PID now".
-        durable(
-            lambda: store.record_worker_start(
-                run_id,
-                pid=os.getpid(),
-                started_at=psutil.Process(os.getpid()).create_time(),
+        if psutil is not None:
+            durable(
+                lambda: store.record_worker_start(
+                    run_id,
+                    pid=os.getpid(),
+                    started_at=psutil.Process(os.getpid()).create_time(),
+                )
             )
-        )
         previous_handlers = _install_termination_handlers()
         heartbeat = _Heartbeat(store, run_id, heartbeat_interval)
         heartbeat.start()
 
-        with capture_worker_output(store, run_id, record.log_path) as capture:
+        with capture_worker_output(
+            store, run_id, record.log_path, echo=echo
+        ) as capture:
             try:
-                pipeline = load_pipeline(record.project_root)
+                if pipeline is None:
+                    pipeline = load_pipeline(record.project_root)
                 kptn.run(
                     pipeline,
                     profile=record.profile,
@@ -232,7 +275,11 @@ def execute_run(
                     # The capture's own sink, so runner events and captured
                     # output are sequenced by one writer: a task's output is
                     # always written before the event that ends it.
-                    event_sink=capture.sink,
+                    event_sink=(
+                        capture.sink
+                        if console is None
+                        else _ConsoleTee(capture.sink, console)
+                    ),
                     run_id=run_id,
                 )
             except DurableWriteFailed:
@@ -242,6 +289,11 @@ def execute_run(
             except KeyboardInterrupt:
                 status, exit_code = STATUS_STOPPED, EXIT_STOPPED
                 print("run stopped", file=sys.stderr, flush=True)
+            except ProfileError as exc:
+                # A mistake in kptn.yaml, not in pipeline code: the message is
+                # the whole story, and a traceback would only bury it.
+                status, exit_code = STATUS_FAILED, EXIT_FAILED
+                print(exc, file=sys.stderr, flush=True)
             except BaseException:
                 # Any other exception is the pipeline's -- including a
                 # sqlite3.Error from a task's own query, which must NOT be

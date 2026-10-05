@@ -299,7 +299,7 @@ The `kptn` CLI discovers your pipeline from `[tool.kptn] pipeline = "..."` in `p
 
 ```shell
 kptn plan [--profile PROFILE]          # preview what will run or be skipped
-kptn run  [--profile PROFILE] [--force] # execute the pipeline
+kptn run  [--profile PROFILE] [--force] [--no-record] # execute the pipeline
 kptn ui   [--port PORT] [--no-open]     # serve the pipeline UI for this project
 ```
 
@@ -358,16 +358,26 @@ and is removed by deleting `.kptn/`. `.kptn/ui.db` is separate from kptn's own
 task-state database (`.kptn/kptn.db` by default): clearing UI history never
 invalidates the cache, and `kptn run --force` never erases history.
 
+### Terminal runs are recorded too
+
+`kptn run` records its run in the same history, so `kptn ui` lists it and
+serves its log exactly as it does for a run it started. The run happens in your
+terminal process as before, with its output on your terminal; the same output
+is also written to `.kptn/runs/<run_id>.log`. Stopping it from the UI ends it as
+Ctrl-C does, and either way it is recorded as stopped. Pass `--no-record` to leave a run out of the
+history. Output a task writes straight to a file descriptor (a subprocess
+inheriting it, a C extension) reaches the terminal but not the log.
+
 ### One active run per project
 
-A project has at most one active run **through the UI**. Starting a second one
-from the UI is refused with a 409 that names the run holding the lock.
+A project has at most one active recorded run. Starting a second one from the
+UI is refused with a 409 that names the run holding the lock; `kptn run` exits
+with an error that names it. A run whose process was killed releases the lock
+once its heartbeat is 15 seconds old.
 
-The lock is the UI's, not kptn's: it lives in `.kptn/ui.db` and only
-`kptn ui` and its workers take it. `kptn run` in a terminal knows nothing
-about it — it neither takes the lock nor is blocked by one — so a terminal run
-and a UI run can overlap and write the same task state. If you use both, stop
-the UI run first.
+The lock lives in `.kptn/ui.db`. `kptn run --no-record` knows nothing about it
+— it neither takes the lock nor is blocked by one — so it can overlap a
+recorded run and write the same task state.
 
 ### The run survives the server
 

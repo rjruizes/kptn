@@ -14,6 +14,7 @@ must not cheat by calling ``main()`` in-process.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import shutil
@@ -662,6 +663,160 @@ def test_capture_records_logging_records_as_warnings_and_mirrors_the_text(
     log_text = run.log_path.read_text()
     assert "loud\n" in log_text
     assert "quiet" not in log_text
+
+
+class _Terminal(io.StringIO):
+    """A stand-in terminal: records what reaches it and when it is flushed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.flushes = 0
+
+    def flush(self) -> None:
+        self.flushes += 1
+        super().flush()
+
+    def isatty(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        return 42
+
+
+def test_echoing_capture_passes_output_through_and_still_records_it(
+    ui_project: Path,
+) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+    out, err = _Terminal(), _Terminal()
+    sys.stdout, sys.stderr = out, err
+
+    with capture_worker_output(run.store, run.run_id, run.log_path, echo=True):
+        sys.stdout.write("progress 50%\r")
+        # Partial lines reach the terminal at once, not at the next newline.
+        assert out.getvalue() == "progress 50%\r"
+        print("done", flush=True)
+        print("oops", file=sys.stderr)
+        assert sys.stdout.isatty() is True
+        assert sys.stdout.fileno() == 42
+
+    assert out.getvalue() == "progress 50%\rdone\n"
+    assert out.flushes >= 1
+    assert err.getvalue() == "oops\n"
+    assert run.log_bytes() == b"progress 50%\rdone\noops\n"
+    assert [e.payload["stream"] for e in log_events(run)] == [
+        STREAM_STDOUT,
+        STREAM_STDERR,
+    ]
+
+
+def test_capture_without_echo_writes_nothing_to_the_streams_it_replaced(
+    ui_project: Path,
+) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+    out = _Terminal()
+    sys.stdout = out
+
+    with capture_worker_output(run.store, run.run_id, run.log_path):
+        print("only in the log")
+        assert sys.stdout.isatty() is False
+        with pytest.raises(io.UnsupportedOperation):
+            sys.stdout.fileno()
+
+    assert out.getvalue() == ""
+    assert run.log_path.read_text() == "only in the log\n"
+
+
+def test_echoing_capture_shows_a_repeated_warning_once_but_records_every_one(
+    ui_project: Path,
+) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+    err = _Terminal()
+    sys.stderr = err
+
+    with capture_worker_output(run.store, run.run_id, run.log_path, echo=True):
+        for _ in range(3):
+            warnings.warn("again", UserWarning)
+
+    assert err.getvalue().count("UserWarning: again") == 1
+    assert run.log_path.read_text().count("UserWarning: again") == 3
+    assert len(warning_events(run)) == 3
+
+
+def test_echoing_capture_leaves_a_logged_warning_to_the_handler_that_printed_it(
+    ui_project: Path,
+) -> None:
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+    err = _Terminal()
+    sys.stderr = err
+    # pytest's own capture handlers sit on the root logger; without them this
+    # is a process whose logging nobody configured. The autouse fixture puts
+    # them back.
+    logging.getLogger().handlers[:] = []
+    handled = logging.getLogger("capture_fixture.handled")
+    printed = io.StringIO()
+    own_handler = logging.StreamHandler(printed)
+    handled.addHandler(own_handler)
+    unhandled = logging.getLogger("capture_fixture.unhandled")
+
+    try:
+        with capture_worker_output(
+            run.store, run.run_id, run.log_path, echo=True
+        ):
+            handled.warning("printed by its own handler")
+            unhandled.warning("printed in place of lastResort")
+    finally:
+        handled.removeHandler(own_handler)
+
+    assert printed.getvalue() == "printed by its own handler\n"
+    # The terminal sees each record once: the configured handler printed the
+    # first, and the capture stands in for logging.lastResort on the second.
+    assert err.getvalue() == "printed in place of lastResort\n"
+    log_text = run.log_path.read_text()
+    assert "printed by its own handler\n" in log_text
+    assert "printed in place of lastResort\n" in log_text
+    assert len(warning_events(run)) == 2
+
+
+def test_worker_echoes_progress_lines_without_recording_them_as_output(
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``kptn run``'s in-process call: the terminal reads as it always did."""
+    monkeypatch.delenv("KPTN_UI_FIXTURE_RUN_LEVEL_WARNING", raising=False)
+    run = create_fixture_run(ui_project, profile="success")
+    out, err = _Terminal(), _Terminal()
+    sys.stdout, sys.stderr = out, err
+
+    exit_code = worker.execute_run(
+        run.store, run.store.get_run(run.run_id), heartbeat_interval=0.05, echo=True
+    )
+
+    assert exit_code == worker.EXIT_SUCCESS
+    assert "[RUN]" in out.getvalue() and "noisy_task" in out.getvalue()
+    assert "ordinary output\n" in out.getvalue()
+    assert "raw stderr output\n" in err.getvalue()
+    # Progress lines are events, rendered into the download from the stream;
+    # in the log file they would appear twice there.
+    assert "[RUN]" not in run.log_path.read_text()
+    assert "ordinary output\n" in run.log_path.read_text()
+    assert run.store.get_run(run.run_id).status == STATUS_SUCCEEDED
+
+
+def test_worker_reports_a_profile_error_by_its_message_alone(
+    ui_project: Path,
+) -> None:
+    run = create_fixture_run(ui_project, profile="no_such_profile")
+
+    result = run_worker(run)
+
+    assert result.returncode == worker.EXIT_FAILED
+    assert run.store.get_run(run.run_id).status == STATUS_FAILED
+    log_text = run.log_path.read_text()
+    assert "no_such_profile" in log_text
+    assert "Traceback" not in log_text
 
 
 def test_structured_warning_handler_ignores_records_below_warning(
