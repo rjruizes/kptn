@@ -195,6 +195,19 @@ pre {
   font-weight: 600;
 }
 
+/* Which kptn is serving this page. Quiet, last on the bar: after the nav on
+ * a project page (the nav's own ``margin-left: auto`` already carries it to
+ * the right), and pushed there itself on the pages that have no nav. */
+.app-bar__version {
+  color: var(--ink-muted);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.app-bar__version--end {
+  margin-left: auto;
+}
+
 /* -- controls ----------------------------------------------------------- */
 
 select,

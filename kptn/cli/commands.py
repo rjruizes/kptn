@@ -10,6 +10,7 @@ from urllib.parse import urljoin
 
 import typer
 
+import kptn
 from kptn.exceptions import ProfileError, ProjectConfigError
 from kptn.graph.pipeline import Pipeline
 from kptn.project import load_pipeline
@@ -120,6 +121,12 @@ def _reconcile(store: RunStore) -> None:
     except ImportError:  # pragma: no cover - psutil comes with the web extra
         return
     RunProcessManager(store).reconcile()
+
+
+@app.command()
+def version() -> None:
+    """Print the installed kptn version."""
+    typer.echo(f"kptn {kptn.__version__}")
 
 
 @app.command()

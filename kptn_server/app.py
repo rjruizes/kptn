@@ -52,6 +52,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from starlette.types import Scope
 
+import kptn
 from kptn_server.context import RequestUI, RequestUIMiddleware
 from kptn_server.origin import enforce_same_origin
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
@@ -191,6 +192,11 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     ``get_template(...).render(...)`` and never see a ``Request`` -- so
     request-scoped lookup would render empty in exactly those fragments.
     Empty by default, which reproduces the root-absolute markup byte for byte.
+
+    ``kptn_version`` is a global for the same reason, and so that the project
+    list and the bare error page -- neither of which has a project -- show it
+    too. It answers "which kptn is this server running?" from the page itself,
+    since an install that silently kept the old code looks the same otherwise.
     """
 
     def project_context(request: Request) -> dict[str, Any]:
@@ -209,6 +215,8 @@ def _build_templates(base: str = "") -> Jinja2Templates:
         directory=str(TEMPLATES_DIR), context_processors=[project_context]
     )
     templates.env.globals["base"] = base
+    # typeshed narrows Jinja's globals to the default namespace's value types.
+    templates.env.globals["kptn_version"] = kptn.__version__  # ty: ignore[invalid-assignment]
     return templates
 
 

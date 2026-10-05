@@ -42,6 +42,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+import kptn
+
 from kptn_server.app import create_app
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS, RunProcessManager
 from kptn_server.routes.runs import (
@@ -286,6 +288,12 @@ def test_history_survives_app_recreation(ui_project, seeded_store) -> None:
     first.close()
     second = TestClient(create_app(ui_project))
     assert seeded_store.run_id in second.get("/runs").text
+
+
+def test_the_app_bar_names_the_kptn_version_serving_it(client) -> None:
+    """A stale install is otherwise indistinguishable from the new one."""
+    for path in ("/", "/plan", "/runs/no-such-run"):
+        assert f"kptn {kptn.__version__}" in client.get(path).text, path
 
 
 def test_history_lists_newest_first(client, store: RunStore, app) -> None:

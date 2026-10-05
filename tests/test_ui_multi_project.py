@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+import kptn
 from kptn_server.app import create_multi_app
 from kptn_server.origin import REFUSAL_TITLE
 from kptn_server.processes import ProcessIdentity
@@ -69,6 +70,10 @@ def test_the_landing_page_omits_other_releases_and_other_people(
 
 def test_the_landing_page_names_the_release(client: TestClient) -> None:
     assert "r2" in client.get("/").text
+
+
+def test_the_landing_page_names_the_kptn_version(client: TestClient) -> None:
+    assert f"kptn {kptn.__version__}" in client.get("/").text
 
 
 def test_a_project_serves_its_run_history(client: TestClient) -> None:
@@ -203,6 +208,7 @@ def test_a_cross_origin_post_to_the_project_list_is_refused_not_a_500(
 
     assert response.status_code == 403, response.text
     assert REFUSAL_TITLE in response.text
+    assert f"kptn {kptn.__version__}" in response.text
 
 
 def test_a_cross_origin_post_to_a_project_is_still_refused(

@@ -19,6 +19,13 @@ def _make_pipeline(name: str = "default") -> Pipeline:
     return Pipeline(name, Graph())
 
 
+def test_version_command_prints_the_installed_version() -> None:
+    result = CliRunner().invoke(app, ["version"])
+
+    assert result.exit_code == 0
+    assert result.stdout == f"kptn {kptn.__version__}\n"
+
+
 def test_run_v2_accepts_pipeline_object() -> None:
     """kptn.run() accepts a Pipeline object (v0.2.0 API)."""
     pipeline = _make_pipeline("default")
