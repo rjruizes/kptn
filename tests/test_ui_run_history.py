@@ -263,20 +263,13 @@ def test_module_opts_into_the_ui_hygiene_fixtures(
 
 
 def _seed_log_event(store: RunStore, record: RunRecord, text: str) -> None:
-    """Append a ``log`` event whose text lives in the run's log file."""
-    data = text.encode("utf-8")
-    log_path = Path(record.log_path)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "ab") as handle:
-        start = handle.tell()
-        handle.write(data)
+    """Append a ``log`` event whose text lives in the run's file."""
     store.append_event(
         record.run_id,
         "log",
         task_name="alpha",
         payload={"stream": "stdout", "severity": "output"},
-        log_start=start,
-        log_end=start + len(data),
+        text=text,
     )
 
 
@@ -451,6 +444,7 @@ def test_log_download_is_a_404_when_the_file_is_gone(client, store, app) -> None
     server.
     """
     record = _seed_run(store, app.state.project.root)
+    Path(record.log_path).unlink()
     response = client.get(f"/runs/{record.run_id}/log")
     assert response.status_code == 404
     assert record.run_id in response.text
@@ -1349,18 +1343,31 @@ def test_log_download_interleaves_captured_output_with_progress(
     assert lines[2].endswith("load_ref — cached")
 
 
-def test_log_download_keeps_bytes_no_event_accounts_for(client, store, app) -> None:
-    """A file longer than its events still downloads whole.
+def test_legacy_log_download_keeps_bytes_no_event_accounts_for(
+    client, store, app
+) -> None:
+    """A run recorded before run files: a ``.log`` longer than its events
+    still downloads whole.
 
-    Everything written through ``capture_worker_output`` records a span, so
+    Everything written through ``capture_worker_output`` recorded a span, so
     an unaccounted-for byte means the file and the stream disagree -- a
     truncation, a rotation, or something that wrote to the log without going
     through the capture. The old whole-file response kept those bytes, and
     losing them to a rendering change would be a silent regression.
     """
     record = _seed_run(store, app.state.project.root)
-    _seed_log_event(store, record, "accounted for\n")
-    with open(record.log_path, "ab") as handle:
+    legacy = Path(record.log_path).with_suffix(".log")
+    _write_column(store, record.run_id, "log_path", str(legacy))
+    legacy.write_bytes(b"accounted for\n")
+    store.append_event(
+        record.run_id,
+        "log",
+        task_name="alpha",
+        payload={"stream": "stdout", "severity": "output"},
+        log_start=0,
+        log_end=len(b"accounted for\n"),
+    )
+    with open(legacy, "ab") as handle:
         handle.write(b"written behind the capture's back\n")
 
     body = client.get(f"/runs/{record.run_id}/log").text

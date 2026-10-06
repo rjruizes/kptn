@@ -5,7 +5,8 @@ The FastAPI application behind `kptn ui`. One factory call
 was launched from. `kptn_server.app.create_multi_app` serves several -- the
 working directories one person has under a shared release folder -- for
 `kptn ui --projects-root`, which is how the app runs behind
-jupyter-server-proxy.
+jupyter-server-proxy. It also shows everyone else's working directories in
+that release, read-only, from the run files their runs publish.
 
 There is one supported UI. The React application, its root Cypress harness,
 the JSON-RPC backend a VS Code extension used to spawn, and the extension
@@ -31,10 +32,11 @@ port-forwarding recipe if you need to reach it from another machine.
 |------|-----------|
 | `app.py` | The application factory, and the reconciliation loop that settles runs whose worker is gone |
 | `project.py` | `ProjectContext`: which project, which pipeline, which profiles, where its UI state lives |
-| `run_store.py` | The SQLite run store (`.kptn/ui.db`), created by replaying `migrations/` |
+| `run_store.py` | The SQLite run store (`.kptn/ui.db`), created by replaying `migrations/`; also the one writer of the run files |
+| `run_files.py` | The files other people's servers read: `.kptn/runs/<run_id>.jsonl` and `index.json` |
 | `processes.py` | Launching, inspecting, and reconciling detached run workers |
-| `worker.py`, `capture.py` | The worker process and the capture that writes `.kptn/runs/<run_id>.log` |
-| `routes/` | `runs.py` (console, history, SSE, log, stop), `inspect.py` (plan, walkthrough), `lineage.py` (lineage, table preview) |
+| `worker.py`, `capture.py` | The worker process and the capture that hands its output to the store |
+| `routes/` | `runs.py` (console, history, SSE, log, stop), `inspect.py` (plan, walkthrough), `lineage.py` (lineage, table preview), `view.py` (read-only pages for other people's projects) |
 | `service.py` | The retained lineage and table-preview helpers, driven by `routes/lineage.py` |
 | `markdown.py` | Project-relative, read-only Markdown rendering for the walkthrough's docs panel |
 | `templates/`, `static/`, `migrations/` | Read package-relative, and force-included into the wheel (see `pyproject.toml`) |

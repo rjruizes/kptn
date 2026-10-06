@@ -1,0 +1,31 @@
+{#
+  The home page of a multi-project server: the app bar, with the project
+  picker open, and no page beneath it yet.
+
+  Not base.html. That shell's app bar acts on "the selected profile" of "the
+  served project", and there is no project until one is picked -- a Run
+  button here would have nothing to run. Choosing a project in the picker
+  navigates to it, and the rest of the app bar arrives with that page.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kptn</title>
+  <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ kptn_version }}">
+  <script src="{{ base }}/static/app.js?v={{ kptn_version }}" defer></script>
+</head>
+<body data-base="{{ base }}">
+  <header class="app-bar">
+    <div class="app-bar__inner">
+      {% include "_project_picker.html" %}
+      <span class="app-bar__version app-bar__version--end" title="kptn version serving this page">kptn {{ kptn_version }}</span>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <p class="muted home__hint">Choose a project to see its runs.</p>
+  </main>
+</body>
+</html>

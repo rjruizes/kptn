@@ -72,13 +72,42 @@ def test_latest_release_is_the_latest_with_one_of_mine(tmp_path: Path) -> None:
     assert registry.release == "r3"
 
 
-def test_other_peoples_directories_are_not_offered(tmp_path: Path) -> None:
+def test_other_peoples_directories_are_listed_as_theirs(tmp_path: Path) -> None:
     make_workdir(tmp_path, "r1", f"{USER}_main")
     make_workdir(tmp_path, "r1", "someoneelse_main")
 
     registry = ProjectRegistry(tmp_path, USER)
+    registry.scan()
 
-    assert [entry.slug for entry in registry.scan()] == [f"{USER}_main"]
+    assert [entry.slug for entry in registry.mine()] == [f"{USER}_main"]
+    assert [entry.slug for entry in registry.others()] == ["someoneelse_main"]
+    assert registry.resolve("someoneelse_main").owned is False
+
+
+def test_with_none_of_mine_the_latest_release_with_anyones_is_listed(
+    tmp_path: Path,
+) -> None:
+    make_workdir(tmp_path, "r1", "someoneelse_old")
+    make_workdir(tmp_path, "r2", "someoneelse_main")
+
+    registry = ProjectRegistry(tmp_path, USER)
+
+    assert [entry.slug for entry in registry.scan()] == ["someoneelse_main"]
+    assert registry.release == "r2"
+    assert registry.mine() == ()
+
+
+def test_someone_elses_broken_project_resolves_only_for_viewing(tmp_path: Path) -> None:
+    """Their history needs none of what failed; their pipeline is never served."""
+    make_workdir(tmp_path, "r1", f"{USER}_main")
+    workdir = make_workdir(tmp_path, "r1", "someoneelse_broken")
+    (workdir / "pyproject.toml").write_text("[tool.kptn\n")
+
+    registry = ProjectRegistry(tmp_path, USER)
+    registry.scan()
+
+    assert registry.resolve("someoneelse_broken") is None
+    assert registry.resolve("someoneelse_broken", servable_only=False) is not None
 
 
 def test_a_bare_username_directory_is_mine(tmp_path: Path) -> None:
@@ -95,8 +124,10 @@ def test_a_longer_username_with_the_same_prefix_is_not_mine(tmp_path: Path) -> N
     make_workdir(tmp_path, "r1", f"{USER}2_main")
 
     registry = ProjectRegistry(tmp_path, USER)
+    registry.scan()
 
-    assert [entry.slug for entry in registry.scan()] == [f"{USER}_main"]
+    assert [entry.slug for entry in registry.mine()] == [f"{USER}_main"]
+    assert [entry.slug for entry in registry.others()] == [f"{USER}2_main"]
 
 
 def test_a_directory_without_tool_kptn_is_not_a_project(tmp_path: Path) -> None:
@@ -171,6 +202,20 @@ def test_resolve_rescans_so_a_new_checkout_is_found(tmp_path: Path) -> None:
     make_workdir(tmp_path, "r1", f"{USER}_featureB")
 
     assert registry.resolve(f"{USER}_featureB") is not None
+
+
+def test_recent_reuses_a_fresh_scan_and_redoes_a_stale_one(tmp_path: Path) -> None:
+    """The picker is on every page; it must not rescan NFS on every render."""
+    make_workdir(tmp_path, "r1", f"{USER}_main")
+    registry = ProjectRegistry(tmp_path, USER)
+    registry.scan()
+    make_workdir(tmp_path, "r1", f"{USER}_featureB")
+
+    assert [e.slug for e in registry.recent(max_age=60)] == [f"{USER}_main"]
+    assert [e.slug for e in registry.recent(max_age=0)] == [
+        f"{USER}_featureB",
+        f"{USER}_main",
+    ]
 
 
 def test_no_projects_is_an_empty_scan_not_an_exception(tmp_path: Path) -> None:

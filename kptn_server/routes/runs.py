@@ -38,12 +38,12 @@ forever, and a page that derived its state from the event log would show the
 run as still going. So every stream reads the status, and closes with a
 ``run_status`` frame carrying the rendered status fragment.
 
-**Log text is read server-side and rendered escaped.** A ``log`` event carries
-``stream``, ``severity``, and byte offsets into the run's log file -- no
-inline text (see :mod:`kptn_server.capture`). The text is therefore sliced out
-of the log file here and rendered through Jinja, whose autoescaping is on. The
-browser only ever appends the fragment it is given; pipeline output is
-untrusted text and must never reach the DOM as live markup.
+**Log text is read server-side and rendered escaped.** A ``log`` row in
+``ui.db`` carries ``stream``, ``severity``, and the byte span of its line in
+the run's file -- no inline text (see :mod:`kptn_server.run_files`). The text
+is therefore read out of that file here and rendered through Jinja, whose
+autoescaping is on. The browser only ever appends the fragment it is given;
+pipeline output is untrusted text and must never reach the DOM as live markup.
 
 Four more endpoints complete the surface.
 
@@ -51,7 +51,7 @@ Four more endpoints complete the surface.
     The project's run history, newest first, straight out of the store.
 
 ``GET /runs/{run_id}/log``
-    The raw captured log. **The path comes from the run row and from nowhere
+    The run's log, rendered from its file the way the CLI printed it. **The path comes from the run row and from nowhere
     else** -- no query parameter, header, or path segment can choose a file.
     That is the whole security posture of this endpoint: it hands a file back
     to a UI with no authentication, so the set of files it can hand back is
@@ -93,6 +93,7 @@ from kptn.runner.events import EventKind
 from kptn_server.context import ui
 from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
+from kptn_server.run_files import RUN_FILE_SUFFIX, counters, read_span_text
 from kptn_server.routes.support import (
     error_response,
     is_fragment_request,
@@ -208,16 +209,24 @@ def _monotonic() -> float:
 def log_text(log_path: Path, event: StoredEvent) -> str:
     """The text for one ``log`` event.
 
-    Two shapes exist in the wild and both are handled here:
+    Several shapes exist in the wild and all are handled here, first match
+    wins:
 
-    * the capture layer's, which writes bytes to the run's log file and stores
-      only ``log_start``/``log_end``; and
-    * the executor's, which emits a subprocess's captured ``stdout``/``stderr``
-      inline as ``payload["message"]``.
+    * ``event.text``, set on an event read out of a run file -- a colleague's
+      view never has a ``ui.db`` to look offsets up in;
+    * the R executor's output inline as ``payload["message"]``, from runs
+      recorded before that output moved into the run file;
+    * ``log_start``/``log_end``: a span of the run's file. In a ``.jsonl`` run
+      file the span is one line whose ``text`` is the output; in the ``.log``
+      of an older run it is the raw bytes (see
+      :func:`~kptn_server.run_files.read_span_text`).
 
-    Returns ``""`` when there is nothing to show -- a missing or truncated log
+    Returns ``""`` when there is nothing to show -- a missing or truncated run
     file is a degraded console, never a 500 on the run page.
     """
+    if event.text is not None:
+        return _truncate(event.text)
+
     inline = event.payload.get("message")
     if isinstance(inline, str) and inline:
         return _truncate(inline)
@@ -226,18 +235,14 @@ def log_text(log_path: Path, event: StoredEvent) -> str:
     if start is None or end is None or end <= start:
         return ""
 
-    length = min(end - start, MAX_LOG_SLICE_BYTES)
-    try:
-        with open(log_path, "rb") as handle:
-            handle.seek(start)
-            data = handle.read(length)
-    except OSError:
-        # The log file is the worker's, not ours: it can be missing, rotated,
-        # or on a volume that just went away.
-        _LOGGER.debug("could not read log slice for %s", log_path, exc_info=True)
-        return ""
+    if log_path.suffix == RUN_FILE_SUFFIX:
+        # A line is only meaningful whole, so it is read whole and the text
+        # is cut afterwards; a megabyte-long print costs one read here, and
+        # still only puts the ceiling's worth into the page.
+        return _truncate(read_span_text(log_path, start, end))
 
-    text = data.decode("utf-8", errors="replace")
+    length = min(end - start, MAX_LOG_SLICE_BYTES)
+    text = read_span_text(log_path, start, start + length)
     if end - start > length:
         text += _TRUNCATION_NOTE
     return text
@@ -800,66 +805,6 @@ def looks_wedged(record: RunRecord, *, now: datetime | None = None) -> bool:
 # -- counts and the warning summary ---------------------------------------
 
 
-#: The ``task_finished`` statuses the executor emits (see
-#: ``kptn.runner.executor._emit_task_finished``).
-_TASK_OUTCOMES = ("succeeded", "failed")
-
-
-def counters(tallies: Mapping[tuple[str, str | None], int]) -> dict[str, int]:
-    """Task and warning counts for one run, for a template.
-
-    *tallies* is what :meth:`~kptn_server.run_store.RunStore.event_counts`
-    returns: ``(kind, task status) -> count``, aggregated by SQLite. Counted
-    from lifecycle events and never from console text -- a task that *prints*
-    the words ``task_started`` is output, not a task, and neither this
-    function nor the query it reads can see console text at all.
-
-    The counting is in SQL because the history page needs these numbers for
-    every listed run, and a ``log`` event is one row per captured output span:
-    hydrating them turned one page load into a JSON parse per line of pipeline
-    output ever produced. The *derivation* stays here, which is the part worth
-    keeping in one place:
-
-    ``unfinished``
-        Tasks that started and never reported an outcome. That is the shape a
-        stopped or interrupted run leaves behind, and the number that tells a
-        reader where the run stopped being trustworthy. Floored at zero rather
-        than trusted to be non-negative: the event log is written by a worker
-        that can be killed mid-sequence, so "more finishes than starts" is a
-        corrupt log, not a negative count to render.
-
-    Only the two outcomes the executor emits are counted as outcomes. An
-    unrecognized ``status`` is left out of both rather than guessed at, so it
-    surfaces as ``unfinished`` -- the honest answer for a task whose outcome
-    this UI does not understand.
-
-    ``tasks``, ``skipped`` and ``warnings`` are also the console header's
-    counters, which ``app.js`` recounts off the DOM as events stream in. One
-    function so the two can never disagree about what a task is.
-    """
-    counted = {
-        "tasks": _tally(tallies, EventKind.TASK_STARTED.value),
-        "skipped": _tally(tallies, EventKind.TASK_SKIPPED.value),
-        "warnings": _tally(tallies, EventKind.WARNING.value),
-    }
-    for outcome in _TASK_OUTCOMES:
-        counted[outcome] = tallies.get((EventKind.TASK_FINISHED.value, outcome), 0)
-    counted["unfinished"] = max(
-        counted["tasks"] - counted["succeeded"] - counted["failed"], 0
-    )
-    return counted
-
-
-def _tally(tallies: Mapping[tuple[str, str | None], int], kind: str) -> int:
-    """Every tally for *kind*, whatever status the rows happened to carry.
-
-    Summed rather than read at ``(kind, None)``: nothing stops a ``warning``
-    payload from growing a ``status`` field, which would split that kind
-    across two grouped rows and silently undercount it.
-    """
-    return sum(count for (row_kind, _), count in tallies.items() if row_kind == kind)
-
-
 def warning_summary(groups: Sequence[WarningGroup]) -> dict[str, Any]:
     """A run's warnings, grouped for display and linked to every occurrence.
 
@@ -1321,6 +1266,7 @@ __all__ = [
     "POLL_INTERVAL_SECONDS",
     "STATUS_EVENT_NAME",
     "console_event",
+    "counters",
     "event_frames",
     "log_text",
     "looks_wedged",

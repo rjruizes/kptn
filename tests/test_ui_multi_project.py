@@ -8,6 +8,7 @@ person's own directories from the latest release that has one, each at
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -16,7 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import kptn
-from kptn_server.app import create_multi_app
+from kptn_server.app import create_app, create_multi_app
 from kptn_server.origin import REFUSAL_TITLE
 from kptn_server.processes import ProcessIdentity
 from tests.conftest import BROKEN_FIXTURE_PROJECT, FIXTURE_PROJECT, copy_fixture_project
@@ -53,6 +54,77 @@ def client(projects_root: Path) -> TestClient:
     return TestClient(create_multi_app(projects_root, USER))
 
 
+def _picker(body: str) -> str:
+    """The project picker's markup, opening tag through its menu."""
+    start = body.index("<details class=\"project-picker\"")
+    return body[start : body.index("</details>", start)]
+
+
+def test_home_is_the_picker_open_and_no_page_under_it(client: TestClient) -> None:
+    body = client.get("/").text
+
+    opening = re.search(r"<details[^>]*project-picker[^>]*>", body)
+    assert opening and re.search(r"\bopen\b", opening.group(0)), "picker not open"
+    assert "Choose a project" in _picker(body)
+    # Nothing acts on a project until one is chosen.
+    assert 'id="profile-select"' not in body
+    assert 'id="run-form"' not in body
+
+
+def test_a_project_page_has_the_picker_closed_left_of_the_profile(
+    client: TestClient,
+) -> None:
+    body = client.get(f"/p/{USER}_main/").text
+    picker = _picker(body)
+
+    opening = re.search(r"<details[^>]*project-picker[^>]*>", body)
+    assert opening and not re.search(r"\bopen\b", opening.group(0))
+    assert f'<code class="project-picker__current">{USER}_main</code>' in picker
+    assert re.search(
+        rf'href="/p/{USER}_main/"\s+aria-current="page"', picker
+    ), "the current project is not marked"
+    assert body.index("project-picker") < body.index('id="profile-select"')
+
+
+def test_the_picker_lists_everyone_on_every_page(client: TestClient) -> None:
+    for path in (f"/p/{USER}_main/", f"/p/{USER}_main/plan", "/view/someoneelse_main/"):
+        picker = _picker(client.get(path).text)
+        assert f'href="/p/{USER}_featureA/"' in picker, path
+        assert 'href="/view/someoneelse_main/"' in picker, path
+
+
+def test_someone_elses_project_is_named_read_only_in_the_picker(
+    client: TestClient,
+) -> None:
+    picker = _picker(client.get("/view/someoneelse_main/").text)
+    summary = picker[: picker.index("</summary>")]
+
+    assert "someoneelse_main" in summary
+    assert "read-only" in summary
+
+
+def test_an_error_page_without_a_project_still_has_the_picker(client: TestClient) -> None:
+    response = client.get(f"/view/someoneelse_main/runs/{'a' * 32}")
+
+    assert response.status_code == 404
+    assert f'href="/p/{USER}_main/"' in _picker(response.text)
+
+
+def test_the_picker_carries_the_proxy_prefix(projects_root: Path) -> None:
+    client = TestClient(create_multi_app(projects_root, USER, root_path=PREFIX))
+    picker = _picker(client.get("/").text)
+
+    assert f'href="{PREFIX}/p/{USER}_main/"' in picker
+    assert f'href="{PREFIX}/view/someoneelse_main/"' in picker
+
+
+def test_a_single_project_server_has_no_picker(tmp_path: Path) -> None:
+    project = copy_fixture_project(FIXTURE_PROJECT, tmp_path, "solo")
+    body = TestClient(create_app(project)).get("/").text
+
+    assert "project-picker" not in body
+
+
 def test_the_landing_page_lists_my_projects(client: TestClient) -> None:
     body = client.get("/").text
 
@@ -60,13 +132,16 @@ def test_the_landing_page_lists_my_projects(client: TestClient) -> None:
     assert f"{USER}_featureA" in body
 
 
-def test_the_landing_page_omits_other_releases_and_other_people(
-    client: TestClient,
-) -> None:
+def test_the_landing_page_omits_other_releases(client: TestClient) -> None:
+    assert f"{USER}_old" not in client.get("/").text
+
+
+def test_the_landing_page_lists_other_people_read_only(client: TestClient) -> None:
     body = client.get("/").text
 
-    assert f"{USER}_old" not in body
-    assert "someoneelse_main" not in body
+    others = body[body.index('id="other-projects"') :]
+    assert 'href="/view/someoneelse_main/"' in others
+    assert 'href="/p/someoneelse_main/"' not in body
 
 
 def test_the_landing_page_names_the_release(client: TestClient) -> None:
@@ -126,16 +201,22 @@ def test_the_plan_page_serves_each_project_from_its_own_checkout(
     vacuous assertion: what distinguishes them is which checkout each page
     *names*. Asserting each page names its own root is what fails if the
     slot hands the second request the first project.
+
+    Only the page body is compared: the app bar's project picker names every
+    project on every page, which says nothing about which one was loaded.
     """
     first = client.get(f"/p/{USER}_main/plan")
     second = client.get(f"/p/{USER}_featureA/plan")
     third = client.get(f"/p/{USER}_main/plan")
 
+    def body(response) -> str:
+        return response.text[response.text.index('<main class="app-main">') :]
+
     assert first.status_code == 200
     assert second.status_code == 200
-    assert f"{USER}_featureA" in second.text
-    assert f"{USER}_featureA" not in first.text
-    assert third.text == first.text
+    assert f"{USER}_featureA" in body(second)
+    assert f"{USER}_featureA" not in body(first)
+    assert body(third) == body(first)
 
 
 def test_run_history_is_per_project(projects_root: Path) -> None:

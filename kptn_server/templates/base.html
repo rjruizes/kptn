@@ -36,6 +36,13 @@
   <header class="app-bar">
     <div class="app-bar__inner">
       {#
+        Which project, before anything that acts on it. Renders nothing on a
+        single-project server. Outside ``app-bar__controls`` on purpose: those
+        are disabled while a run holds the lock, and moving to another
+        project is never something a run should block.
+      #}
+      {% include "_project_picker.html" %}
+      {#
         One selector, every page, always bound to the run form below. It marks
         ``selected_profile``, which each route that accepts a ``?profile=``
         passes after validating it -- so a profile carried here through the nav

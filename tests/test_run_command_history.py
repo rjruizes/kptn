@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 from kptn.cli.commands import app
 from kptn_server.app import create_app
 from kptn_server.log_render import render_run_log
+from kptn_server.run_files import run_file_text
 from kptn_server.run_store import (
     STATUS_FAILED,
     STATUS_SUCCEEDED,
@@ -72,7 +73,7 @@ def test_kptn_run_records_the_run_and_its_log(ui_project_cwd: Path) -> None:
     assert run.exit_code == 0
     assert run.profile is None
     assert run.worker_pid == os.getpid()
-    assert "ordinary output\n" in run.log_path.read_text()
+    assert "ordinary output\n" in run_file_text(run.log_path)
 
     download = render_run_log(store.events_after(run.run_id), run.log_path)
     assert b"[RUN]" in download and b"ordinary output" in download
@@ -85,7 +86,7 @@ def test_kptn_run_records_a_failure_with_its_traceback(ui_project_cwd: Path) -> 
     _, (run,) = recorded_runs(ui_project_cwd)
     assert run.status == STATUS_FAILED
     assert run.profile == "failure"
-    log_text = run.log_path.read_text()
+    log_text = run_file_text(run.log_path)
     assert "Traceback" in log_text
     assert "fixture failure" in log_text
 

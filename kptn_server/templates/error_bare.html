@@ -1,8 +1,9 @@
 {#
   An error on a page that has no project.
 
-  The only page in this UI that is not project-scoped is the project list of
-  a multi-project server -- and the one error that can reach it is the
+  Two kinds of page have no run store to name a project from: the home page
+  of a multi-project server, and the read-only views of somebody else's
+  project. An error on either lands here -- the views' own 404s, and the
   cross-origin refusal, which ``enforce_same_origin`` returns before any
   router (and therefore before the dependency that resolves a project) has
   run. ``error.html`` cannot serve it: that shell extends ``base.html``,
@@ -10,8 +11,8 @@
   a missing project would turn the defence's 403 into a 500 -- the refusal
   becoming the failure.
 
-  So: the same notice, in the same stylesheet, with no app bar. There is no
-  project to name and nothing on this page to run.
+  So: the same notice, in the same stylesheet, with an app bar that holds
+  only the project picker -- the way out -- and nothing to run.
 #}
 <!DOCTYPE html>
 <html lang="en">
@@ -24,7 +25,7 @@
 <body data-base="{{ base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
-      <strong>kptn</strong>
+      {% include "_project_picker.html" %}
       <span class="app-bar__version app-bar__version--end" title="kptn version serving this page">kptn {{ kptn_version }}</span>
     </div>
   </header>
