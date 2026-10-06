@@ -144,6 +144,7 @@
       {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
       <nav class="app-bar__nav" aria-label="Main">
         <a href="{{ project_base }}/{{ profile_query }}" data-profile-link="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+        {% include "_settings.html" %}
       </nav>
     </div>
   </header>
@@ -151,8 +152,6 @@
   <main class="app-main">
     {% block content %}{% endblock %}
   </main>
-
-  {% include "_footer.html" %}
 
   {% block scripts %}{% endblock %}
 </body>

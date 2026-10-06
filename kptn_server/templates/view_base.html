@@ -8,7 +8,8 @@
   only the project picker, which names the project and marks it read-only,
   and the nav.
 
-  app.js is still loaded, for the console's stream, Follow, and Sound. Its
+  app.js is still loaded, for the console's stream, Follow, and the
+  settings modal. Its
   run-lock poll finds no ``data-run-control`` here and never starts, and its
   profile nav finds no selector and does nothing.
 #}
@@ -27,6 +28,7 @@
       {% include "_project_picker.html" %}
       <nav class="app-bar__nav" aria-label="Main">
         <a href="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+        {% include "_settings.html" %}
       </nav>
     </div>
   </header>
@@ -34,7 +36,5 @@
   <main class="app-main">
     {% block content %}{% endblock %}
   </main>
-
-  {% include "_footer.html" %}
 </body>
 </html>

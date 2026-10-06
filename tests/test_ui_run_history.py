@@ -284,7 +284,10 @@ def test_history_survives_app_recreation(ui_project, seeded_store) -> None:
 
 
 def test_the_app_bar_names_the_kptn_version_serving_it(client) -> None:
-    """A stale install is otherwise indistinguishable from the new one."""
+    """A stale install is otherwise indistinguishable from the new one.
+
+    The version is in the settings modal, which every page carries.
+    """
     for path in ("/", "/plan", "/runs/no-such-run"):
         assert f"kptn {kptn.__version__}" in client.get(path).text, path
 
@@ -1381,17 +1384,31 @@ def test_a_live_run_offers_a_sound_toggle_that_is_on_by_default(
 ) -> None:
     """A run that ends while its page is open plays a tone; the reader can mute it.
 
-    The toggle sits in the console bar beside "Follow output", is on unless
-    the reader has turned it off, and is remembered the way Follow is. The
-    tones are made by app.js from the stream's final status frame, so there is
-    no server-side output to assert on beyond the control itself.
+    The toggle sits in the settings modal, is on unless the reader has turned
+    it off, and is remembered the way Follow is. The tones are made by app.js
+    from the stream's final status frame, so there is no server-side output to
+    assert on beyond the control itself.
     """
     body = client.get(f"/runs/{active_run.run_id}").text
 
-    bar = re.search(r'<header class="console__bar">(.*?)</header>', body, re.S)
-    assert bar, "the console bar is gone"
-    toggle = re.search(r'<input[^>]*\bid="run-sound"[^>]*>', bar.group(1))
-    assert toggle, "no Sound toggle in the console bar"
+    dialog = re.search(r'<dialog[^>]*\bid="settings-dialog"[^>]*>(.*?)</dialog>', body, re.S)
+    assert dialog, "the settings modal is gone"
+    toggle = re.search(r'<input[^>]*\bid="run-sound"[^>]*>', dialog.group(1))
+    assert toggle, "no Sound toggle in the settings modal"
     assert 'type="checkbox"' in toggle.group(0)
     assert re.search(r"\bchecked\b", toggle.group(0)), "Sound is not on by default"
-    assert "Sound" in bar.group(1)
+    assert "Sound" in dialog.group(1)
+
+    bar = re.search(r'<header class="console__bar">(.*?)</header>', body, re.S)
+    assert bar, "the console bar is gone"
+    assert 'id="run-sound"' not in bar.group(1), "Sound is still in the console bar"
+
+
+def test_the_settings_gear_sits_right_of_history(client) -> None:
+    """The gear that opens the settings modal is the last thing in the nav."""
+    for path in ("/", "/plan", "/runs/no-such-run"):
+        nav = re.search(r'<nav class="app-bar__nav"[^>]*>(.*?)</nav>', client.get(path).text, re.S)
+        assert nav, path
+        history_at = nav.group(1).find(">History</a>")
+        gear_at = nav.group(1).find("data-settings-open")
+        assert history_at != -1 and gear_at > history_at, path

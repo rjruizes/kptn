@@ -48,8 +48,8 @@
   box-sizing: border-box;
 }
 
-/* A column the height of the window at least, so the footer sits at the
- * bottom of a short page rather than under its last line. */
+/* A column the height of the window at least, so the main area fills a
+ * short page rather than ending under its last line. */
 body {
   display: flex;
   flex-direction: column;
@@ -324,6 +324,123 @@ a.project-picker__item:focus-visible {
   font-weight: 600;
 }
 
+/* The gear: an icon button sized and coloured like the nav links beside it,
+ * not a bordered control -- it opens a preference, it does not act on a run. */
+.app-bar__settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+}
+
+.app-bar__settings:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+/* -- settings modal ----------------------------------------------------- */
+
+/* No padding on the dialog itself: a click on the dialog element (rather than
+ * inside its form) is how app.js recognises a click on the backdrop. */
+.settings {
+  width: min(360px, calc(100vw - 2 * var(--content-gutter)));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.settings::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.settings form {
+  padding: 16px 18px;
+}
+
+.settings__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.settings__header h2 {
+  margin: 0;
+  font-size: 1.1em;
+}
+
+.settings__close {
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 1.4em;
+  line-height: 1;
+}
+
+.settings__close:hover {
+  color: var(--ink);
+}
+
+.settings__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.settings__option input {
+  margin: 3px 0 0;
+}
+
+.settings__hint {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 0.9em;
+}
+
+/* Indented to line up with the Sound label's text, under the checkbox. */
+.settings__previews {
+  display: flex;
+  gap: var(--control-gap);
+  margin: 10px 0 0 21px;
+}
+
+.settings__previews button {
+  font-size: 0.9em;
+  padding: 3px 10px;
+  transition: background-color 120ms, border-color 120ms, color 120ms, transform 60ms;
+}
+
+.settings__previews button:hover {
+  background: var(--surface-sunken);
+}
+
+/* Pressed while held, then lit in the accent while its tones play. */
+.settings__previews button:active {
+  transform: scale(0.96);
+}
+
+.settings__previews button.is-playing {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.settings__version {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 0.85em;
+}
+
 /* -- controls ----------------------------------------------------------- */
 
 select,
@@ -367,16 +484,6 @@ button:disabled {
   padding: var(--content-gutter);
 }
 
-/* Which kptn is serving this page. Quiet, and last. */
-.app-footer {
-  width: 100%;
-  max-width: var(--content-width);
-  margin: 0 auto;
-  padding: 12px var(--content-gutter) 16px;
-  color: var(--ink-muted);
-  font-size: 0.85em;
-  text-align: center;
-}
 
 .panel {
   padding: 16px 20px;

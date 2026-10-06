@@ -23,21 +23,14 @@
   {#
     No heading. "Console" named the thing the reader was already looking at,
     and the counters and the log download moved up beside the controls that
-    act on the run. What is left are the controls that belong to watching
-    the output: where it goes on screen, and whether its end is heard.
-
-    Sound is on by default and remembered in the browser, like Follow. app.js
-    plays a tone when the stream's final status frame arrives -- rising for a
-    run that succeeded, falling for any other ending -- so it sounds only for
-    a run that ends while this page is open. It is rendered on a finished
-    run's page too, as Follow is: the choice is the reader's, not the run's.
+    act on the run. What is left is the control that belongs to watching
+    the output: where it goes on screen. Whether a run's end is heard is a
+    standing preference, so Sound lives in the settings modal
+    (``_settings.html``) rather than here.
   #}
   <header class="console__bar">
     <label class="console__follow">
       <input type="checkbox" id="follow-output" checked> Follow output
-    </label>
-    <label class="console__follow">
-      <input type="checkbox" id="run-sound" checked> Sound
     </label>
   </header>
 

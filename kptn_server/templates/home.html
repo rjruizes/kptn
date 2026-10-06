@@ -20,13 +20,14 @@
   <header class="app-bar">
     <div class="app-bar__inner">
       {% include "_project_picker.html" %}
+      <div class="app-bar__nav">
+        {% include "_settings.html" %}
+      </div>
     </div>
   </header>
 
   <main class="app-main">
     <p class="muted home__hint">Choose a project to see its runs.</p>
   </main>
-
-  {% include "_footer.html" %}
 </body>
 </html>

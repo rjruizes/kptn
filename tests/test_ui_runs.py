@@ -532,7 +532,7 @@ def test_run_page_links_its_event_stream(
 
 def _run_heading(body: str) -> str:
     """The run panel's heading, which is a breadcrumb rather than a title."""
-    match = re.search(r"<h2[^>]*>.*?</h2>", body, re.S)
+    match = re.search(r"<h2 class=\"run-header__crumbs\">.*?</h2>", body, re.S)
     assert match, "the run panel has no heading"
     return match.group(0)
 

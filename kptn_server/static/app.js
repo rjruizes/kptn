@@ -3,7 +3,8 @@
  *
  * Vendored and dependency-free. htmx does the request plumbing; this file
  * holds only what htmx cannot express declaratively: the run console's live
- * event stream, the nav's profile, and the app bar's active-run poll.
+ * event stream, the nav's profile, the app bar's active-run poll, and the
+ * settings modal.
  *
  * Two rules govern everything below.
  *
@@ -231,7 +232,10 @@
     }
   }
 
-  function announceRunEnd(status, toggle) {
+  function announceRunEnd(status) {
+    /* Read at the moment the run ends, not when the page loaded: the reader
+     * may have changed it in the settings modal while watching. */
+    var toggle = document.getElementById("run-sound");
     if (toggle && !toggle.checked) {
       return;
     }
@@ -248,8 +252,6 @@
     var empty = document.getElementById("console-empty");
     var follow = document.getElementById("follow-output");
     setUpRememberedToggle(follow, FOLLOW_STORAGE_KEY);
-    var sound = document.getElementById("run-sound");
-    setUpRememberedToggle(sound, SOUND_STORAGE_KEY);
 
     if (console_.getAttribute("data-terminal") === "true") {
       /* Already over. Its whole history is on the page, and its status came
@@ -358,7 +360,7 @@
         if (source) {
           source.close();
         }
-        announceRunEnd(frame.status, sound);
+        announceRunEnd(frame.status);
       }
     }
 
@@ -545,10 +547,56 @@
     });
   }
 
+  function initSettings() {
+    /* The gear in the app bar opens a native <dialog>, which brings its own
+     * focus trap, Escape, and backdrop; its Close button is a
+     * ``method="dialog"`` submit and needs nothing from here. What it lacks is
+     * closing on a click outside the box -- the backdrop is the dialog
+     * element itself, so a click whose target *is* the dialog landed on it. */
+    var dialog = document.getElementById("settings-dialog");
+    var opener = document.querySelector("[data-settings-open]");
+    setUpRememberedToggle(document.getElementById("run-sound"), SOUND_STORAGE_KEY);
+    /* The preview buttons play an ending's tones on demand. The click is the
+     * gesture that lets the audio context start, so these always sound. */
+    var previews = document.querySelectorAll("[data-sound-preview]");
+    for (var i = 0; i < previews.length; i += 1) {
+      previews[i].addEventListener("click", function (event) {
+        var button = event.currentTarget;
+        var tones =
+          button.getAttribute("data-sound-preview") === "succeeded"
+            ? TONES_SUCCEEDED
+            : TONES_ENDED_OTHERWISE;
+        playTones(tones);
+        /* Lit for as long as the tones last, so a click is seen even with the
+         * volume down. A second click restarts the timer rather than racing it. */
+        var lastsMs =
+          ((tones.length - 1) * TONE_SPACING_SECONDS + TONE_SECONDS) * 1000 + 120;
+        button.classList.add("is-playing");
+        window.clearTimeout(button.kptnPlayingTimer);
+        button.kptnPlayingTimer = window.setTimeout(function () {
+          button.classList.remove("is-playing");
+        }, lastsMs);
+      });
+    }
+    if (!dialog || !opener || typeof dialog.showModal !== "function") {
+      return;
+    }
+    opener.addEventListener("click", function () {
+      dialog.showModal();
+    });
+    dialog.addEventListener("click", function (event) {
+      if (event.target === dialog) {
+        dialog.close();
+      }
+    });
+  }
+
   window.kptn.initConsole = initConsole;
   window.kptn.initProfileNav = initProfileNav;
   window.kptn.initRunLock = initRunLock;
   window.kptn.initProjectPicker = initProjectPicker;
+  window.kptn.initSettings = initSettings;
+  initSettings();
   initConsole();
   initProfileNav();
   initRunLock();
