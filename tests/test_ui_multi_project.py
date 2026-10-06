@@ -30,6 +30,7 @@ pytestmark = pytest.mark.ui_hygiene
 
 USER = "rruizesparza"
 PREFIX = "/notebook/user/rruizesparza/kptn"
+VERSION = kptn.__version__
 
 FORM = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -97,7 +98,7 @@ def test_links_inside_a_project_carry_its_prefix(client: TestClient) -> None:
 def test_static_assets_are_not_project_scoped(client: TestClient) -> None:
     body = client.get(f"/p/{USER}_main/").text
 
-    assert 'href="/static/app.css"' in body
+    assert f'href="/static/app.css?v={VERSION}"' in body
 
 
 def test_the_proxy_prefix_and_the_project_prefix_compose(
@@ -107,7 +108,7 @@ def test_the_proxy_prefix_and_the_project_prefix_compose(
 
     body = client.get(f"/p/{USER}_main/").text
 
-    assert f'href="{PREFIX}/static/app.css"' in body
+    assert f'href="{PREFIX}/static/app.css?v={VERSION}"' in body
     assert f'action="{PREFIX}/p/{USER}_main/runs"' in body
 
 

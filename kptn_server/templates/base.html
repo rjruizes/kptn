@@ -28,9 +28,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ project.display_name }} - kptn{% endblock %}</title>
-  <link rel="stylesheet" href="{{ base }}/static/app.css">
-  <script src="{{ base }}/static/htmx.min.js" defer></script>
-  <script src="{{ base }}/static/app.js" defer></script>
+  <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ kptn_version }}">
+  <script src="{{ base }}/static/htmx.min.js?v={{ kptn_version }}" defer></script>
+  <script src="{{ base }}/static/app.js?v={{ kptn_version }}" defer></script>
 </head>
 <body data-base="{{ base }}" data-project-base="{{ project_base }}">
   <header class="app-bar">

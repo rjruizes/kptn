@@ -41,6 +41,7 @@ from typing import Any, Optional, Tuple
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+import kptn
 from kptn.cli import (
     _build_lineage_payload,
     _infer_lineage_dialect,
@@ -442,6 +443,8 @@ def _get_template_env() -> Environment:
             loader=FileSystemLoader(str(templates_dir)),
             autoescape=select_autoescape(["html", "xml"]),
         )
+        # Cache-busts the vendored asset links, as in the UI's own environment.
+        _template_env.globals["kptn_version"] = kptn.__version__
     return _template_env
 
 

@@ -24,9 +24,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import kptn
 from kptn_server.app import create_app
 
 PREFIX = "/notebook/user/rruizesparza/kptn"
+#: Asset links carry ``?v=<version>`` so an upgrade is never served stale.
+VERSION = kptn.__version__
 
 
 @pytest.fixture
@@ -43,9 +46,9 @@ def test_asset_urls_carry_the_prefix(prefixed_client: TestClient) -> None:
     """The stylesheet and scripts are what break first, and most visibly."""
     body = prefixed_client.get("/").text
 
-    assert f'href="{PREFIX}/static/app.css"' in body
-    assert f'src="{PREFIX}/static/htmx.min.js"' in body
-    assert f'src="{PREFIX}/static/app.js"' in body
+    assert f'href="{PREFIX}/static/app.css?v={VERSION}"' in body
+    assert f'src="{PREFIX}/static/htmx.min.js?v={VERSION}"' in body
+    assert f'src="{PREFIX}/static/app.js?v={VERSION}"' in body
 
 
 def _sweep(client: TestClient, path: str) -> list[str]:
@@ -112,8 +115,8 @@ def test_default_serving_is_unchanged(bare_client: TestClient) -> None:
     """
     body = bare_client.get("/").text
 
-    assert 'href="/static/app.css"' in body
-    assert 'src="/static/htmx.min.js"' in body
+    assert f'href="/static/app.css?v={VERSION}"' in body
+    assert f'src="/static/htmx.min.js?v={VERSION}"' in body
     assert 'action="/runs"' in body
     assert "//static" not in body
 
@@ -163,7 +166,7 @@ def test_trailing_slash_is_normalised(ui_project: Path) -> None:
     with TestClient(app) as client:
         body = client.get("/").text
 
-    assert f'href="{PREFIX}/static/app.css"' in body
+    assert f'href="{PREFIX}/static/app.css?v={VERSION}"' in body
     assert "//static" not in body
 
 
@@ -262,7 +265,7 @@ def test_static_assets_use_the_proxy_prefix_not_the_project_prefix(
     """
     body = prefixed_client.get("/").text
 
-    assert f'href="{PREFIX}/static/app.css"' in body
+    assert f'href="{PREFIX}/static/app.css?v={VERSION}"' in body
     assert "/p/" not in body.split("<body")[0]
 
 

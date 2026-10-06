@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 
 from kptn_server import app as app_module
 from kptn_server import processes as processes_module
-from kptn_server.app import STATIC_DIR, create_app
+from kptn_server.app import STATIC_DIR, TEMPLATES_DIR, create_app
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
 from kptn_server.project import ProjectContext, ProjectError
 from kptn_server.run_store import (
@@ -458,6 +458,31 @@ def test_vendored_assets_are_served(ui_project: Path, asset: str) -> None:
 
     assert response.status_code == 200, f"/static/{asset} is not served"
     assert response.content
+
+
+def test_every_asset_link_carries_the_version_query() -> None:
+    """Every vendored stylesheet and script link is cache-busted by version.
+
+    ``StaticFiles`` sends no ``Cache-Control``, so a browser heuristically
+    caches ``app.js`` and keeps running the old one after kptn is upgraded.
+    ``?v={{ kptn_version }}`` changes the URL on every release. This scans the
+    template sources, so a new page that forgets the query fails here.
+    """
+    link = re.compile(r'(?:href|src)="[^"]*/static/[^"]*"')
+    links = [
+        (template.name, match)
+        for template in sorted(TEMPLATES_DIR.iterdir())
+        if template.is_file()
+        for match in link.findall(template.read_text())
+    ]
+
+    assert links, "no asset links found -- has the template layout changed?"
+    stale = [
+        (name, match)
+        for name, match in links
+        if not match.endswith('?v={{ kptn_version }}"')
+    ]
+    assert not stale, f"asset links without the version query: {stale}"
 
 
 def test_static_files_are_mounted_package_relative(
