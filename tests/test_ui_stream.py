@@ -80,20 +80,13 @@ def _start_run(store: RunStore, project_root: Path, *, profile: str = "success")
 
 
 def _append_log(store: RunStore, record: RunRecord, text: str) -> None:
-    """Append a ``log`` event the way the capture layer does: offsets only."""
-    data = text.encode("utf-8")
-    log_path = Path(record.log_path)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "ab") as handle:
-        start = handle.tell()
-        handle.write(data)
+    """Append a ``log`` event the way the capture layer does: text into the run file."""
     store.append_event(
         record.run_id,
         "log",
         task_name="alpha",
         payload={"stream": "stdout", "severity": "output"},
-        log_start=start,
-        log_end=start + len(data),
+        text=text,
     )
 
 

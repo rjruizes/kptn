@@ -262,9 +262,7 @@ def execute_run(
         heartbeat = _Heartbeat(store, run_id, heartbeat_interval)
         heartbeat.start()
 
-        with capture_worker_output(
-            store, run_id, record.log_path, echo=echo
-        ) as capture:
+        with capture_worker_output(store, run_id, echo=echo) as capture:
             try:
                 if pipeline is None:
                     pipeline = load_pipeline(record.project_root)

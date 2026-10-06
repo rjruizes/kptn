@@ -1,0 +1,39 @@
+{#
+  Shell for the read-only pages of somebody else's project (``/view/<slug>``).
+
+  Not base.html. That shell's app bar acts on the project -- a profile
+  selector, Run, Plan, and a poll of the project's run lock -- and every one
+  of those needs the owner's run store or the owner's code, neither of which
+  a reader in another pod may touch. So this bar has no controls at all:
+  only the project picker, which names the project and marks it read-only,
+  and the nav.
+
+  app.js is still loaded, for the console's stream, Follow, and Sound. Its
+  run-lock poll finds no ``data-run-control`` here and never starts, and its
+  profile nav finds no selector and does nothing.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ project.display_name }} - kptn{% endblock %}</title>
+  <link rel="stylesheet" href="{{ base }}/static/app.css">
+  <script src="{{ base }}/static/app.js" defer></script>
+</head>
+<body data-base="{{ base }}" data-project-base="{{ project_base }}">
+  <header class="app-bar">
+    <div class="app-bar__inner">
+      {% include "_project_picker.html" %}
+      <nav class="app-bar__nav" aria-label="Main">
+        <a href="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+      </nav>
+      <span class="app-bar__version" title="kptn version serving this page">kptn {{ kptn_version }}</span>
+    </div>
+  </header>
+
+  <main class="app-main">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -394,7 +394,7 @@ def test_projects_root_hands_uvicorn_a_multi_project_app(
     # A multi-project app has a registry and no single resolved project.
     assert application.state.registry.projects_root == projects_root
     assert not hasattr(application.state, "project")
-    assert [entry.slug for entry in application.state.registry.entries()] == [
+    assert [entry.slug for entry in application.state.registry.mine()] == [
         f"{USER}_main"
     ]
 

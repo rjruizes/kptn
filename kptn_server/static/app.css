@@ -88,20 +88,134 @@ pre {
   margin: 0 auto;
 }
 
-/* The project list's own chrome: the release it is showing, and the list
-   itself. A bare <ul> is already legible, so this is spacing only. */
-.app-bar__release {
-  color: var(--muted, #666);
-  margin-left: 0.5rem;
+/* Marks a colleague's project, shown from its published files: there is
+   nothing on these pages that can act on a run. */
+.app-bar__readonly {
+  font-size: 0.85em;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-muted);
 }
 
-.project-list {
+/* -- project picker ------------------------------------------------------ */
+
+/* A <details> styled as a dropdown: the summary looks like the profile
+ * <select> beside it, and the menu hangs below it over the page. */
+.project-picker {
+  position: relative;
+}
+
+.project-picker__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 300px;
+  height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
   list-style: none;
+  white-space: nowrap;
+}
+
+.project-picker__summary::-webkit-details-marker {
+  display: none;
+}
+
+.project-picker__summary::after {
+  content: "";
+  flex-shrink: 0;
+  margin-left: 2px;
+  border: 4px solid transparent;
+  border-top-color: var(--ink-muted);
+  transform: translateY(2px);
+}
+
+.project-picker[open] > .project-picker__summary::after {
+  transform: translateY(-2px) rotate(180deg);
+}
+
+.project-picker__current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-picker__prompt {
+  color: var(--ink-muted);
+}
+
+.project-picker__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 300px;
+  max-width: min(480px, calc(100vw - 2 * var(--content-gutter)));
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.project-picker__release {
+  margin: 2px 8px 6px;
+  font-size: 0.85em;
+}
+
+.project-picker__heading {
+  margin: 10px 8px 4px;
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.project-picker__list {
+  list-style: none;
+  margin: 0;
   padding: 0;
 }
 
-.project-list__item {
-  padding: 0.5rem 0;
+.project-picker__item {
+  display: block;
+  padding: 5px 8px;
+  border-radius: var(--radius);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+a.project-picker__item:hover,
+a.project-picker__item:focus-visible {
+  background: var(--surface-sunken);
+}
+
+.project-picker__item[aria-current="page"] {
+  background: var(--surface-sunken);
+  font-weight: 600;
+}
+
+.project-picker__item--broken {
+  color: var(--ink-muted);
+}
+
+.project-picker__error {
+  display: block;
+  overflow: hidden;
+  font-size: 0.8em;
+  color: var(--danger);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-picker__empty {
+  margin: 4px 8px;
 }
 
 .app-bar__profile {

@@ -1,0 +1,79 @@
+{#
+  Somebody else's run history, from their project's ``index.json``.
+
+  The same row as runs.html, read from the published index instead of a run
+  store, and in the same order: the index is written newest first and this
+  template does not re-sort.
+
+  A run that says it is going but has stopped heartbeating is marked "not
+  reporting" and nothing more. Only the owner's own UI can look for the
+  process and settle it; a reader in another pod cannot tell a dead run from
+  a slow network.
+#}
+{% extends "view_base.html" %}
+
+{% block title %}Runs - {{ project.display_name }} - kptn{% endblock %}
+
+{% block content %}
+<section class="panel" id="run-history">
+  <header class="console__bar">
+    <h2>Run history</h2>
+    {% if runs %}<span class="muted">{{ runs | length }} shown, newest first</span>{% endif %}
+  </header>
+
+  {% if problem %}
+  <div class="notice notice--error">
+    <p class="notice__title">This project's run history cannot be read</p>
+    <p class="notice__detail">{{ problem }}</p>
+  </div>
+  {% endif %}
+
+  {% if runs %}
+  <ol class="run-history">
+    {% for entry in runs %}
+    <li class="run-history__item"
+        data-run-id="{{ entry.run.run_id }}"
+        data-status="{{ entry.run.status }}">
+      <span class="status status--{{ entry.run.status }}">{{ entry.run.status }}</span>
+      <a class="run-history__link" href="{{ project_base }}/runs/{{ entry.run.run_id }}"><code>{{ entry.run.run_id }}</code></a>
+      <time class="run-history__when" datetime="{{ entry.run.created_at }}">{{ entry.run.created_at }}</time>
+
+      {% if entry.run.profile %}
+      <span class="run-history__profile">profile <code>{{ entry.run.profile }}</code></span>
+      {% else %}
+      <span class="run-history__profile muted">no profile</span>
+      {% endif %}
+
+      <span class="run-history__counts">
+        <span class="run-history__count">ran <b>{{ entry.counters.tasks }}</b></span>
+        <span class="run-history__count">skipped <b>{{ entry.counters.skipped }}</b></span>
+        <span class="run-history__count">failed <b>{{ entry.counters.failed }}</b></span>
+        {% if entry.counters.warnings %}
+        <span class="run-history__count">warnings <b>{{ entry.counters.warnings }}</b></span>
+        {% endif %}
+      </span>
+
+      {% if entry.run.current_task %}
+      <span class="run-history__task">last task <code>{{ entry.run.current_task }}</code></span>
+      {% endif %}
+
+      {% if entry.run.exit_code is not none %}
+      <span class="run-history__exit">exit <code>{{ entry.run.exit_code }}</code></span>
+      {% endif %}
+
+      {% if entry.not_reporting %}
+      <span class="run-history__stale muted" data-not-reporting>not reporting</span>
+      {% endif %}
+
+      <a class="run-history__log" href="{{ project_base }}/runs/{{ entry.run.run_id }}/log">log</a>
+    </li>
+    {% endfor %}
+  </ol>
+  {% elif not problem %}
+  <p class="muted">
+    No runs published yet. A project's runs appear here once its owner runs
+    it -- or opens it in <code>kptn ui</code> -- with a kptn that publishes them.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

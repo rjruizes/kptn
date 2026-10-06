@@ -98,24 +98,18 @@ def _seed_run(store: RunStore, project_root: Path, *, profile: str = "success"):
 
 
 def _seed_log_event(store: RunStore, record: RunRecord, text: str) -> None:
-    """Append a ``log`` event whose text lives in the run's log file.
+    """Append a ``log`` event whose text lives in the run's file.
 
-    This is the shape Task 5 actually writes: byte offsets, no inline text.
-    The console has to read the file to have anything to show.
+    The shape the capture layer writes: the row holds only the span of the
+    text's line in the run file, so the console has to read the file to have
+    anything to show.
     """
-    data = text.encode("utf-8")
-    log_path = Path(record.log_path)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "ab") as handle:
-        start = handle.tell()
-        handle.write(data)
     store.append_event(
         record.run_id,
         "log",
         task_name="alpha",
         payload={"stream": "stdout", "severity": "output"},
-        log_start=start,
-        log_end=start + len(data),
+        text=text,
     )
 
 

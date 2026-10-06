@@ -45,6 +45,7 @@ from kptn_server.capture import (
     capture_worker_output,
     durable,
 )
+from kptn_server.run_files import read_span_text, run_file_text
 from kptn_server.run_store import (
     STATUS_ERRORED,
     STATUS_FAILED,
@@ -99,12 +100,13 @@ class FixtureRun:
     def events(self) -> list[StoredEvent]:
         return self.store.events_after(self.run_id)
 
-    def log_bytes(self) -> bytes:
-        return self.log_path.read_bytes()
+    def captured_text(self) -> str:
+        """Every line of captured output in the run file, in order."""
+        return run_file_text(self.log_path)
 
     def slice_log(self, event: StoredEvent) -> str:
         assert event.log_start is not None and event.log_end is not None
-        return self.log_bytes()[event.log_start : event.log_end].decode("utf-8")
+        return read_span_text(self.log_path, event.log_start, event.log_end)
 
 
 @pytest.fixture
@@ -231,7 +233,7 @@ def test_worker_persists_output_and_structured_warnings(ui_project: Path) -> Non
     assert record.finished_at is not None
     assert record.worker_pid is not None
 
-    assert "ordinary output" in Path(run.log_path).read_text()
+    assert "ordinary output" in run.captured_text()
     # Captured output goes to the log file and the store, never back out
     # through the replaced Python stream.
     assert "ordinary output" not in result.stdout
@@ -270,7 +272,7 @@ def test_worker_records_failure_and_exits_nonzero(ui_project: Path) -> None:
     assert finished[0].payload["status"] == "failed"
     assert "fixture failure" in str(finished[0].payload["error"])
     # The traceback the worker prints must also reach the durable log.
-    assert "fixture failure" in Path(run.log_path).read_text()
+    assert "fixture failure" in run.captured_text()
 
 
 def test_worker_attributes_task_output_and_warnings_to_the_running_task(
@@ -377,7 +379,7 @@ def test_worker_records_pid_and_heartbeat_while_a_slow_run_is_in_flight(
 
     record = run.store.get_run(run.run_id)
     assert record.status == STATUS_SUCCEEDED
-    log_text = run.log_path.read_text()
+    log_text = run.captured_text()
     assert "slow task waiting for sentinel" in log_text
 
 
@@ -506,7 +508,7 @@ def test_capture_restores_streams_handlers_and_showwarning_when_body_raises(
     original_filters = warnings.filters.copy()
 
     with pytest.raises(RuntimeError, match="boom"):
-        with capture_worker_output(run.store, run.run_id, run.log_path):
+        with capture_worker_output(run.store, run.run_id):
             assert sys.stdout is not original_stdout
             assert sys.stderr is not original_stderr
             assert warnings.showwarning is not original_showwarning
@@ -520,7 +522,7 @@ def test_capture_restores_streams_handlers_and_showwarning_when_body_raises(
     assert root.handlers == original_handlers
     assert warnings.filters == original_filters
     # Output written before the failure is still durable.
-    assert "before the failure\n" in run.log_path.read_text()
+    assert "before the failure\n" in run.captured_text()
 
 
 def test_capture_buffers_partial_lines_until_newline_or_exit(
@@ -529,7 +531,7 @@ def test_capture_buffers_partial_lines_until_newline_or_exit(
     run = create_fixture_run(ui_project, profile="success")
     run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
 
-    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+    with capture_worker_output(run.store, run.run_id) as capture:
         sys.stdout.write("par")
         capture.sink.flush()
         assert log_events(run) == []
@@ -545,7 +547,7 @@ def test_capture_buffers_partial_lines_until_newline_or_exit(
         "partial\n",
         "trailing without newline",
     ]
-    assert run.log_bytes() == b"partial\ntrailing without newline"
+    assert run.captured_text() == "partial\ntrailing without newline"
 
 
 def test_capture_records_log_offsets_that_match_the_log_file(
@@ -554,7 +556,7 @@ def test_capture_records_log_offsets_that_match_the_log_file(
     run = create_fixture_run(ui_project, profile="success")
     run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
 
-    with capture_worker_output(run.store, run.run_id, run.log_path):
+    with capture_worker_output(run.store, run.run_id):
         print("first")
         print("sécond")
         print("third", file=sys.stderr)
@@ -566,20 +568,22 @@ def test_capture_records_log_offsets_that_match_the_log_file(
         STREAM_STDOUT,
         STREAM_STDERR,
     ]
-    # Offsets are byte offsets, not character offsets.
-    assert events[1].log_end - events[1].log_start == len("sécond\n".encode())
+    # Each span is one whole line of the run file, by byte offset: the lines
+    # follow one another, and the last one ends the file.
+    assert events[0].log_end == events[1].log_start
+    assert events[1].log_end == events[2].log_start
+    assert events[2].log_end == run.log_path.stat().st_size
 
 
 def test_capture_serializes_concurrent_writes_under_one_lock(
     ui_project: Path,
 ) -> None:
-    """The byte write and the durable event must share one critical section.
+    """Captured text is handed to the sink one writer at a time.
 
-    Proven deterministically rather than by timing luck: a hook fires at the
-    exact seam between "bytes written" and "event appended" and blocks there.
-    A second thread then tries to write. If both halves are covered by the
-    same lock, it cannot get in -- no second byte range, no second event. If
-    either half escaped the lock (say the event append moved outside it), the
+    Proven deterministically rather than by timing luck: a hook fires inside
+    the critical section, just before the hand-over, and blocks there. A
+    second thread then tries to write. If the hand-over is covered by the
+    lock, it cannot get in -- no second event. If it escaped the lock, the
     second thread would land its write and the assertions below would fail.
     """
     run = create_fixture_run(ui_project, profile="success")
@@ -590,15 +594,15 @@ def test_capture_serializes_concurrent_writes_under_one_lock(
     second_started = threading.Event()
     second_finished = threading.Event()
 
-    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+    with capture_worker_output(run.store, run.run_id) as capture:
         lock_held: list[bool] = []
 
         def hook() -> None:
             # Structural, not adjacency-based: the hook fires from inside
-            # _commit_span, between the byte write and the event append, and
-            # this asserts the lock really is held at that point. If a future
-            # change moved either half out of the critical section, this fails
-            # even though the hook itself did not move.
+            # _commit_span, before the hand-over to the sink, and this asserts
+            # the lock really is held at that point. If a future change moved
+            # the hand-over out of the critical section, this fails even
+            # though the hook itself did not move.
             lock_held.append(capture.state.lock_is_held())
             inside.set()
             assert release.wait(10), "critical-section hook was never released"
@@ -623,11 +627,10 @@ def test_capture_serializes_concurrent_writes_under_one_lock(
         assert not second_finished.wait(0.25), (
             "second writer completed while the critical section was held"
         )
-        # The first writer's bytes are down but its event is not yet appended;
-        # the second writer is blocked, so nothing of its own has landed in
-        # either the file or the store.
+        # The first writer is inside the critical section and the second is
+        # blocked behind it, so nothing has reached the store or the file.
         assert len(log_events(run)) == 0
-        assert run.log_bytes() == b"first line\n"
+        assert run.captured_text() == ""
 
         release.set()
         thread_one.join(timeout=10)
@@ -639,9 +642,8 @@ def test_capture_serializes_concurrent_writes_under_one_lock(
     events = log_events(run)
     assert len(events) == 2
     # Contiguous, non-overlapping, monotonic with durable sequence.
-    assert events[0].log_start == 0
     assert events[0].log_end == events[1].log_start
-    assert events[1].log_end == len(run.log_bytes())
+    assert events[1].log_end == run.log_path.stat().st_size
     assert {run.slice_log(e) for e in events} == {"first line\n", "second line\n"}
 
 
@@ -652,7 +654,7 @@ def test_capture_records_logging_records_as_warnings_and_mirrors_the_text(
     run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
     logger = logging.getLogger("capture_fixture")
 
-    with capture_worker_output(run.store, run.run_id, run.log_path):
+    with capture_worker_output(run.store, run.run_id):
         logger.info("quiet")
         logger.warning("loud")
         logger.error("louder")
@@ -660,7 +662,7 @@ def test_capture_records_logging_records_as_warnings_and_mirrors_the_text(
     events = warning_events(run)
     assert [str(e.payload["message"]) for e in events] == ["loud", "louder"]
     assert {str(e.payload["category"]) for e in events} == {"capture_fixture"}
-    log_text = run.log_path.read_text()
+    log_text = run.captured_text()
     assert "loud\n" in log_text
     assert "quiet" not in log_text
 
@@ -691,7 +693,7 @@ def test_echoing_capture_passes_output_through_and_still_records_it(
     out, err = _Terminal(), _Terminal()
     sys.stdout, sys.stderr = out, err
 
-    with capture_worker_output(run.store, run.run_id, run.log_path, echo=True):
+    with capture_worker_output(run.store, run.run_id, echo=True):
         sys.stdout.write("progress 50%\r")
         # Partial lines reach the terminal at once, not at the next newline.
         assert out.getvalue() == "progress 50%\r"
@@ -703,7 +705,7 @@ def test_echoing_capture_passes_output_through_and_still_records_it(
     assert out.getvalue() == "progress 50%\rdone\n"
     assert out.flushes >= 1
     assert err.getvalue() == "oops\n"
-    assert run.log_bytes() == b"progress 50%\rdone\noops\n"
+    assert run.captured_text() == "progress 50%\rdone\noops\n"
     assert [e.payload["stream"] for e in log_events(run)] == [
         STREAM_STDOUT,
         STREAM_STDERR,
@@ -718,14 +720,14 @@ def test_capture_without_echo_writes_nothing_to_the_streams_it_replaced(
     out = _Terminal()
     sys.stdout = out
 
-    with capture_worker_output(run.store, run.run_id, run.log_path):
+    with capture_worker_output(run.store, run.run_id):
         print("only in the log")
         assert sys.stdout.isatty() is False
         with pytest.raises(io.UnsupportedOperation):
             sys.stdout.fileno()
 
     assert out.getvalue() == ""
-    assert run.log_path.read_text() == "only in the log\n"
+    assert run.captured_text() == "only in the log\n"
 
 
 def test_echoing_capture_shows_a_repeated_warning_once_but_records_every_one(
@@ -736,12 +738,12 @@ def test_echoing_capture_shows_a_repeated_warning_once_but_records_every_one(
     err = _Terminal()
     sys.stderr = err
 
-    with capture_worker_output(run.store, run.run_id, run.log_path, echo=True):
+    with capture_worker_output(run.store, run.run_id, echo=True):
         for _ in range(3):
             warnings.warn("again", UserWarning)
 
     assert err.getvalue().count("UserWarning: again") == 1
-    assert run.log_path.read_text().count("UserWarning: again") == 3
+    assert run.captured_text().count("UserWarning: again") == 3
     assert len(warning_events(run)) == 3
 
 
@@ -763,9 +765,7 @@ def test_echoing_capture_leaves_a_logged_warning_to_the_handler_that_printed_it(
     unhandled = logging.getLogger("capture_fixture.unhandled")
 
     try:
-        with capture_worker_output(
-            run.store, run.run_id, run.log_path, echo=True
-        ):
+        with capture_worker_output(run.store, run.run_id, echo=True):
             handled.warning("printed by its own handler")
             unhandled.warning("printed in place of lastResort")
     finally:
@@ -775,7 +775,7 @@ def test_echoing_capture_leaves_a_logged_warning_to_the_handler_that_printed_it(
     # The terminal sees each record once: the configured handler printed the
     # first, and the capture stands in for logging.lastResort on the second.
     assert err.getvalue() == "printed in place of lastResort\n"
-    log_text = run.log_path.read_text()
+    log_text = run.captured_text()
     assert "printed by its own handler\n" in log_text
     assert "printed in place of lastResort\n" in log_text
     assert len(warning_events(run)) == 2
@@ -800,8 +800,8 @@ def test_worker_echoes_progress_lines_without_recording_them_as_output(
     assert "raw stderr output\n" in err.getvalue()
     # Progress lines are events, rendered into the download from the stream;
     # in the log file they would appear twice there.
-    assert "[RUN]" not in run.log_path.read_text()
-    assert "ordinary output\n" in run.log_path.read_text()
+    assert "[RUN]" not in run.captured_text()
+    assert "ordinary output\n" in run.captured_text()
     assert run.store.get_run(run.run_id).status == STATUS_SUCCEEDED
 
 
@@ -814,7 +814,7 @@ def test_worker_reports_a_profile_error_by_its_message_alone(
 
     assert result.returncode == worker.EXIT_FAILED
     assert run.store.get_run(run.run_id).status == STATUS_FAILED
-    log_text = run.log_path.read_text()
+    log_text = run.captured_text()
     assert "no_such_profile" in log_text
     assert "Traceback" not in log_text
 
@@ -887,7 +887,7 @@ def test_capture_blocks_every_nested_write_not_just_the_first(
     run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
     attempts: list[int] = []
 
-    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+    with capture_worker_output(run.store, run.run_id) as capture:
 
         def hook() -> None:
             for index in range(3):
@@ -899,7 +899,7 @@ def test_capture_blocks_every_nested_write_not_just_the_first(
     # write() still reports the characters it accepted; what must not happen
     # is any of them reaching the file or the store.
     assert len(attempts) == 3
-    assert run.log_bytes() == b"outer\n"
+    assert run.captured_text() == "outer\n"
     assert [run.slice_log(e) for e in log_events(run)] == ["outer\n"]
 
 
@@ -910,7 +910,7 @@ def test_capture_guards_the_warnings_path_symmetrically(
     run = create_fixture_run(ui_project, profile="success")
     run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
 
-    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+    with capture_worker_output(run.store, run.run_id) as capture:
 
         def hook() -> None:
             warnings.warn("warned from inside the write path", UserWarning)
@@ -920,7 +920,7 @@ def test_capture_guards_the_warnings_path_symmetrically(
         capture.stdout.write("outer\n")
 
     assert warning_events(run) == []
-    assert run.log_bytes() == b"outer\n"
+    assert run.captured_text() == "outer\n"
 
 
 # -- durable-failure classification (fix round 1, finding 2) --------------
@@ -1155,7 +1155,7 @@ def test_capture_preserves_project_configured_warning_filters(
         warnings.resetwarnings()
         warnings.filterwarnings("error", category=UserWarning)
 
-        with capture_worker_output(run.store, run.run_id, run.log_path):
+        with capture_worker_output(run.store, run.run_id):
             with pytest.raises(UserWarning):
                 warnings.warn("escalated by the project", UserWarning)
             # Categories the project said nothing about still fall through to
@@ -1201,7 +1201,7 @@ def test_capture_writes_a_burst_of_output_in_a_few_transactions(
     run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
     calls = _counting_store_writes(monkeypatch)
 
-    with capture_worker_output(run.store, run.run_id, run.log_path):
+    with capture_worker_output(run.store, run.run_id):
         for index in range(300):
             print(f"line {index}")
         warnings.warn("one warning among the output", UserWarning)
@@ -1226,7 +1226,7 @@ def test_captured_output_reaches_the_store_without_an_explicit_flush(
     run = create_fixture_run(ui_project, profile="success")
     run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
 
-    with capture_worker_output(run.store, run.run_id, run.log_path):
+    with capture_worker_output(run.store, run.run_id):
         print("arrives on its own")
         deadline = time.monotonic() + 5
         while not log_events(run) and time.monotonic() < deadline:
@@ -1242,7 +1242,7 @@ def test_pending_output_is_written_before_a_state_changing_event(
     """A task's output must never be sequenced after the event that ends it."""
     run = create_fixture_run(ui_project, profile="success")
 
-    with capture_worker_output(run.store, run.run_id, run.log_path) as capture:
+    with capture_worker_output(run.store, run.run_id) as capture:
         capture.sink.emit(_run_event(EventKind.RUN_STARTED))
         print("before the task")
         capture.sink.emit(_run_event(EventKind.TASK_STARTED))
@@ -1271,7 +1271,7 @@ def test_a_failed_batch_write_is_raised_to_the_worker(
     monkeypatch.setattr(RunStore, "append_events", failing)
 
     with pytest.raises(DurableWriteFailed):
-        with capture_worker_output(run.store, run.run_id, run.log_path):
+        with capture_worker_output(run.store, run.run_id):
             print("cannot be stored")
             time.sleep(1.0)  # several flush ticks: the failure happens off-thread
             print("the next write reports it")

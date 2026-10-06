@@ -55,7 +55,7 @@ jobs:
           kptn_server/__init__.py kptn_server/app.py kptn_server/capture.py
           kptn_server/markdown.py kptn_server/origin.py
           kptn_server/processes.py kptn_server/project.py
-          kptn_server/run_store.py kptn_server/worker.py
+          kptn_server/run_files.py kptn_server/run_store.py kptn_server/worker.py
           kptn_server/routes
 
   extension:

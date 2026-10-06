@@ -6,6 +6,13 @@ reads the same database. All UI state lives on disk under
 survives a browser, notebook server, or FastAPI restart -- nothing is kept in process
 memory.
 
+The store is also the only writer of the run files other people read (see
+:mod:`kptn_server.run_files`). Every event it commits is appended to the run's
+``<run_id>.jsonl`` inside the same write transaction, captured output
+included, so the file and the database agree on order and nothing reaches
+one without the other. ``index.json`` is republished from the database after
+each state change, and at a bounded rate while a run is going.
+
 Only one run may be active per canonical project path at a time, *among the
 runs this store knows about*. Creating a second run for a project that
 already has one raises :class:`ActiveRunError`. ``kptn run`` in a terminal
@@ -19,10 +26,12 @@ Invalid run state transitions (e.g. finishing an already-terminal run) raise
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
 import threading
+import time
 import uuid
 import weakref
 from dataclasses import dataclass, field
@@ -31,6 +40,15 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from kptn.runner.events import EventKind
+from kptn_server import run_files
+from kptn_server.run_files import (
+    INDEX_FILENAME,
+    INDEX_LIMIT,
+    INDEX_PUBLISH_INTERVAL_SECONDS,
+    RUN_FILE_SUFFIX,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 JSONValue = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 
@@ -128,6 +146,10 @@ class StoredEvent:
     payload: Mapping[str, JSONValue]
     log_start: int | None
     log_end: int | None
+    #: The captured output itself, when it is in hand: an event read out of a
+    #: run file, or one just appended. Events read from ``ui.db`` leave it
+    #: ``None`` and are read back through ``log_start``/``log_end``.
+    text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +165,23 @@ class PendingEvent:
     payload: Mapping[str, JSONValue] = field(default_factory=dict)
     log_start: int | None = None
     log_end: int | None = None
+    #: Captured output, for a ``log`` event. Written to the run file, never
+    #: to ``ui.db``; the row records where in the file it went.
+    text: str | None = None
+
+
+@dataclass(frozen=True)
+class _FileEntry:
+    """One event on its way into a run file, sequence already assigned."""
+
+    sequence: int
+    timestamp: datetime
+    kind: str
+    task_name: str | None
+    payload: Mapping[str, JSONValue]
+    text: str | None
+    log_start: int | None
+    log_end: int | None
 
 
 #: Kinds that move a run's state machine. :meth:`RunStore.append_events`
@@ -273,6 +312,11 @@ class RunStore:
         # Closes what is still open when the store is collected (or at exit),
         # rather than leaving each connection to its own finalizer.
         weakref.finalize(self, _close_all, self._held)
+        # When this store last published each project's index.json, by
+        # project root, for the rate limit on publishes nothing forces.
+        self._published_at: dict[str, float] = {}
+        self._publish_lock = threading.Lock()
+        self._publish_failure_reported = False
         # Apply the migration (idempotently) up front so later connections
         # never race on schema creation.
         conn = self._acquire()
@@ -438,7 +482,7 @@ class RunStore:
         created_at = datetime.now(timezone.utc)
         runs_dir = canonical_root / ".kptn" / "runs"
         runs_dir.mkdir(parents=True, exist_ok=True)
-        log_path = runs_dir / f"{run_id}.log"
+        log_path = runs_dir / f"{run_id}{RUN_FILE_SUFFIX}"
 
         conn = self._acquire()
         try:
@@ -487,6 +531,7 @@ class RunStore:
         finally:
             self._release(conn)
 
+        self.publish_index(canonical_root)
         return RunRecord(
             run_id=run_id,
             project_root=canonical_root,
@@ -515,9 +560,18 @@ class RunStore:
         payload: Mapping[str, JSONValue] | None = None,
         log_start: int | None = None,
         log_end: int | None = None,
+        text: str | None = None,
     ) -> StoredEvent:
+        """Append one event, applying its state transition.
+
+        *text* is a ``log`` event's captured output. It goes to the run file,
+        and the row records the span it landed in as ``log_start``/``log_end``
+        -- which therefore need not be passed alongside it.
+        """
         event_timestamp = timestamp or datetime.now(timezone.utc)
         payload = payload or {}
+        log_path: Path | None = None
+        file_size: int | None = None
 
         conn = self._acquire()
         try:
@@ -582,6 +636,24 @@ class RunStore:
             ).fetchone()
             sequence = sequence_row["next_sequence"]
 
+            log_path = Path(row["log_path"])
+            file_size, spans = self._record_in_run_file(
+                log_path,
+                [
+                    _FileEntry(
+                        sequence=sequence,
+                        timestamp=event_timestamp,
+                        kind=kind,
+                        task_name=task_name,
+                        payload=payload,
+                        text=text,
+                        log_start=log_start,
+                        log_end=log_end,
+                    )
+                ],
+            )
+            log_start, log_end = spans[0]
+
             conn.execute(
                 """
                 INSERT INTO run_events (
@@ -606,10 +678,15 @@ class RunStore:
                 conn.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+            self._undo_run_file(log_path, file_size)
             raise
         finally:
             self._release(conn)
 
+        self.publish_index(
+            row["project_root"],
+            force=kind in (EventKind.RUN_STARTED.value, EventKind.RUN_FINISHED.value),
+        )
         return StoredEvent(
             run_id=run_id,
             sequence=sequence,
@@ -619,6 +696,7 @@ class RunStore:
             payload=payload,
             log_start=log_start,
             log_end=log_end,
+            text=text,
         )
 
     def append_events(
@@ -644,11 +722,14 @@ class RunStore:
                 f"append_events does not accept state-changing kinds: {refused}"
             )
 
+        log_path: Path | None = None
+        file_size: int | None = None
         conn = self._acquire()
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT status FROM runs WHERE run_id = ?", (run_id,)
+                "SELECT status, project_root, log_path FROM runs WHERE run_id = ?",
+                (run_id,),
             ).fetchone()
             if row is None:
                 conn.execute("ROLLBACK")
@@ -662,6 +743,23 @@ class RunStore:
                 "SELECT COALESCE(MAX(sequence), 0) + 1 FROM run_events WHERE run_id = ?",
                 (run_id,),
             ).fetchone()[0]
+            log_path = Path(row["log_path"])
+            file_size, spans = self._record_in_run_file(
+                log_path,
+                [
+                    _FileEntry(
+                        sequence=first + offset,
+                        timestamp=event.timestamp,
+                        kind=event.kind,
+                        task_name=event.task_name,
+                        payload=event.payload,
+                        text=event.text,
+                        log_start=event.log_start,
+                        log_end=event.log_end,
+                    )
+                    for offset, event in enumerate(events)
+                ],
+            )
             conn.executemany(
                 """
                 INSERT INTO run_events (
@@ -677,10 +775,10 @@ class RunStore:
                         event.kind,
                         event.task_name,
                         json.dumps(dict(event.payload)),
-                        event.log_start,
-                        event.log_end,
+                        span[0],
+                        span[1],
                     )
-                    for offset, event in enumerate(events)
+                    for offset, (event, span) in enumerate(zip(events, spans))
                 ],
             )
             conn.execute(
@@ -693,10 +791,12 @@ class RunStore:
                 conn.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+            self._undo_run_file(log_path, file_size)
             raise
         finally:
             self._release(conn)
 
+        self.publish_index(row["project_root"], force=False)
         return [
             StoredEvent(
                 run_id=run_id,
@@ -705,10 +805,11 @@ class RunStore:
                 kind=event.kind,
                 task_name=event.task_name,
                 payload=event.payload,
-                log_start=event.log_start,
-                log_end=event.log_end,
+                log_start=span[0],
+                log_end=span[1],
+                text=event.text,
             )
-            for offset, event in enumerate(events)
+            for offset, (event, span) in enumerate(zip(events, spans))
         ]
 
     def record_worker_start(
@@ -763,6 +864,7 @@ class RunStore:
             raise
         finally:
             self._release(conn)
+        self.publish_index(row["project_root"], force=False)
         return self._row_to_run(row)
 
     def heartbeat(self, run_id: str, *, timestamp: datetime | None = None) -> bool:
@@ -789,6 +891,9 @@ class RunStore:
             if row is None:
                 conn.execute("ROLLBACK")
                 raise RunNotFoundError(f"no such run: {run_id}")
+            project_root = conn.execute(
+                "SELECT project_root FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()["project_root"]
             cursor = conn.execute(
                 f"""
                 UPDATE runs SET heartbeat_at = ?
@@ -806,6 +911,11 @@ class RunStore:
             raise
         finally:
             self._release(conn)
+        if updated:
+            # The heartbeat is what keeps index.json current through a long
+            # quiet task: nothing else is written then, and a reader in
+            # another pod judges a run's liveness by this timestamp alone.
+            self.publish_index(project_root, force=False)
         return updated
 
     def request_stop(self, run_id: str) -> RunRecord:
@@ -841,6 +951,7 @@ class RunStore:
             raise
         finally:
             self._release(conn)
+        self.publish_index(row["project_root"])
         return self._row_to_run(row)
 
     def finish_run(
@@ -890,7 +1001,188 @@ class RunStore:
             raise
         finally:
             self._release(conn)
+        self.publish_index(row["project_root"])
         return self._row_to_run(row)
+
+    # -- the published run files -------------------------------------------
+
+    @staticmethod
+    def _record_in_run_file(
+        log_path: Path, entries: Sequence[_FileEntry]
+    ) -> tuple[int | None, list[tuple[int | None, int | None]]]:
+        """Append *entries* to the run's file, inside the caller's transaction.
+
+        Returns the file's size before the append -- ``None`` when nothing was
+        written, so there is nothing to undo -- and each entry's
+        ``(log_start, log_end)``: the span its text landed in, or whatever the
+        caller passed for an entry with no text.
+
+        Called under ``BEGIN IMMEDIATE``, and every writer of a run's file
+        comes through here, so SQLite's write lock is what orders the file's
+        lines: they follow the sequence numbers exactly, across processes.
+
+        A ``.jsonl`` run gets a line for every event. A run recorded before
+        run files existed has a ``.log`` of raw output, and gets only the text,
+        as it always did.
+
+        Losing a line for an event without text costs a colleague one row of
+        a console the owner still sees in full, and is logged rather than
+        raised. Losing *text* loses output that is stored nowhere else, so
+        that failure raises, and the caller's transaction rolls back with it.
+        """
+        jsonl = log_path.suffix == RUN_FILE_SUFFIX
+        spans: list[tuple[int | None, int | None]] = [
+            (entry.log_start, entry.log_end) for entry in entries
+        ]
+        lines: list[bytes] = []
+        owners: list[int] = []
+        for index, entry in enumerate(entries):
+            if jsonl:
+                lines.append(
+                    run_files.encode_event(
+                        sequence=entry.sequence,
+                        timestamp=_dt_to_text(entry.timestamp) or "",
+                        kind=entry.kind,
+                        task_name=entry.task_name,
+                        payload=entry.payload,
+                        text=entry.text,
+                    )
+                )
+            elif entry.text is not None:
+                lines.append(entry.text.encode("utf-8", errors="replace"))
+            else:
+                continue
+            owners.append(index)
+        if not lines:
+            return None, spans
+
+        try:
+            size, written = run_files.append_lines(log_path, lines)
+        except OSError:
+            if any(entry.text is not None for entry in entries):
+                raise
+            _LOGGER.debug("could not append to run file %s", log_path, exc_info=True)
+            return None, spans
+
+        for index, span in zip(owners, written):
+            if entries[index].text is not None:
+                spans[index] = span
+        return size, spans
+
+    @staticmethod
+    def _undo_run_file(log_path: Path | None, size: int | None) -> None:
+        """Cut lines whose transaction rolled back back out of the run file.
+
+        Safe without a lock of its own: the caller still holds the write lock
+        no other appender can get past, so nothing can have been appended
+        after them.
+        """
+        if log_path is not None and size is not None:
+            run_files.truncate(log_path, size)
+
+    def publish_index(self, project_root: Path | str, *, force: bool = True) -> None:
+        """Rewrite ``<project_root>/.kptn/runs/index.json`` from this database.
+
+        Unforced calls are rate-limited to one per
+        :data:`~kptn_server.run_files.INDEX_PUBLISH_INTERVAL_SECONDS` per
+        project. State changes force one, so a reader never waits that long
+        to see a run start or end.
+
+        The read and the rename happen under ``BEGIN IMMEDIATE``. Without
+        that, a publisher that read the database first could rename last,
+        and a run that had finished would be listed as running for good --
+        nothing publishes a finished run again. With it, each rename carries
+        state at least as new as the one before it, across processes.
+
+        Never raises: a colleague's view going stale is not a reason to fail
+        a run, or a page.
+        """
+        root = Path(project_root)
+        key = str(root)
+        now = time.monotonic()
+        with self._publish_lock:
+            last = self._published_at.get(key)
+            if not force and last is not None and now - last < INDEX_PUBLISH_INTERVAL_SECONDS:
+                return
+            self._published_at[key] = now
+
+        conn = self._acquire()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT * FROM runs WHERE project_root = ?
+                ORDER BY created_at DESC, run_id DESC LIMIT ?
+                """,
+                (key, INDEX_LIMIT),
+            ).fetchall()
+            records = [self._row_to_run(row) for row in rows]
+            tallies = self._tallies(conn, [record.run_id for record in records])
+            run_files.write_index(
+                root / ".kptn" / "runs",
+                run_files.build_index(root, records, tallies),
+            )
+            conn.execute("COMMIT")
+        except Exception as exc:  # noqa: BLE001 - publishing must never fail a caller
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            self._report_publish_failure(root, exc)
+        finally:
+            self._release(conn)
+
+    def ensure_index(self, project_root: Path | str) -> None:
+        """Publish ``index.json`` if the project has none yet.
+
+        For a project whose history predates run files: nothing republishes
+        it until its next run, and until then a colleague would see no
+        history at all.
+        """
+        if not (Path(project_root) / ".kptn" / "runs" / INDEX_FILENAME).exists():
+            self.publish_index(project_root)
+
+    def _report_publish_failure(self, root: Path, exc: Exception) -> None:
+        # Once per store at WARNING, then quietly. Inside a worker the root
+        # logger is the run's own warning capture, and a publish retried
+        # every few seconds would bury the run's real warnings.
+        if self._publish_failure_reported:
+            _LOGGER.debug("could not publish the run index for %s: %s", root, exc)
+            return
+        self._publish_failure_reported = True
+        _LOGGER.warning(
+            "could not publish the run index for %s, so other people's kptn ui "
+            "will not see this project's latest runs: %s",
+            root,
+            exc,
+        )
+
+    @staticmethod
+    def _tallies(
+        conn: sqlite3.Connection, run_ids: Sequence[str]
+    ) -> dict[str, dict[tuple[str, str | None], int]]:
+        """:meth:`event_counts` for several runs, in one query."""
+        result: dict[str, dict[tuple[str, str | None], int]] = {
+            run_id: {} for run_id in run_ids
+        }
+        if not run_ids:
+            return result
+        kinds = ", ".join("?" for _ in COUNTED_EVENT_KINDS)
+        ids = ", ".join("?" for _ in run_ids)
+        rows = conn.execute(
+            f"""
+            SELECT run_id, kind,
+                   json_extract(payload_json, '$.status') AS status,
+                   COUNT(*) AS total
+            FROM run_events
+            WHERE run_id IN ({ids}) AND kind IN ({kinds})
+            GROUP BY run_id, kind, status
+            """,
+            (*run_ids, *COUNTED_EVENT_KINDS),
+        ).fetchall()
+        for row in rows:
+            result[row["run_id"]][(row["kind"], row["status"])] = row["total"]
+        return result
 
     # -- reads -------------------------------------------------------------
 
@@ -1084,6 +1376,34 @@ class RunStore:
         return result
 
 
+def read_run_file(
+    path: Path, run_id: str, *, offset: int = 0
+) -> tuple[list[StoredEvent], int]:
+    """The events in a run's ``.jsonl`` file from byte *offset*, text included.
+
+    Returns them with the offset to resume from (see
+    :func:`~kptn_server.run_files.read_events`). They are the same events
+    ``ui.db`` holds, so the console renders them with the same code; only
+    ``text`` stands in for the offsets nobody outside the owner's pod could
+    use. Raises what :func:`~kptn_server.run_files.read_untrusted` raises.
+    """
+    events, resume = run_files.read_events(path, offset=offset)
+    return [
+        StoredEvent(
+            run_id=run_id,
+            sequence=event.sequence,
+            timestamp=event.timestamp,
+            kind=event.kind,
+            task_name=event.task_name,
+            payload=event.payload,
+            log_start=None,
+            log_end=None,
+            text=event.text,
+        )
+        for event in events
+    ], resume
+
+
 __all__ = [
     "COUNTED_EVENT_KINDS",
     "ActiveRunError",
@@ -1105,4 +1425,5 @@ __all__ = [
     "StoredEvent",
     "TERMINAL_STATUSES",
     "WarningGroup",
+    "read_run_file",
 ]

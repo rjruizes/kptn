@@ -1,0 +1,58 @@
+{#
+  One of somebody else's runs, rendered from its ``.jsonl`` file.
+
+  The console is the owner's own ``_console.html``, so the events render
+  byte-for-byte as they do for the owner, and app.js streams this page the
+  same way -- from this view's ``/events``, which tails the file.
+
+  The header is this page's own: the owner's ``_run_header.html`` is mostly
+  controls (Retry, Stop, force-finish), and none of them apply here. What is
+  kept is what describes the run -- its profile, its status, its counters,
+  and the download. The counters carry ``data-counter`` so app.js recounts
+  them as events stream in, exactly as on the owner's page.
+#}
+{% extends "view_base.html" %}
+
+{% block title %}{{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
+
+{% block content %}
+<section class="panel run-panel">
+  <div id="run-header">
+    <div class="run-header__top">
+      <h2 class="run-header__crumbs">
+        <a href="{{ project_base }}/">Runs</a>
+        <span class="run-header__crumb-separator" aria-hidden="true">/</span>
+        {% if run.profile %}<code>{{ run.profile }}</code>
+        {% else %}<span class="muted">no profile</span>{% endif %}
+        {% include "_run_status.html" %}
+      </h2>
+
+      <form class="run-header__log" method="get" action="{{ project_base }}/runs/{{ run.run_id }}/log">
+        <button type="submit">Download log</button>
+      </form>
+
+      <span class="run-header__counters">
+        <span class="run-header__counter">ran <b data-counter="tasks">{{ counters.tasks }}</b></span>
+        <span class="run-header__counter">skipped <b data-counter="skipped">{{ counters.skipped }}</b></span>
+        <span class="run-header__counter">warnings <b data-counter="warnings">{{ counters.warnings }}</b></span>
+      </span>
+    </div>
+
+    {% if not_reporting %}
+    <p class="muted" data-not-reporting>
+      This run has not reported in for over a minute. Its owner's
+      <code>kptn ui</code> will mark it interrupted if its process is gone;
+      until then, this is the last thing it published.
+    </p>
+    {% endif %}
+
+    {% if problem %}
+    <div class="notice notice--error">
+      <p class="notice__title">This run's output cannot be read</p>
+      <p class="notice__detail">{{ problem }}</p>
+    </div>
+    {% endif %}
+  </div>
+  {% include "_console.html" %}
+</section>
+{% endblock %}

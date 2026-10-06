@@ -15,8 +15,9 @@ pieces that make that true:
 :func:`capture_worker_output`
     A context manager that, for the duration of its body, replaces
     ``sys.stdout`` / ``sys.stderr``, overrides ``warnings.showwarning``, and
-    installs a ``logging`` handler on the root logger. Raw bytes go to the
-    run's log file; byte offsets plus metadata go to the store.
+    installs a ``logging`` handler on the root logger. Captured text goes to
+    the store as ``log`` events, and the store writes it into the run's file
+    (see :mod:`kptn_server.run_files`) in the same transaction as the row.
 
 Two rules govern the design:
 
@@ -34,14 +35,12 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import sqlite3
 import sys
 import threading
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, TextIO
 
 from contextlib import contextmanager
@@ -273,33 +272,52 @@ class RunStoreSink:
         The store, not the in-process emitter, owns durable sequence numbers --
         that is what lets captured log and warning events interleave with
         runner events in the order they actually happened.
+
+        A runner ``log`` event carries its output inline as ``message`` -- an R
+        task's captured stdout and stderr. That text is moved into the run
+        file like any other captured output rather than kept in the row, so
+        it reaches the download and other people's views too.
         """
         kind = str(event.kind)
+        payload = dict(event.payload)
+        if kind == EventKind.LOG.value and isinstance(payload.get("message"), str):
+            text = str(payload.pop("message"))
+            stream = str(payload.get("stream") or STREAM_STDOUT)
+            payload.setdefault(
+                "severity",
+                SEVERITY_STDERR if stream == STREAM_STDERR else SEVERITY_OUTPUT,
+            )
+            self._buffer(
+                kind,
+                timestamp=event.timestamp,
+                task_name=event.task_name,
+                payload=payload,
+                text=text,
+            )
+            return
         write = self._buffer if kind in _BATCHED_KINDS else self._append
         write(
             kind,
             timestamp=event.timestamp,
             task_name=event.task_name,
-            payload=dict(event.payload),
+            payload=payload,
         )
 
     def emit_log(
         self,
         *,
+        text: str,
         stream: str,
         severity: str,
-        log_start: int,
-        log_end: int,
         task_name: str | None = None,
     ) -> None:
-        """Record a span of captured output by its byte offsets in the log."""
+        """Record a span of captured output."""
         payload: dict[str, JSONValue] = {"stream": stream, "severity": severity}
         self._buffer(
             EventKind.LOG.value,
             task_name=task_name,
             payload=payload,
-            log_start=log_start,
-            log_end=log_end,
+            text=text,
         )
 
     def emit_warning(
@@ -333,37 +351,21 @@ class RunStoreSink:
 
 
 class LogWriteState:
-    """Owns the log file, the byte cursor, and the lock that guards both.
+    """Hands captured text to the sink, one writer at a time, until closed.
 
-    The byte write and the matching durable ``log`` event happen inside a
-    single critical section. That is what makes ``log_start``/``log_end``
-    monotonic with the durable sequence: without it, two threads could write
-    bytes in one order and append events in the other, and every reader that
-    slices the log by event offsets would see corruption.
+    The text itself is written by the store, into the run's file, when the
+    sink flushes; the store's write lock orders the file and the sequence
+    numbers together. What is left here is the order the two captured
+    streams hand text over in, and the point after which they may not.
     """
 
-    def __init__(self, sink: RunStoreSink, log_path: Path) -> None:
+    def __init__(self, sink: RunStoreSink) -> None:
         self._sink = sink
-        self._path = Path(log_path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._handle = open(self._path, "ab", buffering=0)
-        self._offset = self._handle.seek(0, os.SEEK_END)
         self._lock = threading.RLock()
         self._closed = False
-        # Test seam: invoked inside the critical section, after the bytes are
-        # written and the cursor advanced but before the durable event is
-        # appended -- i.e. exactly at the seam that must not be observable by
-        # another thread. Production code never sets it.
+        # Test seam: invoked inside the critical section, just before the text
+        # is handed to the sink. Production code never sets it.
         self._critical_section_hook: Callable[[], None] | None = None
-
-    @property
-    def path(self) -> Path:
-        return self._path
-
-    @property
-    def offset(self) -> int:
-        with self._lock:
-            return self._offset
 
     def write(
         self,
@@ -372,21 +374,21 @@ class LogWriteState:
         stream: str,
         severity: str,
         task_name: str | None,
-    ) -> tuple[int, int] | None:
-        """Append *text* as UTF-8 and record the span durably.
+    ) -> bool:
+        """Record *text* as one ``log`` event.
 
-        Returns the ``(start, end)`` byte offsets, or ``None`` if there was
-        nothing to write or the state is already closed.
+        Returns ``False`` if there was nothing to write or the state is
+        already closed.
         """
-        data = text.encode("utf-8", errors="replace")
-        if not data:
-            return None
+        if not text:
+            return False
         with self._lock:
             if self._closed:
-                return None
-            return self._commit_span(
-                data, stream=stream, severity=severity, task_name=task_name
+                return False
+            self._commit_span(
+                text, stream=stream, severity=severity, task_name=task_name
             )
+            return True
 
     def lock_is_held(self) -> bool:
         """Whether the calling thread currently owns the critical section."""
@@ -398,42 +400,26 @@ class LogWriteState:
 
     def _commit_span(
         self,
-        data: bytes,
+        text: str,
         *,
         stream: str,
         severity: str,
         task_name: str | None,
-    ) -> tuple[int, int]:
-        """Write *data* and append its durable event as one indivisible step.
-
-        The two halves live in this method precisely so they cannot drift
-        apart: the caller holds the lock across the whole of it, and the test
-        seam fires *between* them, so moving either half out of the critical
-        section requires editing this method rather than merely re-indenting a
-        line elsewhere.
-        """
-        start = self._offset
-        self._handle.write(data)
-        end = start + len(data)
-        self._offset = end
+    ) -> None:
+        """Hand *text* to the sink, with the lock held by the caller."""
         hook, self._critical_section_hook = self._critical_section_hook, None
         if hook is not None:
             hook()
         self._sink.emit_log(
+            text=text,
             stream=stream,
             severity=severity,
-            log_start=start,
-            log_end=end,
             task_name=task_name,
         )
-        return start, end
 
     def close(self) -> None:
         with self._lock:
-            if self._closed:
-                return
             self._closed = True
-            self._handle.close()
 
 
 class CapturedTextIO(io.TextIOBase):
@@ -644,16 +630,11 @@ class WorkerCapture:
     stdout: CapturedTextIO
     stderr: CapturedTextIO
 
-    @property
-    def log_path(self) -> Path:
-        return self.state.path
-
 
 @contextmanager
 def capture_worker_output(
     store: RunStore,
     run_id: str,
-    log_path: Path | str,
     *,
     echo: bool = False,
 ) -> Iterator[WorkerCapture]:
@@ -667,7 +648,7 @@ def capture_worker_output(
     restored on the way out, including when the body raises.
     """
     sink = RunStoreSink(store, run_id, flush_interval=FLUSH_INTERVAL_SECONDS)
-    state = LogWriteState(sink, Path(log_path))
+    state = LogWriteState(sink)
 
     original_stdout: TextIO = sys.stdout
     original_stderr: TextIO = sys.stderr

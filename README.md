@@ -350,10 +350,15 @@ Two paths inside the project, and nothing else:
 
 | Path | Contents |
 |------|----------|
-| `.kptn/ui.db` | Run history: one row per run, plus every captured console event |
-| `.kptn/runs/<run_id>.log` | The run's raw captured output, streamed and downloadable |
+| `.kptn/ui.db` | Run history: one row per run, the run lock, and an index of every event |
+| `.kptn/runs/<run_id>.jsonl` | Every event of the run, captured output included, one JSON object per line |
+| `.kptn/runs/index.json` | A summary of the latest 50 runs, rewritten as runs start, progress, and end |
 
-Both are inside the project on purpose, so run history travels with a checkout
+The `.jsonl` file *is* the run's log: the console reads output from it, and the
+log download is rendered from it. Runs recorded by an earlier kptn have a
+`.kptn/runs/<run_id>.log` of raw output instead, and are still shown.
+
+All of it is inside the project on purpose, so run history travels with a checkout
 and is removed by deleting `.kptn/`. `.kptn/ui.db` is separate from kptn's own
 task-state database (`.kptn/kptn.db` by default): clearing UI history never
 invalidates the cache, and `kptn run --force` never erases history.
@@ -363,7 +368,7 @@ invalidates the cache, and `kptn run --force` never erases history.
 `kptn run` records its run in the same history, so `kptn ui` lists it and
 serves its log exactly as it does for a run it started. The run happens in your
 terminal process as before, with its output on your terminal; the same output
-is also written to `.kptn/runs/<run_id>.log`. Stopping it from the UI ends it as
+is also written to `.kptn/runs/<run_id>.jsonl`. Stopping it from the UI ends it as
 Ctrl-C does, and either way it is recorded as stopped. Pass `--no-record` to leave a run out of the
 history. Output a task writes straight to a file descriptor (a subprocess
 inheriting it, a C extension) reaches the terminal but not the log.
@@ -382,7 +387,7 @@ recorded run and write the same task state.
 ### The run survives the server
 
 A run is a **detached child process**, not a request handler. It is launched
-into its own session and writes to `.kptn/ui.db` and its log file directly, so
+into its own session and writes to `.kptn/ui.db` and its run file directly, so
 the run keeps going when you:
 
 - close the browser tab, or navigate away, or lose the SSE connection
@@ -459,6 +464,27 @@ loopback port, resolves the external path prefix, and starts
 same server, framed by the notebook's own page rather than a webview. See
 `--root-path`, `KPTN_UI_ROOT_PATH`, and `kptn ui --projects-root` for the
 pieces the proxy config drives.
+
+### Browsing other people's projects
+
+With `--projects-root`, the project picker at the left of the app bar lists
+every working directory in the release. It opens by itself on the home page,
+since nothing else can show until a project is chosen. Yours open in full, at
+`/p/<directory>/`; everyone else's open read-only at `/view/<directory>/` —
+their run history, each run's console (live while it runs), and its log
+download.
+
+Those pages read only `.kptn/runs/index.json` and the runs' `.jsonl` files.
+They never open another person's `.kptn/ui.db`: each person's server runs in
+its own pod, and SQLite's WAL mode is not safe to share between machines over
+a network filesystem. Nor do they import another person's pipeline, so there
+is no Plan, lineage, or walkthrough for their projects, and nothing that
+starts, stops, or retries a run.
+
+A run whose owner's pod stops heartbeating is shown as "not reporting" after a
+minute. Only the owner's own `kptn ui` can tell that its process is gone and
+mark it interrupted. Who may read whose files is decided by the shared
+folder's permissions, not by kptn.
 
 ### Terminal output is unchanged
 

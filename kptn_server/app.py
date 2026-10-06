@@ -8,6 +8,12 @@ notebook server and names no project at all. Both build the same routers over
 the same per-request context; the difference is only where the project comes
 from.
 
+``create_multi_app`` also lists everybody else's working directories in the
+release, each read-only at ``/view/<slug>/``. Those pages are served by
+:mod:`kptn_server.routes.view` from the files the owner's runs publish, and
+never open the owner's run store: their server runs in another pod, where a
+shared SQLite database would not be safe.
+
 ``create_app`` resolves the project, opens its durable run store, builds the
 worker supervisor, mounts the vendored
 assets, registers the page routers, and -- the part with real teeth -- drives
@@ -60,6 +66,7 @@ from kptn_server.project import ProjectContext, ProjectError
 from kptn_server.registry import ProjectEntry, ProjectRegistry
 from kptn_server.routes import register_routers, router as health_router
 from kptn_server.routes.support import error_response
+from kptn_server.routes.view import RequestView, router as view_router
 from kptn_server.run_store import RunStore
 from kptn_server.slot import ProjectSlot
 
@@ -193,23 +200,41 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     request-scoped lookup would render empty in exactly those fragments.
     Empty by default, which reproduces the root-absolute markup byte for byte.
 
-    ``kptn_version`` is a global for the same reason, and so that the project
-    list and the bare error page -- neither of which has a project -- show it
+    ``kptn_version`` is a global for the same reason, and so that the home
+    page and the bare error page -- neither of which has a project -- show it
     too. It answers "which kptn is this server running?" from the page itself,
     since an install that silently kept the old code looks the same otherwise.
+
+    ``picker`` is the project picker's contents, on a server that offers more
+    than one project. Supplied here for the same reason as ``active_run``:
+    the picker is in the app bar of every page, error pages included, and a
+    router that had to remember it would forget on one of them. The current
+    project is the request's ``{slug}``, so the picker marks the project
+    being shown whichever prefix (``/p`` or ``/view``) it is shown under.
     """
 
     def project_context(request: Request) -> dict[str, Any]:
+        context: dict[str, Any] = {}
+        registry = getattr(request.app.state, "registry", None)
+        if registry is not None:
+            context["picker"] = {
+                "entries": registry.recent(),
+                "release": registry.release,
+                "current": request.path_params.get("slug"),
+                "projects_root": str(registry.projects_root),
+                "user": registry.user,
+            }
         current = getattr(request.state, "ui", None)
         if current is None:
-            # The project list renders through this same environment with no
-            # project resolved -- it is the page you pick a project *from*.
-            return {}
-        return {
-            "project": current.entry,
-            "active_run": current.store.active_run(current.entry.root),
-            "project_base": current.project_base,
-        }
+            # The home page and the read-only views render through this same
+            # environment with no run store resolved, and must never get one.
+            return context
+        context.update(
+            project=current.entry,
+            active_run=current.store.active_run(current.entry.root),
+            project_base=current.project_base,
+        )
+        return context
 
     templates = Jinja2Templates(
         directory=str(TEMPLATES_DIR), context_processors=[project_context]
@@ -273,6 +298,9 @@ def create_app(project_root: Path, root_path: str = "") -> FastAPI:
     base = normalise_root_path(root_path)
     project = ProjectContext.load(project_root)
     store = RunStore(project.database_path)
+    # History recorded before run files existed is published now, rather than
+    # left invisible to colleagues until this project's next run.
+    store.ensure_index(project.root)
     processes = RunProcessManager(store)
 
     app = FastAPI(
@@ -430,11 +458,15 @@ def create_multi_app(
         """
         slug = request.path_params["slug"]
         entry = registry.resolve(slug)
-        if entry is None:
+        # Somebody else's project is a 404 here, not a page: this prefix opens
+        # the project's run store and supervises its processes, and theirs
+        # live in another pod. Theirs is under ``/view/{slug}``.
+        if entry is None or not entry.owned:
             raise HTTPException(status_code=404, detail=f"No such project: {slug}")
         store = app.state.stores.get(entry.slug)
         if store is None:
             store = RunStore(entry.database_path)
+            store.ensure_index(entry.root)
             app.state.stores[entry.slug] = store
             app.state.managers[entry.slug] = RunProcessManager(store)
         request.state.ui = RequestUI(
@@ -457,27 +489,47 @@ def create_multi_app(
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/", response_class=HTMLResponse)
-    def project_list(request: Request) -> HTMLResponse:
-        """Which working directory to open.
+    def home(request: Request) -> HTMLResponse:
+        """The app bar with the project picker open, and nothing else yet.
 
-        Rescans on every view so a fresh checkout appears without a restart.
+        There is no project to show until one is picked, so this is the
+        picker and no page under it: choosing a project navigates to it.
+        Rescans first, so a fresh checkout is in the list without a restart.
         Needs no pipeline, and so never takes the slot.
         """
-        entries = registry.scan()
+        registry.scan()
         return app.state.templates.TemplateResponse(
-            request,
-            "projects.html",
-            {
-                "entries": entries,
-                "release": registry.release,
-                "projects_root": str(projects_root),
-                "user": user,
-            },
+            request, "home.html", {"picker_open": True}
+        )
+
+    def resolve_view(request: Request) -> None:
+        """Turn ``/view/{slug}`` into somebody else's project, read-only.
+
+        Sets ``request.state.view`` and never ``request.state.ui``: a
+        :class:`~kptn_server.routes.view.RequestView` has no store, no
+        supervisor and no slot to reach for. Your own project is a 404 here,
+        so there is exactly one URL for each project.
+
+        A project listed with an error still resolves: its published history
+        needs none of what failed to load.
+        """
+        slug = request.path_params["slug"]
+        entry = registry.resolve(slug, servable_only=False)
+        if entry is None or entry.owned:
+            raise HTTPException(status_code=404, detail=f"No such project: {slug}")
+        request.state.view = RequestView(
+            entry=entry,
+            base=base,
+            project_base=f"{base}/view/{entry.slug}",
+            templates=app.state.templates,
         )
 
     app.include_router(health_router)  # project-independent, stays unprefixed
     register_routers(
         app, prefix="/p/{slug}", dependencies=[Depends(resolve_project)]
+    )
+    app.include_router(
+        view_router, prefix="/view/{slug}", dependencies=[Depends(resolve_view)]
     )
     return app
 

@@ -6,11 +6,18 @@ the worker passes ``RunStoreSink``, so those lines are never printed and never
 reach the captured log file. A run whose tasks were all cached and printed
 nothing of their own leaves a zero-byte file behind.
 
-The progress was never lost -- it is in ``run_events`` -- so the download is
+The progress was never lost -- it is in the event stream -- so the download is
 rendered from that stream rather than from whatever happened to be printed.
 ``ConsoleEventSink`` itself does the formatting, pointed at a buffer instead
 of stdout: the download matches the CLI because it *is* the CLI's formatter,
 not a second copy of its format that can drift.
+
+A run's ``.jsonl`` file holds every event and all of its output, so a download
+is rendered from that file alone (:func:`render_run_file`) -- the same bytes
+for the owner and for a colleague reading it from another pod. Runs recorded
+before run files existed have a ``.log`` of raw output and their events in
+``ui.db``, and :func:`render_run_log` splices the two together as it always
+did.
 """
 
 from __future__ import annotations
@@ -21,7 +28,8 @@ from typing import Iterable
 
 from kptn.runner.console import ConsoleEventSink
 from kptn.runner.events import EventKind, RunEvent
-from kptn_server.run_store import StoredEvent
+from kptn_server.run_files import RUN_FILE_SUFFIX
+from kptn_server.run_store import StoredEvent, read_run_file
 
 # The kinds ConsoleEventSink renders. Everything else in the stream is either
 # already in the captured bytes (``log``, ``warning``) or is run-level
@@ -35,14 +43,51 @@ _RENDERED_KINDS = frozenset(
 )
 
 
+def render_run_file(path: Path, run_id: str) -> bytes:
+    """The log of the run whose ``.jsonl`` file is *path*, as the CLI printed it."""
+    events, _ = read_run_file(path, run_id)
+    return render_events(events)
+
+
+def render_events(events: Iterable[StoredEvent]) -> bytes:
+    """Progress lines and output, in sequence order, from events that carry their text."""
+    buffer = io.StringIO()
+    sink = ConsoleEventSink(stream_out=buffer, stream_err=buffer)
+    out = bytearray()
+
+    def flush_rendered() -> None:
+        text = buffer.getvalue()
+        if text:
+            out.extend(text.encode("utf-8"))
+            buffer.seek(0)
+            buffer.truncate(0)
+
+    for stored in events:
+        if stored.kind in _RENDERED_KINDS:
+            sink.emit(_as_run_event(stored))
+            continue
+        text = _inline_text(stored)
+        if text:
+            flush_rendered()
+            out.extend(text.encode("utf-8", errors="replace"))
+    flush_rendered()
+    return bytes(out)
+
+
 def render_run_log(events: Iterable[StoredEvent], log_path: Path) -> bytes:
     """The run's log as the CLI would have printed it.
 
-    Captured output is spliced in at the offsets recorded with it, so task
-    output stays interleaved with the progress lines around it in the order
-    the run actually produced them -- sequence order, which is the order the
-    durable stream already guarantees.
+    A ``.jsonl`` run is rendered from its file (see :func:`render_run_file`);
+    *events* are not needed for it. For an older ``.log`` run, captured
+    output is spliced in at the offsets recorded with it, so task output
+    stays interleaved with the progress lines around it in the order the run
+    actually produced them -- sequence order, which is the order the durable
+    stream already guarantees.
     """
+    if log_path.suffix == RUN_FILE_SUFFIX:
+        run_id = log_path.stem
+        return render_run_file(log_path, run_id)
+
     buffer = io.StringIO()
     # One sink for both streams: a terminal interleaves stdout and stderr, and
     # a download with the [FAIL] lines sorted away from the tasks they belong
@@ -81,6 +126,12 @@ def render_run_log(events: Iterable[StoredEvent], log_path: Path) -> bytes:
                 continue
 
             if stored.log_start is None or stored.log_end is None:
+                # An R task's output, inline in the payload in runs of this
+                # vintage; it never reached the file.
+                inline = _inline_text(stored)
+                if inline:
+                    flush_rendered()
+                    out.extend(inline.encode("utf-8", errors="replace"))
                 continue
             if stored.log_end <= stored.log_start:
                 continue
@@ -113,6 +164,16 @@ def render_run_log(events: Iterable[StoredEvent], log_path: Path) -> bytes:
             handle.close()
 
     return bytes(out)
+
+
+def _inline_text(stored: StoredEvent) -> str:
+    """Output an event carries itself: read from a run file, or inline from R."""
+    if stored.kind != EventKind.LOG.value:
+        return ""
+    if stored.text is not None:
+        return stored.text
+    message = stored.payload.get("message")
+    return message if isinstance(message, str) else ""
 
 
 def _read_tail(handle: io.BufferedReader, start: int) -> bytes:

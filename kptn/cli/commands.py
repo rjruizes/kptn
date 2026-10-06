@@ -65,7 +65,7 @@ def _run_recorded(
     """Run *pipeline* in this process, recorded as a UI-started run would be.
 
     The run, its events, and its captured output go to the project's run store
-    (``.kptn/ui.db`` and ``.kptn/runs/<run_id>.log``) through the UI worker's
+    (``.kptn/ui.db`` and ``.kptn/runs/<run_id>.jsonl``) through the UI worker's
     own :func:`~kptn_server.worker.execute_run`, so ``kptn ui`` lists the run
     and serves its log like any other. Output still reaches the terminal.
 

@@ -1,0 +1,77 @@
+{#
+  The project picker: the first control in the app bar of a server that
+  offers more than one project, on every page. ``picker`` comes from the
+  context processor in ``app.py``; a single-project server has none, and
+  renders nothing here.
+
+  A ``<details>`` rather than a ``<select>``, for three reasons. Each choice
+  is a link -- to ``/p/<slug>/`` for your own working directories, to
+  ``/view/<slug>/`` for everyone else's -- so it works with JavaScript off and
+  opens in a new tab like any link. It can be *rendered* open, which is what
+  the home page does: there is nothing to show until a project is chosen,
+  and a native select can only be opened by the reader's own click. And it
+  has room for what a select cannot hold: the release, two labelled groups,
+  and why a broken working directory cannot be opened.
+
+  ``app.js`` adds what ``<details>`` lacks as a menu: Escape and a click
+  outside close it.
+#}
+{% if picker %}
+{% set mine = picker.entries | selectattr("owned") | list %}
+{% set others = picker.entries | rejectattr("owned") | list %}
+{% set chosen = picker.entries | selectattr("slug", "equalto", picker.current) | first %}
+<details class="project-picker" data-project-picker {% if picker_open %}open{% endif %}>
+  <summary class="project-picker__summary">
+    {% if chosen %}
+    <code class="project-picker__current">{{ chosen.slug }}</code>
+    {% if not chosen.owned %}<span class="app-bar__readonly" title="Read from the files this project's runs publish. Nothing here can start, stop, or change a run.">read-only</span>{% endif %}
+    {% else %}
+    <span class="project-picker__prompt">Choose a project</span>
+    {% endif %}
+  </summary>
+
+  <div class="project-picker__menu">
+    {% if picker.release %}
+    <p class="project-picker__release muted">Release <code>{{ picker.release }}</code></p>
+    {% endif %}
+
+    <p class="project-picker__heading">Yours</p>
+    {% if mine %}
+    <ul class="project-picker__list" id="my-projects">
+      {% for entry in mine %}
+      <li>
+        {% if entry.error %}
+        <span class="project-picker__item project-picker__item--broken" title="{{ entry.error }}">
+          <code>{{ entry.slug }}</code>
+          <span class="project-picker__error">{{ entry.error }}</span>
+        </span>
+        {% else %}
+        <a class="project-picker__item" href="{{ base }}/p/{{ entry.slug }}/"
+           {% if entry.slug == picker.current %}aria-current="page"{% endif %}><code>{{ entry.slug }}</code></a>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="project-picker__empty muted">
+      None found. Searched <code>{{ picker.projects_root }}</code> for directories
+      named <code>{{ picker.user }}</code> or <code>{{ picker.user }}_*</code>
+      containing a <code>pyproject.toml</code> with a <code>[tool.kptn]</code>
+      pipeline entry.
+    </p>
+    {% endif %}
+
+    {% if others %}
+    <p class="project-picker__heading">Other people's <span class="muted">· read-only</span></p>
+    <ul class="project-picker__list" id="other-projects">
+      {% for entry in others %}
+      <li>
+        <a class="project-picker__item" href="{{ base }}/view/{{ entry.slug }}/"
+           {% if entry.slug == picker.current %}aria-current="page"{% endif %}><code>{{ entry.slug }}</code></a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+</details>
+{% endif %}

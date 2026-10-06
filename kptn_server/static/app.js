@@ -524,10 +524,33 @@
     window.addEventListener("pagehide", stop);
   }
 
+  function initProjectPicker() {
+    /* The project picker is a <details>, which opens and closes on its own
+     * and needs nothing from here to work. What it lacks as a menu is the
+     * two ways out a reader expects: Escape, and a click anywhere else. */
+    var picker = document.querySelector("[data-project-picker]");
+    if (!picker) {
+      return;
+    }
+    document.addEventListener("click", function (event) {
+      if (picker.open && !picker.contains(event.target)) {
+        picker.open = false;
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && picker.open) {
+        picker.open = false;
+        picker.querySelector("summary").focus();
+      }
+    });
+  }
+
   window.kptn.initConsole = initConsole;
   window.kptn.initProfileNav = initProfileNav;
   window.kptn.initRunLock = initRunLock;
+  window.kptn.initProjectPicker = initProjectPicker;
   initConsole();
   initProfileNav();
   initRunLock();
+  initProjectPicker();
 })();
