@@ -26,7 +26,6 @@
   <header class="app-bar">
     <div class="app-bar__inner">
       {% include "_project_picker.html" %}
-      <span class="app-bar__version app-bar__version--end" title="kptn version serving this page">kptn {{ kptn_version }}</span>
     </div>
   </header>
 
@@ -35,5 +34,7 @@
       {% include "_error.html" %}
     </section>
   </main>
+
+  {% include "_footer.html" %}
 </body>
 </html>

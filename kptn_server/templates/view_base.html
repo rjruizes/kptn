@@ -28,12 +28,13 @@
       <nav class="app-bar__nav" aria-label="Main">
         <a href="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
       </nav>
-      <span class="app-bar__version" title="kptn version serving this page">kptn {{ kptn_version }}</span>
     </div>
   </header>
 
   <main class="app-main">
     {% block content %}{% endblock %}
   </main>
+
+  {% include "_footer.html" %}
 </body>
 </html>

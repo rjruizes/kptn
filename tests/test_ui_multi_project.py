@@ -86,6 +86,23 @@ def test_a_project_page_has_the_picker_closed_left_of_the_profile(
     assert body.index("project-picker") < body.index('id="profile-select"')
 
 
+def test_the_release_leads_the_picker_and_a_divider_splits_the_list(
+    client: TestClient,
+) -> None:
+    body = client.get(f"/p/{USER}_main/").text
+    picker = _picker(body)
+
+    release = body.index('class="project-picker-path__release"')
+    assert body[release:].startswith('class="project-picker-path__release" title="Release">r2<')
+    assert release < body.index('<details class="project-picker"')
+    # Yours, a divider, then everyone else's -- no headings.
+    assert (
+        picker.index('id="my-projects"')
+        < picker.index("project-picker__divider")
+        < picker.index('id="other-projects"')
+    )
+
+
 def test_the_picker_lists_everyone_on_every_page(client: TestClient) -> None:
     for path in (f"/p/{USER}_main/", f"/p/{USER}_main/plan", "/view/someoneelse_main/"):
         picker = _picker(client.get(path).text)

@@ -10,8 +10,12 @@
   opens in a new tab like any link. It can be *rendered* open, which is what
   the home page does: there is nothing to show until a project is chosen,
   and a native select can only be opened by the reader's own click. And it
-  has room for what a select cannot hold: the release, two labelled groups,
-  and why a broken working directory cannot be opened.
+  has room for what a select cannot hold: a divider between your working
+  directories and everyone else's, and why a broken one cannot be opened.
+
+  The release sits outside the dropdown, as the first segment of a path --
+  ``r1 / rruizesparza_main`` -- since it is the scope of the list, not a
+  choice in it.
 
   ``app.js`` adds what ``<details>`` lacks as a menu: Escape and a click
   outside close it.
@@ -20,6 +24,11 @@
 {% set mine = picker.entries | selectattr("owned") | list %}
 {% set others = picker.entries | rejectattr("owned") | list %}
 {% set chosen = picker.entries | selectattr("slug", "equalto", picker.current) | first %}
+<div class="project-picker-path">
+{% if picker.release %}
+<span class="project-picker-path__release" title="Release">{{ picker.release }}</span>
+<span class="project-picker-path__separator" aria-hidden="true">/</span>
+{% endif %}
 <details class="project-picker" data-project-picker {% if picker_open %}open{% endif %}>
   <summary class="project-picker__summary">
     {% if chosen %}
@@ -31,11 +40,6 @@
   </summary>
 
   <div class="project-picker__menu">
-    {% if picker.release %}
-    <p class="project-picker__release muted">Release <code>{{ picker.release }}</code></p>
-    {% endif %}
-
-    <p class="project-picker__heading">Yours</p>
     {% if mine %}
     <ul class="project-picker__list" id="my-projects">
       {% for entry in mine %}
@@ -54,7 +58,7 @@
     </ul>
     {% else %}
     <p class="project-picker__empty muted">
-      None found. Searched <code>{{ picker.projects_root }}</code> for directories
+      None of your working directories found. Searched <code>{{ picker.projects_root }}</code> for directories
       named <code>{{ picker.user }}</code> or <code>{{ picker.user }}_*</code>
       containing a <code>pyproject.toml</code> with a <code>[tool.kptn]</code>
       pipeline entry.
@@ -62,7 +66,7 @@
     {% endif %}
 
     {% if others %}
-    <p class="project-picker__heading">Other people's <span class="muted">· read-only</span></p>
+    <hr class="project-picker__divider">
     <ul class="project-picker__list" id="other-projects">
       {% for entry in others %}
       <li>
@@ -74,4 +78,5 @@
     {% endif %}
   </div>
 </details>
+</div>
 {% endif %}
