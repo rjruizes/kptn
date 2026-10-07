@@ -1,0 +1,20 @@
+{#
+  app.js and the modules it imports, for every shell that loads it.
+
+  app.js is an ES module and imports by bare specifier ("kptn/auto-scroll").
+  The import map turns each specifier into a versioned URL, the way every
+  other asset link carries ``?v=`` and the file's content hash
+  (``kptn_server.assets``): a relative import from inside a module could not
+  carry the query, and a browser would keep the old module after an
+  upgrade. A module added under static/ gets an entry here. ``tojson`` makes
+  each URL safe inside the <script> element, where HTML escaping would not
+  be undone.
+
+  The map has to come before any module script, so it and app.js live
+  together here rather than in each shell's <head>.
+#}
+{%- set modules = {
+  "kptn/auto-scroll": base ~ "/static/auto-scroll.js?v=" ~ asset_version("auto-scroll.js"),
+} %}
+<script type="importmap">{{ {"imports": modules}|tojson }}</script>
+<script type="module" src="{{ base }}/static/app.js?v={{ asset_version('app.js') }}"></script>

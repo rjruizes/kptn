@@ -1247,9 +1247,8 @@ def test_log_download_sits_in_the_header_after_retry(
     """The download is a control on the run, so it sits with the controls.
 
     It used to live in the console bar, beside "Follow output". They are not
-    the same kind of thing: one decides where output goes on screen, the
-    other takes the run away with you, next to Retry. The console bar keeps
-    only the toggles for watching the output.
+    the same kind of thing: one decided where output goes on screen, the
+    other takes the run away with you, next to Retry.
     """
     body = client.get(f"/runs/{completed_run.run_id}").text
 
@@ -1263,10 +1262,42 @@ def test_log_download_sits_in_the_header_after_retry(
         "the log download renders before Retry, not to its right"
     )
 
-    bar = re.search(r'<header class="console__bar">(.*?)</header>', body, re.S)
-    assert bar, "the console bar is gone"
-    assert 'id="follow-output"' in bar.group(1)
-    assert "/log" not in bar.group(1), "the download is still in the console bar too"
+    # Where the console bar used to be: above the event list.
+    console = body[body.index('class="console"') : body.index('id="console-events"')]
+    assert "/log" not in console, "the download is still in the console too"
+
+
+def test_following_the_output_is_not_a_toggle(
+    client, active_run: RunRecord
+) -> None:
+    """The console follows its output on its own; there is nothing to switch.
+
+    app.js keeps the newest row in view while the reader is at the bottom of
+    the page, stops when they scroll up, and resumes when they scroll back
+    down. A checkbox for the same thing only disagreed with where the reader
+    had actually scrolled.
+    """
+    body = client.get(f"/runs/{active_run.run_id}").text
+
+    assert 'id="follow-output"' not in body
+    assert "Follow output" not in body
+    assert 'class="console__bar"' not in body[body.index('class="console"') : body.index('id="console-events"')]
+
+
+def test_the_run_page_maps_auto_scroll_for_app_js(
+    client, active_run: RunRecord
+) -> None:
+    """app.js imports the console's auto-scroll by bare specifier, so the run
+    page must map that specifier, and must do it before app.js loads: an
+    import map that arrives after the first module script is ignored."""
+    body = client.get(f"/runs/{active_run.run_id}").text
+
+    importmap_at = body.find('<script type="importmap">')
+    app_at = body.find('<script type="module" src="/static/app.js?v=')
+    assert importmap_at != -1, "the run page has no import map"
+    assert app_at != -1, "the run page does not load app.js as a module"
+    assert importmap_at < app_at, "the import map comes after app.js"
+    assert '"kptn/auto-scroll"' in body[importmap_at:app_at]
 
 
 def test_the_log_download_is_offered_exactly_once(
@@ -1385,7 +1416,7 @@ def test_a_live_run_offers_a_sound_toggle_that_is_on_by_default(
     """A run that ends while its page is open plays a tone; the reader can mute it.
 
     The toggle sits in the settings modal, is on unless the reader has turned
-    it off, and is remembered the way Follow is. The tones are made by app.js
+    it off, and is remembered across pages. The tones are made by app.js
     from the stream's final status frame, so there is no server-side output to
     assert on beyond the control itself.
     """
@@ -1399,9 +1430,9 @@ def test_a_live_run_offers_a_sound_toggle_that_is_on_by_default(
     assert re.search(r"\bchecked\b", toggle.group(0)), "Sound is not on by default"
     assert "Sound" in dialog.group(1)
 
-    bar = re.search(r'<header class="console__bar">(.*?)</header>', body, re.S)
-    assert bar, "the console bar is gone"
-    assert 'id="run-sound"' not in bar.group(1), "Sound is still in the console bar"
+    # Where the console bar used to be: above the event list.
+    console = body[body.index('class="console"') : body.index('id="console-events"')]
+    assert 'id="run-sound"' not in console, "Sound is still in the console"
 
 
 def test_the_settings_gear_sits_right_of_history(client) -> None:

@@ -34,14 +34,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import kptn
 from kptn_server.app import create_app, create_multi_app
+from kptn_server.assets import asset_version
 from kptn_server.routes import inspect as inspect_routes
 from kptn_server.routes import lineage as lineage_routes
 
 pytestmark = pytest.mark.ui_hygiene
-
-VERSION = kptn.__version__
 
 
 PYPROJECT = """\
@@ -145,7 +143,7 @@ def test_the_lineage_link_renders_a_lineage_page(client: TestClient) -> None:
     assert "<title>kptn Lineage</title>" in body
     # Vendored assets only -- the page pulls Alpine from this server's own
     # /static mount, never from a CDN.
-    assert f'src="/static/alpine.min.js?v={VERSION}"' in body
+    assert f'src="/static/alpine.min.js?v={asset_version("alpine.min.js")}"' in body
     # The analyzer really parsed the project's SQL: the table it creates is
     # named in the rendered graph.
     assert "widgets" in body

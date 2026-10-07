@@ -21,6 +21,7 @@ five real seconds for it.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -35,6 +36,7 @@ from fastapi.testclient import TestClient
 from kptn_server import app as app_module
 from kptn_server import processes as processes_module
 from kptn_server.app import STATIC_DIR, TEMPLATES_DIR, create_app
+from kptn_server.assets import asset_version
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
 from kptn_server.project import ProjectContext, ProjectError
 from kptn_server.run_store import (
@@ -450,7 +452,9 @@ def test_reconcile_loop_survives_a_failing_pass(
 # -- assets and the base page ---------------------------------------------
 
 
-@pytest.mark.parametrize("asset", ["htmx.min.js", "app.css", "app.js"])
+@pytest.mark.parametrize(
+    "asset", ["htmx.min.js", "app.css", "app.js", "auto-scroll.js"]
+)
 def test_vendored_assets_are_served(ui_project: Path, asset: str) -> None:
     client = TestClient(create_app(ui_project))
 
@@ -460,29 +464,93 @@ def test_vendored_assets_are_served(ui_project: Path, asset: str) -> None:
     assert response.content
 
 
-def test_every_asset_link_carries_the_version_query() -> None:
-    """Every vendored stylesheet and script link is cache-busted by version.
+def test_every_asset_link_carries_its_content_hash() -> None:
+    """Every vendored stylesheet and script link is cache-busted by contents.
 
-    ``StaticFiles`` sends no ``Cache-Control``, so a browser heuristically
-    caches ``app.js`` and keeps running the old one after kptn is upgraded.
-    ``?v={{ kptn_version }}`` changes the URL on every release. This scans the
-    template sources, so a new page that forgets the query fails here.
+    The query is ``asset_version`` of the very file the link names, so a
+    link that versions itself by some other file -- copied from the line
+    above and only half edited -- would keep a stale copy alive and fails
+    here. This scans the template sources, so a new page that forgets the
+    query fails here too. The lineage page's ``static_prefix`` links count.
     """
-    link = re.compile(r'(?:href|src)="[^"]*/static/[^"]*"')
+    link = re.compile(
+        r'(?:href|src)="[^"]*(?:/static/|\{\{ static_prefix \}\}/)([^"?]+)([^"]*)"'
+    )
     links = [
-        (template.name, match)
+        (template.name, asset, query)
         for template in sorted(TEMPLATES_DIR.iterdir())
         if template.is_file()
-        for match in link.findall(template.read_text())
+        for asset, query in link.findall(template.read_text())
     ]
 
     assert links, "no asset links found -- has the template layout changed?"
+    assert any(asset == "alpine.min.js" for _, asset, _ in links), (
+        "the lineage page's static_prefix links were not scanned"
+    )
     stale = [
-        (name, match)
-        for name, match in links
-        if not match.endswith('?v={{ kptn_version }}"')
+        (name, asset, query)
+        for name, asset, query in links
+        if query != f"?v={{{{ asset_version('{asset}') }}}}"
     ]
-    assert not stale, f"asset links without the version query: {stale}"
+    assert not stale, f"asset links not versioned by their own contents: {stale}"
+
+
+@pytest.mark.parametrize("module", ["app.js", "auto-scroll.js"])
+def test_modules_are_served_as_javascript(ui_project: Path, module: str) -> None:
+    """A module script is refused unless it arrives with a JavaScript MIME
+    type -- unlike a classic script, which a browser runs regardless."""
+    response = TestClient(create_app(ui_project)).get(f"/static/{module}")
+
+    assert "javascript" in response.headers["content-type"]
+
+
+def _import_map(body: str) -> dict[str, str]:
+    match = re.search(r'<script type="importmap">(.*?)</script>', body, re.S)
+    assert match, "the page has no import map"
+    return json.loads(match.group(1))["imports"]
+
+
+def test_every_module_import_is_mapped_and_versioned(ui_project: Path) -> None:
+    """Each bare specifier a module imports resolves to a versioned URL.
+
+    An unmapped specifier fails the importing module outright -- app.js and
+    everything it sets up -- and a relative import could not carry the
+    ``?v=`` query, so it is not allowed either.
+    """
+    imported = {
+        (path.name, specifier)
+        for path in STATIC_DIR.glob("*.js")
+        if not path.name.endswith(".min.js")
+        for specifier in re.findall(
+            r'^\s*(?:import\s+|(?:import|export)\b[^;"\']*\bfrom\s+)["\']([^"\']+)["\']',
+            path.read_text(),
+            re.M,
+        )
+    }
+    assert imported, "no module imports found -- has app.js stopped importing?"
+    relative = [item for item in imported if item[1].startswith((".", "/"))]
+    assert not relative, f"relative imports drop the version query: {relative}"
+
+    imports = _import_map(TestClient(create_app(ui_project)).get("/").text)
+
+    unmapped = [item for item in imported if item[1] not in imports]
+    assert not unmapped, f"imports missing from _modules.html: {unmapped}"
+    for specifier, url in imports.items():
+        name = url.split("/static/", 1)[1].split("?")[0]
+        assert (STATIC_DIR / name).is_file()
+        assert url.endswith(f"?v={asset_version(name)}"), f"{specifier} is not versioned"
+
+
+def test_app_js_is_loaded_only_through_the_modules_partial() -> None:
+    """The import map must precede the first module script, so a shell that
+    loaded app.js itself could put it ahead of the map, or leave the map out."""
+    loaders = sorted(
+        template.name
+        for template in TEMPLATES_DIR.iterdir()
+        if template.is_file() and "/static/app.js" in template.read_text()
+    )
+
+    assert loaders == ["_modules.html"]
 
 
 def test_static_files_are_mounted_package_relative(

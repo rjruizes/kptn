@@ -21,19 +21,14 @@
          data-last-sequence="{{ last_sequence }}"
          data-terminal="{{ 'true' if is_terminal else 'false' }}">
   {#
-    No heading. "Console" named the thing the reader was already looking at,
-    and the counters and the log download moved up beside the controls that
-    act on the run. What is left is the control that belongs to watching
-    the output: where it goes on screen. Whether a run's end is heard is a
+    No heading and no bar. "Console" named the thing the reader was already
+    looking at, and the counters and the log download moved up beside the
+    controls that act on the run. Following the output is not a control
+    either: app.js follows while the reader is at the bottom of the page and
+    stops when they scroll up to read. Whether a run's end is heard is a
     standing preference, so Sound lives in the settings modal
-    (``_settings.html``) rather than here.
+    (``_settings.html``).
   #}
-  <header class="console__bar">
-    <label class="console__follow">
-      <input type="checkbox" id="follow-output" checked> Follow output
-    </label>
-  </header>
-
   <ol class="console__events" id="console-events">
     {% for event in events %}{{ event_row(event) }}{% endfor %}
   </ol>

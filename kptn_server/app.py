@@ -53,12 +53,12 @@ from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from starlette.types import Scope
 
 import kptn
+from kptn_server.assets import STATIC_DIR, VersionedStaticFiles, asset_version
 from kptn_server.context import RequestUI, RequestUIMiddleware
 from kptn_server.origin import enforce_same_origin
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
@@ -76,7 +76,6 @@ _LOGGER = logging.getLogger(__name__)
 # not served out of the developer's working directory.
 _PACKAGE_DIR = Path(__file__).parent
 TEMPLATES_DIR = _PACKAGE_DIR / "templates"
-STATIC_DIR = _PACKAGE_DIR / "static"
 
 
 async def _sleep(delay: float) -> None:
@@ -205,6 +204,11 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     too. It answers "which kptn is this server running?" from the page itself,
     since an install that silently kept the old code looks the same otherwise.
 
+    ``asset_version`` is the ``?v=`` on every asset link: a hash of the
+    file's contents, not the kptn version, so a wheel reinstalled under the
+    same version still busts the browser's cache. See
+    :mod:`kptn_server.assets`.
+
     ``picker`` is the project picker's contents, on a server that offers more
     than one project. Supplied here for the same reason as ``active_run``:
     the picker is in the app bar of every page, error pages included, and a
@@ -242,6 +246,7 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     templates.env.globals["base"] = base
     # typeshed narrows Jinja's globals to the default namespace's value types.
     templates.env.globals["kptn_version"] = kptn.__version__  # ty: ignore[invalid-assignment]
+    templates.env.globals["asset_version"] = asset_version  # ty: ignore[invalid-assignment]
     return templates
 
 
@@ -382,7 +387,7 @@ def create_app(project_root: Path, root_path: str = "") -> FastAPI:
 
     app.add_middleware(RequestUIMiddleware, resolver=resolve_ui)
 
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", VersionedStaticFiles(directory=str(STATIC_DIR)), name="static")
     # ``/healthz`` is not among the project-scoped routers any more -- it has
     # to answer without a project in multi-project mode -- so single-project
     # mode includes it here, unprefixed, keeping both endpoints where they
@@ -486,7 +491,7 @@ def create_multi_app(
     # See :func:`kptn_server.routes.support.error_response`.
     app.middleware("http")(enforce_same_origin)
     app.add_exception_handler(ProjectError, _unloadable_project)
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", VersionedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request) -> HTMLResponse:

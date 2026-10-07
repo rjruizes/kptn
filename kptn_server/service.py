@@ -41,7 +41,6 @@ from typing import Any, Optional, Tuple
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-import kptn
 from kptn.cli import (
     _build_lineage_payload,
     _infer_lineage_dialect,
@@ -51,6 +50,7 @@ from kptn.lineage import SqlLineageAnalyzer, SqlLineageError
 from kptn.lineage.html_renderer import render_lineage_html
 from kptn.read_config import read_config
 from kptn.util.runtime_config import RuntimeConfig, RuntimeConfigError
+from kptn_server.assets import asset_version
 
 _template_env: Optional[Environment] = None
 
@@ -444,7 +444,7 @@ def _get_template_env() -> Environment:
             autoescape=select_autoescape(["html", "xml"]),
         )
         # Cache-busts the vendored asset links, as in the UI's own environment.
-        _template_env.globals["kptn_version"] = kptn.__version__
+        _template_env.globals["asset_version"] = asset_version
     return _template_env
 
 

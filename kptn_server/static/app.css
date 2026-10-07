@@ -619,14 +619,6 @@ button:disabled {
   margin-bottom: 10px;
 }
 
-/* The only thing left in the bar, so it sits at the right on its own rather
- * than being pushed there by a heading that no longer exists. */
-.console__follow {
-  margin-left: auto;
-  color: var(--ink-muted);
-  font-size: 12px;
-}
-
 /* The console is the one scrolling region in the UI: a long run must not turn
  * the whole page into a mile of output. */
 /* No height and no scroller of its own: the console is as long as the run,
