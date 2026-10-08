@@ -1,0 +1,8 @@
+{
+  // UI templates keep the plain .html suffix: kptn_server/service.py picks
+  // autoescaping by file extension. Needs the "Jinja2" extension for the
+  // Jinja2 language.
+  "file_types": {
+    "Jinja2": ["**/kptn_server/templates/*.html"]
+  }
+}

@@ -19,7 +19,7 @@ What is served, and why exactly this set:
 
 ``GET /table-columns``, ``POST /table-preview-query``
     Called by the lineage page's own JavaScript (see
-    ``templates/lineage.html.jinja``) to expand a node and to run the
+    ``templates/lineage.html``) to expand a node and to run the
     reader's ad-hoc SQL against the preview connection. They are here because
     the lineage page does not work without them, not for their own sake.
 
@@ -72,7 +72,7 @@ FOREIGN_CONFIG_DETAIL = (
 class TablePreviewQuery(BaseModel):
     """Body of ``POST /table-preview-query``, as the lineage page sends it."""
 
-    configPath: str  # noqa: N815 - wire format, read by lineage.html.jinja
+    configPath: str  # noqa: N815 - wire format, read by lineage.html
     sql: str
     table: Optional[str] = None
     limit: Optional[int] = None

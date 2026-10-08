@@ -519,7 +519,7 @@ def render_lineage_page(
     table_map = build_table_file_map(config_path)
     static_prefix = f"{base_url}/static" if base_url else "/static"
     env = _get_template_env()
-    template = env.get_template("lineage.html.jinja")
+    template = env.get_template("lineage.html")
     rendered = template.render(
         lineage_html=lineage_html,
         table_map_json=json.dumps(table_map),
