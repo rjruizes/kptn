@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Callable, Union
 
 if TYPE_CHECKING:
     from kptn.graph.decorators import TaskSpec, SqlTaskSpec, RTaskSpec
+    from kptn.sources.spec import SourceSpec, SourceViewsSpec
 
 
 @dataclass
@@ -71,5 +72,20 @@ class ConfigNode:
     name: str = "config"                # sentinel label — topo_sort uses n.name
 
 
+@dataclass
+class SourceNode:
+    spec: "SourceSpec"
+    name: str                   # = the source's name, also its _bronze/ folder
+
+
+@dataclass
+class SourceViewsNode:
+    spec: "SourceViewsSpec"
+    name: str                   # e.g. "bronze_views" for kptn.source_views(Stage("bronze", ...))
+
+
 # Union of all node types present after Epic 1 Stories 1.1–1.7.
-AnyNode = Union[TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode, ConfigNode]
+AnyNode = Union[
+    TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode, ConfigNode,
+    SourceNode, SourceViewsNode,
+]
