@@ -43,6 +43,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
+from kptn_server.console_layout import ConsoleLayout
 from kptn_server.log_render import render_events
 from kptn_server.registry import ProjectEntry
 from kptn_server.routes.runs import (
@@ -50,7 +51,7 @@ from kptn_server.routes.runs import (
     _cursor,
     _event_frame,
     _status_frame,
-    console_event,
+    build_console,
     render_event,
 )
 from kptn_server.routes.support import error_response
@@ -231,7 +232,6 @@ def view_run(request: Request, run_id: str) -> HTMLResponse:
         return _no_such_run(request, run_id)
 
     stored, path, problem = _read_run(current.entry, run)
-    events = [console_event(event, path) for event in stored]
     is_terminal = run.status in TERMINAL_STATUSES
     return current.templates.TemplateResponse(
         request,
@@ -241,14 +241,14 @@ def view_run(request: Request, run_id: str) -> HTMLResponse:
             "project_base": current.project_base,
             "nav_active": "run",
             "run": run,
-            "events": events,
+            "items": build_console(stored, path),
             # From the file rather than the index: the file is never behind
             # the index, and the console's own counters are recounted from
             # these same events as the stream appends to them.
             "counters": counters(_tallies(stored)),
             "is_terminal": is_terminal,
             "not_reporting": not_reporting(run),
-            "last_sequence": events[-1]["sequence"] if events else 0,
+            "last_sequence": stored[-1].sequence if stored else 0,
             "problem": problem,
         },
     )
@@ -301,6 +301,9 @@ async def view_frames(
     offset = 0
     cursor = after
     last_output_at = time.monotonic()
+    # The file is read from its start, so the history before the cursor
+    # passes through the loop below and primes this as it goes.
+    layout = ConsoleLayout()
 
     while True:
         run = await asyncio.to_thread(_listed_run, entry, run_id)
@@ -320,9 +323,14 @@ async def view_frames(
         sent = False
         for event in events:
             if event.sequence <= cursor:
+                # Already on the page, and placed there: the layout follows
+                # it so what comes next lands where the page expects.
+                layout.place(event)
                 continue
             yield _event_frame(
-                render_event(templates, event, path), event.kind, event.sequence
+                render_event(templates, event, path, layout.place(event)),
+                event.kind,
+                event.sequence,
             )
             cursor = event.sequence
             sent = True

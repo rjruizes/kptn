@@ -854,3 +854,52 @@ def test_execute_sql_task_hash_error_in_staleness_forces_rerun(tmp_path: Path) -
         with patch("kptn.runner.executor._try_restore"):
             execute(resolved, FakeStateStore(), duckdb_factory=factory, no_cache=False)
     conn.execute.assert_called_once_with("SELECT 1")
+
+
+# ─── Group paths on task events ───────────────────────────────────────────────
+
+
+def _nested_resolved() -> tuple[ResolvedGraph, dict[str, TaskNode]]:
+    """``default`` > (``inner`` > a >> b) >> (``st`` stage > ``p2`` > c, d) >> e."""
+    from kptn.graph.composition import Stage
+    from kptn.graph.pipeline import Pipeline
+
+    nodes = {name: _make_task_node(name) for name in "abcde"}
+    inner = Pipeline("inner", Graph(nodes=[nodes["a"], nodes["b"]], edges=[(nodes["a"], nodes["b"])]))
+    stage = Stage("st", Pipeline("p2", Graph._from_node(nodes["c"])), Graph._from_node(nodes["d"]))
+    root = Pipeline("default", inner >> stage >> Graph._from_node(nodes["e"]))
+    return ResolvedGraph(graph=root, pipeline="default", storage_key="kptn"), nodes
+
+
+def test_task_events_carry_their_enclosing_groups_outermost_first() -> None:
+    """The console folds a task inside the pipelines and stages around it."""
+    sink = RecordingSink()
+    resolved, _ = _nested_resolved()
+
+    execute(resolved, FakeStateStore(), emitter=EventEmitter("run-1", "default", None, sink))
+
+    started = {
+        event.task_name: event.payload.get("groups")
+        for event in sink.events
+        if event.kind is EventKind.TASK_STARTED
+    }
+    assert started == {
+        "a": ["inner"],
+        "b": ["inner"],
+        "c": ["st", "p2"],
+        "d": ["st"],
+        # The run's own pipeline is never named: it encloses everything.
+        "e": None,
+    }
+
+
+def test_skipped_task_events_carry_their_groups_too() -> None:
+    sink = RecordingSink()
+    resolved, _ = _nested_resolved()
+
+    with patch("kptn.runner.executor.is_stale", return_value=(False, "cached")):
+        execute(resolved, FakeStateStore(), emitter=EventEmitter("run-1", "default", None, sink))
+
+    skipped = {event.task_name: event.payload.get("groups") for event in sink.events}
+    assert skipped["c"] == ["st", "p2"]
+    assert "groups" not in sink.events[-1].payload

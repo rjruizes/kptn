@@ -6,6 +6,12 @@
   loop by the console. Both paths therefore produce byte-identical markup: what
   the stream appends is exactly what a page reload would have rendered.
 
+  The folds -- one per pipeline or stage, one per task -- are here for the
+  same reason. The stream sends a fold as ``fold_shell``, open and empty, and
+  appends rows into its body; the page renders the same markup around the
+  rows it already holds. Where every row goes is decided in
+  ``kptn_server.console_layout``, never here and never in app.js.
+
   Every value here goes through Jinja's autoescaping. ``event.text`` is
   pipeline output -- untrusted bytes read out of the run's log file -- and this
   is the only place it is turned into markup. Do not add ``| safe`` to it.
@@ -14,11 +20,68 @@
 <li class="event event--{{ event.kind }}{% if event.severity %} event--{{ event.severity }}{% endif %}{% if event.status %} event--{{ event.status }}{% endif %}"
     id="event-{{ event.sequence }}"
     data-sequence="{{ event.sequence }}"
-    data-kind="{{ event.kind }}">
+    data-kind="{{ event.kind }}"{% if event.is_log %}
+    data-lines="{{ event.lines }}"{% endif %}>
   <span class="event__seq">{{ event.sequence }}</span>
   <time class="event__clock" datetime="{{ event.timestamp }}">{{ event.clock }}</time>
-  <span class="event__kind">{{ event.label }}</span>
-  {% if event.task %}<span class="event__task">{{ event.task }}</span>{% endif %}
+  {% if event.label %}<span class="event__kind">{{ event.label }}</span>{% endif %}
+  {% if event.task and not event.in_task %}<span class="event__task">{{ event.task }}</span>{% endif %}
   {% if event.text %}{% if event.is_log %}<pre class="event__text">{{ event.text }}</pre>{% else %}<span class="event__summary">{{ event.text }}</span>{% endif %}{% endif %}
 </li>
+{%- endmacro %}
+
+
+{#
+  The heading's outcome: "succeeded 1m 42s". Its own element, with an id,
+  because the task finishes after its fold was sent: the ``task_finished``
+  frame replaces just this.
+#}
+{% macro fold_outcome(fold, finished) -%}
+<span class="fold__outcome" id="{{ fold.id }}-outcome">
+  {%- if finished and finished.status %}<span class="fold__status fold__status--{{ finished.status }}">{{ finished.status }}</span>{% endif %}
+  {%- if finished and finished.duration %} <span class="fold__duration">{{ finished.duration }}</span>{% endif -%}
+</span>
+{%- endmacro %}
+
+{#
+  How much a task printed. app.js keeps these up to date as rows stream in,
+  from each row's ``data-lines`` -- the number in the attribute is the one it
+  adds to, the text is what it writes back, in this same form.
+#}
+{% macro fold_counts(fold) -%}
+<span class="fold__count" data-fold-lines="{{ fold.lines }}"{% if not fold.lines %} hidden{% endif %}>{{ "{:,}".format(fold.lines) }} {{ "line" if fold.lines == 1 else "lines" }}</span>
+<span class="fold__count fold__count--warnings" data-fold-warnings="{{ fold.warnings }}"{% if not fold.warnings %} hidden{% endif %}>{{ "{:,}".format(fold.warnings) }} {{ "warning" if fold.warnings == 1 else "warnings" }}</span>
+{%- endmacro %}
+
+{% macro fold_markup(fold, open, body) -%}
+<li class="fold fold--{{ fold.kind }}" id="{{ fold.id }}" data-fold="{{ fold.kind }}">
+  <details{% if open %} open{% endif %}>
+    <summary class="fold__head">
+      <span class="fold__name">{{ fold.key }}</span>
+      {%- if fold.kind == "task" %}
+      {{ fold_outcome(fold, fold.outcome) }}
+      {{ fold_counts(fold) }}
+      <button type="button" class="fold__jump" data-fold-jump
+              title="Jump to the end of this task's log"
+              aria-label="Jump to the end of {{ fold.key }}'s log">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"
+             fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2.5v11M4 9.5l4 4 4-4"/>
+        </svg>
+      </button>
+      {%- endif %}
+    </summary>
+    <ol class="fold__body" id="{{ fold.body_id }}"><li class="fold__gutter" data-fold-gutter aria-hidden="true" title="Collapse {{ fold.key }}"></li>{{ body }}</ol>
+  </details>
+</li>
+{%- endmacro %}
+
+{# A fold as the stream first sends it: open, with nothing in it yet. #}
+{% macro fold_shell(fold) -%}
+{{ fold_markup(fold, true, "") }}
+{%- endmacro %}
+
+{# The console's tree, as ``build_console`` lays it out: folds and rows. #}
+{% macro console_items(items) -%}
+{% for item in items %}{% if item.body_id is defined %}{{ fold_markup(item, item.open, console_items(item.children)) }}{% else %}{{ event_row(item) }}{% endif %}{% endfor %}
 {%- endmacro %}

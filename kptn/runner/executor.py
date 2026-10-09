@@ -28,7 +28,7 @@ from kptn.change_detector.hasher import hash_file, hash_sqlite_table
 from kptn.change_detector.detector import is_stale
 from kptn.exceptions import HashError, TaskError
 from kptn.runner.console import ConsoleEventSink
-from kptn.runner.events import EventEmitter, EventKind
+from kptn.runner.events import EventEmitter, EventKind, JSONValue
 from kptn.runner.checkpoint import get_db_path, save_checkpoint, find_restore_candidate, restore_checkpoint
 from kptn.state_store.protocol import StateStoreBackend
 
@@ -41,19 +41,79 @@ def _default_emitter(resolved: ResolvedGraph) -> EventEmitter:
     return EventEmitter(str(uuid4()), resolved.pipeline, None, ConsoleEventSink())
 
 
+def _group_paths(graph_nodes: list[AnyNode], root: str) -> dict[str, list[str]]:
+    """The named groups enclosing each node, outermost first.
+
+    A ``Pipeline`` or ``Stage`` sentinel lists the names of every node inside
+    it, nested sentinels included, so a task's enclosing groups are the
+    sentinels whose members contain it -- and an enclosing group's members
+    are a strict superset of an enclosed one's, so ordering by size orders
+    them from the outside in. Only a chain is kept: a prerequisite shared by
+    two sibling pipelines belongs to whichever it reached first.
+
+    The run's own pipeline (*root*) is left out. It encloses everything, so
+    naming it on every task says nothing about where the task sits.
+    """
+    groups: list[PipelineNode | StageNode] = [
+        n for n in graph_nodes if isinstance(n, (PipelineNode, StageNode)) and n.name != root
+    ]
+    sentinels = sorted(
+        groups,
+        key=lambda n: len(n.members),
+        reverse=True,
+    )
+    paths: dict[str, list[str]] = {}
+    for node in graph_nodes:
+        if isinstance(node, _NON_EXEC_NODES):
+            continue
+        path: list[PipelineNode | StageNode] = []
+        for sentinel in sentinels:
+            if node.name not in sentinel.members:
+                continue
+            if path and sentinel.name not in path[-1].members:
+                continue
+            path.append(sentinel)
+        if path:
+            paths[node.name] = [s.name for s in path]
+    return paths
+
+
+def _groups(groups: list[str] | None) -> dict[str, JSONValue]:
+    """``groups`` for a task event's payload -- only when there are some.
+
+    A task at the top of the run has nothing to say about where it sits, and
+    leaving the key out keeps those payloads as they always were.
+    """
+    if not groups:
+        return {}
+    path: list[JSONValue] = list(groups)
+    return {"groups": path}
+
+
 def _emit_task_started(
     emitter: EventEmitter,
     task_name: str,
     *,
     mode: str,
+    groups: list[str] | None = None,
     **payload: bool | float | int | str | None,
 ) -> float:
-    emitter.emit(EventKind.TASK_STARTED, task_name=task_name, mode=mode, **payload)
+    emitter.emit(
+        EventKind.TASK_STARTED, task_name=task_name, mode=mode, **_groups(groups), **payload
+    )
     return perf_counter()
 
 
-def _emit_task_skipped(emitter: EventEmitter, task_name: str, *, mode: str) -> None:
-    emitter.emit(EventKind.TASK_SKIPPED, task_name=task_name, mode=mode, cached=True)
+def _emit_task_skipped(
+    emitter: EventEmitter,
+    task_name: str,
+    *,
+    mode: str,
+    groups: list[str] | None = None,
+) -> None:
+    emitter.emit(
+        EventKind.TASK_SKIPPED, task_name=task_name, mode=mode, cached=True, **_groups(groups)
+    )
 
 
 def _emit_task_finished(
@@ -307,6 +367,7 @@ def execute(
     _duckdb_alias = duckdb_alias or "duckdb"
 
     ordered: list[AnyNode] = topo_sort(resolved.graph)
+    group_paths = _group_paths(ordered, resolved.pipeline)
     config_kwargs: dict[str, Any] = {}
     runtime_ctx: dict[str, Any] = {}
 
@@ -364,6 +425,7 @@ def execute(
                 task_name=node.name,
                 mode="map",
                 count=len(collection),
+                **_groups(group_paths.get(node.name)),
             )
             any_item_ran_stale = False
             for item in collection:
@@ -383,6 +445,7 @@ def execute(
                                 emitter,
                                 item_task_name,
                                 mode="map_item",
+                                groups=group_paths.get(node.name),
                             )
                             continue
                     item_stale = True
@@ -390,6 +453,7 @@ def execute(
                     emitter,
                     item_task_name,
                     mode="map_item",
+                    groups=group_paths.get(node.name),
                 )
                 if item_stale:
                     any_item_ran_stale = True
@@ -458,10 +522,10 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    _emit_task_skipped(emitter, node.name, mode="python")
+                    _emit_task_skipped(emitter, node.name, mode="python", groups=group_paths.get(node.name))
                     continue
                 actually_stale = stale
-            started_at = _emit_task_started(emitter, node.name, mode="python")
+            started_at = _emit_task_started(emitter, node.name, mode="python", groups=group_paths.get(node.name))
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             profile_kwargs = resolved.profile_args.get(node.name, {})
@@ -521,10 +585,10 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    _emit_task_skipped(emitter, node.name, mode="r")
+                    _emit_task_skipped(emitter, node.name, mode="r", groups=group_paths.get(node.name))
                     continue
                 actually_stale = stale
-            started_at = _emit_task_started(emitter, node.name, mode="r")
+            started_at = _emit_task_started(emitter, node.name, mode="r", groups=group_paths.get(node.name))
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             try:
@@ -590,10 +654,10 @@ def execute(
                 except HashError:
                     stale = True  # outputs unreadable/missing — treat as stale (first run or deleted)
                 if not stale and reason == "cached":
-                    _emit_task_skipped(emitter, node.name, mode="sql")
+                    _emit_task_skipped(emitter, node.name, mode="sql", groups=group_paths.get(node.name))
                     continue
                 actually_stale = stale
-            started_at = _emit_task_started(emitter, node.name, mode="sql")
+            started_at = _emit_task_started(emitter, node.name, mode="sql", groups=group_paths.get(node.name))
             if force_run or actually_stale:
                 dirty_names.add(node.name)
             try:

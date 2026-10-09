@@ -703,6 +703,151 @@ button:disabled {
   color: var(--danger);
 }
 
+/* -- console folds ------------------------------------------------------- */
+
+/* A fold is a row like any other, whose heading opens onto more rows: one
+   per pipeline or stage, one per task. Its body is indented behind a guide
+   line, as an editor draws folded code, so nesting reads at a glance. */
+.fold {
+  border-bottom: 1px solid var(--line);
+}
+
+.fold:last-child {
+  border-bottom: none;
+}
+
+.fold__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.fold__head::-webkit-details-marker {
+  display: none;
+}
+
+.fold__head:hover {
+  background: color-mix(in srgb, var(--line) 35%, var(--surface-sunken));
+}
+
+/* An open task's heading stays at the top of the screen while its output
+   scrolls under it, so the reader always knows whose lines these are -- and
+   has its outcome, its counts, and the jump to its end within reach. Sticky
+   inside its own <details>, so it lets go once the task's output has
+   scrolled past. Opaque, because the rows pass beneath it; the shadow is
+   the line its body's top border draws until it scrolls away. */
+.fold--task > details[open] > .fold__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-sunken);
+  box-shadow: 0 1px 0 var(--line);
+}
+
+.fold--task > details[open] > .fold__head:hover {
+  background: color-mix(in srgb, var(--line) 35%, var(--surface-sunken));
+}
+
+/* The arrow: a disclosure triangle that turns down when the fold is open. */
+.fold__head::before {
+  content: "\25B8";
+  display: inline-block;
+  width: 1ch;
+  color: var(--ink-muted);
+  transition: transform 0.1s ease-out;
+}
+
+details[open] > .fold__head::before {
+  transform: rotate(90deg);
+}
+
+.fold__name {
+  font-weight: 600;
+}
+
+.fold--task > details > .fold__head .fold__name {
+  color: var(--accent);
+}
+
+/* A fold holding a failure says so on its heading, open or not, so a
+   failed task inside a folded pipeline is not hidden behind a quiet line. */
+.fold:has(.event--failed) > details > .fold__head .fold__name {
+  color: var(--danger);
+}
+
+.fold__outcome,
+.fold__count {
+  color: var(--ink-muted);
+}
+
+.fold__status--succeeded {
+  color: var(--ok);
+}
+
+.fold__status--failed {
+  color: var(--danger);
+}
+
+.fold__count--warnings {
+  color: var(--warning);
+}
+
+/* Pushed to the far end of the heading, and quiet until the heading is
+   pointed at: it is a shortcut, not part of what the line says. */
+.fold__jump {
+  display: inline-flex;
+  align-self: center;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-muted);
+  font: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.fold__head:hover .fold__jump,
+.fold__jump:focus-visible {
+  opacity: 1;
+}
+
+.fold__jump:hover {
+  border-color: var(--line);
+  color: var(--accent);
+}
+
+.fold__body {
+  position: relative;
+  margin: 0 0 0 12px;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+/* The indent beside a fold's rows, guide line included, is a control: it
+   closes the fold. Laid over the margin rather than taking room of its own,
+   and lit on hover so it can be found. */
+.fold__gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -13px;
+  width: 13px;
+  cursor: pointer;
+}
+
+.fold__gutter:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset -2px 0 var(--accent);
+}
+
 .notice--error {
   border-left: 3px solid var(--danger);
   padding-left: 12px;

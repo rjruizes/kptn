@@ -136,6 +136,145 @@ function updateCounters(console_, list) {
   }
 }
 
+/* Task folds left open behind the newest one -- OPEN_TASKS in
+ * kptn_server/console_layout.py, which a reloaded page is rendered with. */
+var OPEN_TASKS = 2;
+
+function foldOf(element) {
+  /* The fold whose body holds *element*, or null at the top level. */
+  var body = element.parentElement;
+  return body ? body.closest("[data-fold]") : null;
+}
+
+function setCount(fold, attribute, singular, plural, delta) {
+  /* A task fold's "2,310 lines": the number lives in the attribute, and the
+   * text is written back from it in the form _event.html renders. */
+  var counter = fold.querySelector(":scope > details > summary [" + attribute + "]");
+  if (!counter || !delta) {
+    return;
+  }
+  var total = (parseInt(counter.getAttribute(attribute), 10) || 0) + delta;
+  counter.setAttribute(attribute, String(total));
+  counter.textContent = total.toLocaleString("en-US") + " " + (total === 1 ? singular : plural);
+  counter.hidden = total === 0;
+}
+
+function countRow(row) {
+  var fold = foldOf(row);
+  if (!fold || fold.getAttribute("data-fold") !== "task") {
+    return;
+  }
+  setCount(fold, "data-fold-lines", "line", "lines", parseInt(row.getAttribute("data-lines"), 10) || 0);
+  if (row.getAttribute("data-kind") === "warning") {
+    setCount(fold, "data-fold-warnings", "warning", "warnings", 1);
+  }
+}
+
+function foldFailed(fold) {
+  return fold.querySelector(".event--failed") !== null;
+}
+
+function settleFolds(list, newest) {
+  /* Fold away what the run has moved past, as build_console() renders a
+   * reloaded page: only the newest OPEN_TASKS task folds stay open, and only
+   * the groups the newest row sits in -- so a pipeline folds once the run
+   * leaves it. A failure is never folded away, and neither is anything the
+   * reader opened or closed themselves. */
+  var tasks = list.querySelectorAll('[data-fold="task"]');
+  for (var i = 0; i < tasks.length - OPEN_TASKS; i += 1) {
+    closeFold(tasks[i]);
+  }
+  var current = [];
+  for (var fold = newest && foldOf(newest); fold; fold = foldOf(fold)) {
+    current.push(fold);
+  }
+  var groups = list.querySelectorAll('[data-fold="group"]');
+  for (var k = 0; k < groups.length; k += 1) {
+    if (current.indexOf(groups[k]) === -1) {
+      closeFold(groups[k]);
+    }
+  }
+}
+
+function closeFold(fold) {
+  var details = fold.firstElementChild;
+  if (
+    details &&
+    details.open &&
+    !fold.hasAttribute("data-fold-touched") &&
+    !foldFailed(fold)
+  ) {
+    details.open = false;
+  }
+}
+
+function rememberTouchedFolds(console_) {
+  /* A fold the reader has opened or closed is theirs from then on. Read off
+   * the click rather than the ``toggle`` event, which fires for the folding
+   * this file does too; Enter and Space on a summary arrive as clicks. */
+  console_.addEventListener("click", function (event) {
+    var summary = event.target.closest("summary.fold__head");
+    if (!summary || !console_.contains(summary)) {
+      return;
+    }
+    summary.closest("[data-fold]").setAttribute("data-fold-touched", "");
+    /* A task's heading sticks to the top of the screen while its output
+     * scrolls by, so it can be clicked from far down the task. Closing it
+     * there pulls everything below up past the reader; bring the heading
+     * back to the top instead, where it was. */
+    var details = summary.parentElement;
+    if (
+      details.open &&
+      !event.target.closest("[data-fold-jump]") &&
+      details.getBoundingClientRect().top < 0
+    ) {
+      window.requestAnimationFrame(function () {
+        summary.scrollIntoView({ block: "start" });
+      });
+    }
+  });
+}
+
+function collapseFromGutters(console_) {
+  /* The strip down the left of an open fold's body closes it, so a reader
+   * deep in a long task does not have to scroll back to its heading. The
+   * rows below then move up, so the heading is brought back into view if
+   * it was above the screen -- the place the reader just folded away is
+   * where they expect to be. Mouse-only: from the keyboard, the heading is
+   * the control. */
+  console_.addEventListener("click", function (event) {
+    var gutter = event.target.closest("[data-fold-gutter]");
+    if (!gutter || !console_.contains(gutter)) {
+      return;
+    }
+    var fold = gutter.closest("[data-fold]");
+    var details = fold.firstElementChild;
+    details.open = false;
+    fold.setAttribute("data-fold-touched", "");
+    details.querySelector(":scope > summary").scrollIntoView({ block: "nearest" });
+  });
+}
+
+function jumpToFoldEnds(console_) {
+  /* The "end" button in a task's heading: open the task if it is folded and
+   * bring its last row into view. The button sits inside the <summary>, so
+   * the click is kept from toggling the fold as well -- a folded task opens,
+   * an open one stays open. The click still reaches the listener above, so
+   * a task opened this way is the reader's and is not folded under them. */
+  console_.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-fold-jump]");
+    if (!button || !console_.contains(button)) {
+      return;
+    }
+    event.preventDefault();
+    var details = button.closest("details");
+    details.open = true;
+    var body = details.querySelector(":scope > .fold__body");
+    var last = body && body.lastElementChild;
+    (last || details).scrollIntoView({ block: "end" });
+  });
+}
+
 function setUpRememberedToggle(toggle, storageKey) {
   if (!toggle) {
     return;
@@ -251,6 +390,9 @@ function initConsole() {
 
   var list = document.getElementById("console-events");
   var empty = document.getElementById("console-empty");
+  rememberTouchedFolds(console_);
+  jumpToFoldEnds(console_);
+  collapseFromGutters(console_);
   if (console_.getAttribute("data-terminal") === "true") {
     /* Already over. Its whole history is on the page, and its status came
      * from the run row -- there is nothing left to stream, and no ending
@@ -301,18 +443,44 @@ function initConsole() {
     if (!queued.length) {
       return;
     }
-    var rows = document.createDocumentFragment();
+    /* Each frame says where its row goes: the folds to open first, the
+     * element to append to, and a finished task's heading to update. All of
+     * it was decided by the server; this only finds the ids. */
+    var newest = null;
     for (var i = 0; i < queued.length; i += 1) {
-      rows.appendChild(fragmentFrom(queued[i].html));
+      var frame = queued[i];
+      var opens = frame.opens || [];
+      for (var k = 0; k < opens.length; k += 1) {
+        if (!document.getElementById(opens[k].id)) {
+          (document.getElementById(opens[k].parent) || list).appendChild(
+            fragmentFrom(opens[k].html)
+          );
+        }
+      }
+      var parent = (frame.parent && document.getElementById(frame.parent)) || list;
+      parent.appendChild(fragmentFrom(frame.html));
+      newest = parent.lastElementChild;
+      countRow(newest);
+      if (frame.outcome) {
+        var outcome = document.getElementById(frame.outcome.id);
+        if (outcome) {
+          outcome.replaceWith(fragmentFrom(frame.outcome.html));
+        }
+      }
     }
     queued = [];
     queuedSequences = {};
-    list.appendChild(rows);
     if (empty) {
       empty.remove();
       empty = null;
     }
     updateCounters(console_, list);
+    /* Folding while the reader is scrolled up would pull the text they are
+     * reading out from under them. The next batch that arrives while they
+     * are following catches up. */
+    if (autoScroll.following()) {
+      settleFolds(list, newest);
+    }
     /* The list has no scroller of its own -- the page scrolls -- so
      * following the output means keeping the newest row in view. */
     autoScroll.keep();

@@ -14,7 +14,7 @@
   the page actually holds, and the higher of the two is the only cursor that
   can neither replay nor skip.
 #}
-{% from "_event.html" import event_row %}
+{% from "_event.html" import console_items %}
 <div class="console" id="console"
          data-run-id="{{ run.run_id }}"
          data-stream-url="{{ project_base }}/runs/{{ run.run_id }}/events"
@@ -30,10 +30,10 @@
     (``_settings.html``).
   #}
   <ol class="console__events" id="console-events">
-    {% for event in events %}{{ event_row(event) }}{% endfor %}
+    {{ console_items(items) }}
   </ol>
 
-  {% if not events %}
+  {% if not items %}
   <p class="muted console__empty" id="console-empty">No output yet.</p>
   {% endif %}
 </div>

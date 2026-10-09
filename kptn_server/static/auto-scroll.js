@@ -77,6 +77,11 @@ export function autoScroll() {
   );
 
   return {
+    /* Whether the page is following the output, for callers that must not
+     * move the page out from under a reader who has scrolled up to read. */
+    following: function () {
+      return following;
+    },
     keep: function () {
       /* Noting where this left the page means a swap above the bottom
        * that scroll anchoring nudged upward on the way is not mistaken

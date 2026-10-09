@@ -36,6 +36,7 @@ port-forwarding recipe if you need to reach it from another machine.
 | `run_files.py` | The files other people's servers read: `.kptn/runs/<run_id>.jsonl` and `index.json` |
 | `processes.py` | Launching, inspecting, and reconciling detached run workers |
 | `worker.py`, `capture.py` | The worker process and the capture that hands its output to the store |
+| `console_layout.py` | Which fold each console event goes in: one per pipeline or stage, one per task. Shared by the run page and its stream |
 | `routes/` | `runs.py` (console, history, SSE, log, stop), `inspect.py` (plan, walkthrough), `lineage.py` (lineage, table preview), `view.py` (read-only pages for other people's projects) |
 | `service.py` | The retained lineage and table-preview helpers, driven by `routes/lineage.py` |
 | `markdown.py` | Project-relative, read-only Markdown rendering for the walkthrough's docs panel |
