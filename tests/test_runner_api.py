@@ -316,3 +316,37 @@ def test_plan_uses_shared_resolution() -> None:
 
     mock_resolve.assert_called_once_with(pipeline, Path.cwd(), "dev")
     mock_plan.assert_called_once_with(resolved, state_store)
+
+
+def _run_and_get_factory(graph: Graph):
+    pipeline = Pipeline("default", graph)
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute") as mock_exec, \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.return_value = mock_config
+        run(pipeline)
+    return mock_exec.call_args.kwargs["duckdb_factory"]
+
+
+def test_run_wraps_duckdb_factory_with_bronze_search_path() -> None:
+    import duckdb
+
+    source = kptn.source("s", files="in")
+    stage = kptn.Stage("bronze", source)
+    graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> stage >> kptn.source_views(stage)
+
+    factory = _run_and_get_factory(graph)
+
+    conn = factory()
+    setting = conn.execute("SELECT current_setting('file_search_path')").fetchall()[0][0]
+    assert str((Path.cwd() / "_bronze").resolve()) in setting.split(",")
+
+
+def test_run_leaves_duckdb_factory_alone_without_source_views() -> None:
+    import duckdb
+
+    source = kptn.source("s", files="in")
+    graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> source
+
+    assert _run_and_get_factory(graph) is duckdb.connect

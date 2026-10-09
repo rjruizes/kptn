@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from kptn.graph.nodes import ConfigNode
+from kptn.graph.nodes import ConfigNode, SourceViewsNode
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.loader import ProfileLoader
 from kptn.profiles.resolved import ResolvedGraph
@@ -14,6 +14,8 @@ from kptn.runner.console import ConsoleEventSink
 from kptn.runner.executor import execute
 from kptn.runner.events import EventEmitter, EventKind, EventSink
 from kptn.runner.plan import plan as _plan
+from kptn.sources.build import BRONZE_DIR
+from kptn.sources.views import with_search_path
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
 
@@ -157,6 +159,12 @@ def run(
     resolved = _gate(resolved)
 
     duckdb_factory, duckdb_alias = _find_duckdb_factory(pipeline)
+    if duckdb_factory is not None and any(
+        isinstance(n, SourceViewsNode) for n in pipeline.nodes
+    ):
+        # Every connection, including the one tasks receive by alias, must
+        # resolve the views' _bronze-relative paths.
+        duckdb_factory = with_search_path(duckdb_factory, cwd / BRONZE_DIR)
 
     # no_cache without a profile: skip the state store entirely.
     # When a profile IS specified the config system is needed, so the

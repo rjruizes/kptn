@@ -18,6 +18,7 @@ from kptn.graph.nodes import (
     PipelineNode,
     RTaskNode,
     SourceNode,
+    SourceViewsNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -32,12 +33,14 @@ from kptn.runner.console import ConsoleEventSink
 from kptn.runner.events import EventEmitter, EventKind, JSONValue
 from kptn.runner.checkpoint import get_db_path, save_checkpoint, find_restore_candidate, restore_checkpoint
 from kptn.sources.build import (
+    BRONZE_DIR,
     build_table,
     is_current,
     plan_tables,
     remove_stale_tables,
     state_value,
 )
+from kptn.sources.views import apply_search_path, register_views
 from kptn.state_store.protocol import StateStoreBackend
 
 logger = logging.getLogger(__name__)
@@ -600,6 +603,33 @@ def execute(
                 no_cache=no_cache,
                 groups=group_paths.get(node.name),
             ):
+                dirty_names.add(node.name)
+            continue
+
+        # SourceViewsNode — metadata only, so it always runs
+        if isinstance(node, SourceViewsNode):
+            groups = group_paths.get(node.name)
+            if duckdb_factory is None:
+                raise TaskError(
+                    f"'{node.name}': kptn.source_views needs a DuckDB connection; "
+                    "add duckdb=(factory, alias) to kptn.config(...)."
+                )
+            started_at = _emit_task_started(emitter, node.name, mode="views", groups=groups)
+            bronze_root = Path(cwd) / BRONZE_DIR
+            try:
+                with emitter.task_scope(node.name):
+                    conn = duckdb_factory()
+                    apply_search_path(conn, bronze_root)  # direct execute() callers too
+                    register_views(conn, bronze_root, node.spec.sources)
+            except Exception as exc:
+                _emit_task_finished(
+                    emitter, node.name, mode="views", status="failed",
+                    started_at=started_at, error=str(exc),
+                )
+                raise TaskError(f"'{node.name}': {exc}") from exc
+            _emit_task_finished(emitter, node.name, mode="views", status="succeeded", started_at=started_at)
+            # Recreating views changes no data, so it never dirties downstream by itself.
+            if upstream_dirty:
                 dirty_names.add(node.name)
             continue
 
