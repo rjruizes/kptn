@@ -238,3 +238,90 @@ def test_a_deleted_helper_drops_out_of_the_hash(fixture_pkg):
     hasher_mod._SUMMARY_CACHE.clear()
     assert warm == hash_task_source(fixture_pkg.task_a)
     assert warm != GOLDEN_TASK_A
+
+
+# ─── Lambdas ─────────────────────────────────────────────────────────────── #
+
+GOLDEN_SIMPLE_F = "c4c1088ea5f77d5146997763d1b708faec4c2cce7fbce423e1ae2d8da5fb27fb"
+
+
+class _Pkg:
+    """A throwaway package whose modules can be rewritten and reloaded."""
+
+    def __init__(self, root: Path, name: str) -> None:
+        self.root = root
+        self.name = name
+
+    def write(self, rel: str, text: str) -> None:
+        path = self.root / rel
+        existed = path.exists()
+        before = path.stat() if existed else None
+        path.write_text(text)
+        if before is not None:
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+
+    def import_module(self, module: str):
+        return importlib.import_module(f"{self.name}.{module}")
+
+    def reload(self, module: str):
+        return importlib.reload(self.import_module(module))
+
+
+@pytest.fixture
+def lambda_pkg(tmp_path, monkeypatch, request):
+    """Build a package from ``{relative path: source}`` and return a ``_Pkg``."""
+    names: list[str] = []
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(hasher_mod, "_SUMMARY_CACHE", {})
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)
+
+    def make(files: dict[str, str]) -> _Pkg:
+        name = re.sub(r"\W", "_", f"kptn_lambda_fixture_{request.node.name}_{len(names)}")
+        names.append(name)
+        pkg = _Pkg(tmp_path / name, name)
+        pkg.root.mkdir()
+        pkg.write("__init__.py", "")
+        for rel, text in files.items():
+            pkg.write(rel, text)
+        return pkg
+
+    yield make
+    for name in names:
+        for mod in [m for m in sys.modules if m == name or m.startswith(f"{name}.")]:
+            del sys.modules[mod]
+
+
+def test_lambda_hash_includes_callee(lambda_pkg) -> None:
+    pkg = lambda_pkg(
+        {
+            "helpers.py": "def parse(name):\n    return name.split('_')[0]\n",
+            "defs.py": "from .helpers import parse\nTABLE = lambda f: parse(f)\n",
+        }
+    )
+    defs = pkg.import_module("defs")
+    before = hash_task_source(defs.TABLE)
+
+    pkg.write("helpers.py", "def parse(name):\n    return name.split('-')[0]\n")
+    defs = pkg.reload("defs")
+    assert hash_task_source(defs.TABLE) != before
+
+
+def test_two_lambdas_on_one_line_hash_differently(lambda_pkg) -> None:
+    pkg = lambda_pkg({"defs.py": "A, B = (lambda x: x + 1), (lambda x: x + 2)\n"})
+    defs = pkg.import_module("defs")
+    assert hash_task_source(defs.A) != hash_task_source(defs.B)
+
+
+def test_lambda_hash_stable_across_comment_edits(lambda_pkg) -> None:
+    pkg = lambda_pkg({"defs.py": "T = lambda f: f.upper()\n"})
+    defs = pkg.import_module("defs")
+    before = hash_task_source(defs.T)
+    pkg.write("defs.py", "T = lambda f: f.upper()  # same code\n")
+    defs = pkg.reload("defs")
+    assert hash_task_source(defs.T) == before
+
+
+def test_named_function_hash_unchanged_by_lambda_support(lambda_pkg) -> None:
+    pkg = lambda_pkg({"defs.py": "def f(x):\n    return x\n"})
+    defs = pkg.import_module("defs")
+    assert hash_task_source(defs.f) == GOLDEN_SIMPLE_F
