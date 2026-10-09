@@ -105,7 +105,7 @@ DEFAULT_STATE_DB_PATH = ".kptn/kptn.db"
 #: Node kinds that represent a unit of work and therefore have a detail page.
 #: The rest -- pipeline, stage, parallel, noop, config -- are structure, and
 #: render as headings rather than steps.
-TASK_KINDS = frozenset({"python", "sql", "r", "map"})
+TASK_KINDS = frozenset({"python", "sql", "r", "map", "source", "views"})
 
 #: The retained lineage and table-preview endpoints (see the module docstring).
 LINEAGE_PATH = "/lineage-page"

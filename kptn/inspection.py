@@ -24,6 +24,8 @@ from kptn.graph.nodes import (
     ParallelNode,
     PipelineNode,
     RTaskNode,
+    SourceNode,
+    SourceViewsNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -36,13 +38,15 @@ from kptn.profiles.schema import KptnConfig
 
 # Nodes that represent a unit of actual work (or a dynamic fan-out of work),
 # as opposed to structural sentinels (Stage/Parallel/Pipeline/Noop/Config).
-_EXECUTABLE_NODE_TYPES = (TaskNode, SqlTaskNode, RTaskNode, MapNode)
+_EXECUTABLE_NODE_TYPES = (TaskNode, SqlTaskNode, RTaskNode, MapNode, SourceNode, SourceViewsNode)
 
 _KIND_NAMES: dict[type, str] = {
     TaskNode: "python",
     SqlTaskNode: "sql",
     RTaskNode: "r",
     MapNode: "map",
+    SourceNode: "source",
+    SourceViewsNode: "views",
     ParallelNode: "parallel",
     StageNode: "stage",
     PipelineNode: "pipeline",
@@ -123,9 +127,10 @@ def _split_docs(
 
 
 def _spec_for(node: AnyNode) -> Any | None:
-    """Return the TaskSpec/SqlTaskSpec/RTaskSpec backing a node, if any.
+    """Return the spec backing a node, if any.
 
-    ``TaskNode``/``SqlTaskNode``/``RTaskNode`` all carry their spec directly
+    ``TaskNode``/``SqlTaskNode``/``RTaskNode`` and the source nodes
+    (``SourceNode``/``SourceViewsNode``) all carry their spec directly
     as ``node.spec`` (the same attribute ``kptn/runner/executor.py`` reads,
     e.g. ``node.spec.outputs``) — the pre-wrap ``__kptn__`` attribute only
     exists on the decorator-produced handles (``_KptnCallable``,
@@ -133,7 +138,7 @@ def _spec_for(node: AnyNode) -> Any | None:
     themselves. ``MapNode`` is the exception: it stores the original
     __kptn__-tagged callable in ``node.task``.
     """
-    if isinstance(node, (TaskNode, SqlTaskNode, RTaskNode)):
+    if isinstance(node, (TaskNode, SqlTaskNode, RTaskNode, SourceNode, SourceViewsNode)):
         return node.spec
     if isinstance(node, MapNode):
         return getattr(node.task, "__kptn__", None)
@@ -206,6 +211,10 @@ def _source_for(node: AnyNode) -> tuple[Path | None, int | None]:
         return (Path(source_file) if source_file else None), lineno
     if isinstance(node, (SqlTaskNode, RTaskNode)):
         return Path(node.path), None
+    if isinstance(node, SourceNode) and node.spec.declared_at is not None:
+        # Where kptn.source(...) was called, not kptn's own code.
+        filename, lineno = node.spec.declared_at
+        return Path(filename), lineno
     return None, None
 
 

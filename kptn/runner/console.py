@@ -18,7 +18,13 @@ class ConsoleEventSink:
     def emit(self, event: RunEvent) -> None:
         if event.kind is EventKind.TASK_STARTED:
             mode = event.payload.get("mode", "run")
-            if mode == "map":
+            if mode == "source":
+                print(
+                    self._timestamped("[SOURCE]", event, f" — {event.payload['count']} tables"),
+                    file=self.out,
+                    flush=True,
+                )
+            elif mode == "map":
                 print(
                     f"[MAP] {self._task_name(event)} — expanding over {event.payload['count']} items",
                     file=self.out,

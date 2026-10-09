@@ -127,6 +127,35 @@ def test_skipped_tasks_and_map_markers_are_rows_in_their_group() -> None:
     assert placed[2] == ("fold-3-task-body", ["items[x]"])
 
 
+def test_a_source_and_its_outcome_are_rows_around_its_tables() -> None:
+    placed = _place_all(
+        [
+            _event(1, "task_started", "s", groups=["bronze"], mode="source", count=2),
+            _event(2, "task_skipped", "s[a]", groups=["bronze"], mode="source_table"),
+            _event(3, "task_started", "s[b]", groups=["bronze"], mode="source_table"),
+            _event(4, "task_finished", "s[b]", mode="source_table", status="succeeded"),
+            _event(5, "task_finished", "s", mode="source", status="succeeded"),
+        ]
+    )
+
+    assert placed[0] == ("fold-1-0-body", ["bronze"])
+    assert placed[1] == ("fold-1-0-body", [])
+    assert placed[2] == ("fold-3-task-body", ["s[b]"])
+    assert placed[3] == ("fold-3-task-body", [])
+    # Not a bare fold of its own: the source's outcome sits in its group.
+    assert placed[4] == ("fold-1-0-body", [])
+
+
+def test_a_failed_source_marks_its_groups() -> None:
+    layout = ConsoleLayout()
+    [bronze] = layout.place(
+        _event(1, "task_started", "s", groups=["bronze"], mode="source", count=0)
+    ).opens
+    layout.place(_event(2, "task_finished", "s", mode="source", status="failed", error="x"))
+
+    assert bronze.failed
+
+
 def test_run_events_sit_at_the_top_and_close_every_group() -> None:
     placed = _place_all(
         [

@@ -18,6 +18,8 @@ its ``task_finished``.
   among them). The groups already open are reused as far as they agree with
   that path; the rest are opened. A started task then opens a fold of its
   own; a skipped one -- which prints nothing -- is a plain row in its group.
+* A mapped task's start and a source's start and finish are markers: rows in
+  their group. Their items (``task[item]``, ``source[table]``) get the folds.
 * Any other event belongs to the task fold at the end of the open chain when
   it names that task, or names no task while that task is still running.
 * An event naming a task that has no fold open (output from a task whose
@@ -132,6 +134,14 @@ class ConsoleLayout:
         if event.task_name is None:
             return Placement(container=groups[-1] if groups else None)
 
+        if _is_marker(event):
+            # A source's own outcome, after its tables' folds: a row in its
+            # group, like the marker it started with.
+            if event.payload.get("status") == "failed":
+                for fold in groups:
+                    fold.failed = True
+            return Placement(container=groups[-1] if groups else None)
+
         # Output from a task with no fold open. It still gets one, next to
         # the last task, rather than spilling its lines among the groups.
         fold = Fold(
@@ -201,17 +211,26 @@ def _opens_task_row(event: StoredEvent) -> bool:
     return event.kind in (EventKind.TASK_STARTED.value, EventKind.TASK_SKIPPED.value)
 
 
+#: Task modes whose events only mark where their items start and end: a
+#: mapped task, and a source, whose tables are its items.
+_MARKER_MODES = frozenset({"map", "source"})
+
+
+def _is_marker(event: StoredEvent) -> bool:
+    return event.payload.get("mode") in _MARKER_MODES
+
+
 def _opens_task_fold(event: StoredEvent) -> bool:
     """Does this task get a fold, or only a row in its group?
 
     A started task gets a fold. A skipped one prints nothing, and the marker a
-    mapped task emits before its items has nothing of its own to hold -- each
-    item is a task with its own ``task_started``, and its own fold.
+    mapped task or a source emits before its items has nothing of its own to
+    hold -- each item is a task with its own ``task_started``, and its own fold.
     """
     return (
         event.kind == EventKind.TASK_STARTED.value
         and bool(event.task_name)
-        and event.payload.get("mode") != "map"
+        and not _is_marker(event)
     )
 
 
