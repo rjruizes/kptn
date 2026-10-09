@@ -143,7 +143,9 @@ def plan(
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)
 
-    runner_plan.plan(resolved, state_store)
+    runner_plan.plan(
+        resolved, state_store, config_values=runner_plan.config_values_for_plan(pipeline)
+    )
 
 
 DEFAULT_UI_HOST = "127.0.0.1"

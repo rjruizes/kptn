@@ -13,6 +13,7 @@ from kptn.profiles.resolver import ProfileResolver
 from kptn.runner.console import ConsoleEventSink
 from kptn.runner.executor import execute
 from kptn.runner.events import EventEmitter, EventKind, EventSink
+from kptn.runner.plan import config_values_for_plan
 from kptn.runner.plan import plan as _plan
 from kptn.sources.build import BRONZE_DIR
 from kptn.sources.views import with_search_path
@@ -222,4 +223,4 @@ def plan(
         Optional profile name to resolve from ``kptn.yaml``.
     """
     resolved, state_store = resolve_pipeline(pipeline, Path.cwd(), profile)
-    _plan(resolved, state_store)
+    _plan(resolved, state_store, config_values=config_values_for_plan(pipeline))

@@ -4,20 +4,25 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Iterable, TextIO
+from pathlib import Path
+from typing import Any, Iterable, Mapping, TextIO
 
 from kptn.change_detector.detector import is_stale
-from kptn.exceptions import HashError
+from kptn.exceptions import HashError, TaskError
+from kptn.graph.config import invoke_config
 from kptn.graph.nodes import (
     ConfigNode,
     MapNode,
     NoopNode,
     ParallelNode,
     PipelineNode,
+    SourceNode,
+    SourceViewsNode,
     StageNode,
 )
 from kptn.graph.topo import topo_sort
 from kptn.profiles.resolved import ResolvedGraph
+from kptn.sources.build import is_current, plan_tables
 from kptn.state_store.protocol import StateStoreBackend
 
 _PLAN_NON_EXEC = (ParallelNode, StageNode, NoopNode, PipelineNode, ConfigNode)
@@ -154,9 +159,57 @@ class _PrefetchedHashes:
         return self._hashes.get(task)
 
 
+def config_values_for_plan(graph: Any) -> dict[str, Any] | None:
+    """The config node's values, for resolving config-derived source files.
+
+    The ``duckdb`` entry is skipped so planning never opens the pipeline
+    database. Returns None (and says why on stderr) if a config callable fails.
+    """
+    for node in getattr(graph, "nodes", []):
+        if isinstance(node, ConfigNode):
+            spec = {k: v for k, v in node.spec.items() if k != "duckdb"}
+            try:
+                return invoke_config(ConfigNode(spec=spec))
+            except TaskError as exc:
+                detail = f"{exc}: {exc.__cause__}" if exc.__cause__ is not None else str(exc)
+                print(f"[PLAN] config unavailable, sources shown as run: {detail}", file=sys.stderr)
+                return None
+    return {}
+
+
+def _plan_source(
+    node: SourceNode,
+    reader: Any,
+    resolved: ResolvedGraph,
+    config_values: Mapping[str, Any] | None,
+    root: Path,
+) -> list[PlanEntry]:
+    """One entry per table of *node*, or one entry for the source when its
+    tables cannot be known without running anything."""
+    if config_values is None and callable(node.spec.files):
+        return [PlanEntry(node.name, PlanAction.RUN, reason="files depend on config")]
+    try:
+        entries: list[PlanEntry] = []
+        for plan in plan_tables(node.name, node.spec, config_values or {}, root=root):
+            current = is_current(plan, reader, resolved.storage_key, resolved.pipeline)
+            entries.append(
+                PlanEntry(
+                    plan.state_name,
+                    PlanAction.SKIP if current else PlanAction.RUN,
+                    reason="cached" if current else "inputs changed",
+                )
+            )
+        return entries
+    except Exception as exc:  # includes errors raised by a files= or table= callable
+        return [PlanEntry(node.name, PlanAction.RUN, reason=str(exc))]
+
+
 def build_plan(
     resolved: ResolvedGraph,
     state_store: StateStoreBackend,
+    *,
+    config_values: Mapping[str, Any] | None = None,
+    root: Path | None = None,
 ) -> list[PlanEntry]:
     reader: StateStoreBackend | _PrefetchedHashes = state_store
     if callable(getattr(state_store, "read_hashes", None)):
@@ -166,6 +219,12 @@ def build_plan(
         if isinstance(node, _PLAN_NON_EXEC):
             continue
         if node.name in resolved.bypassed_names:
+            continue
+        if isinstance(node, SourceNode):
+            entries.extend(_plan_source(node, reader, resolved, config_values, root or Path.cwd()))
+            continue
+        if isinstance(node, SourceViewsNode):
+            entries.append(PlanEntry(node.name, PlanAction.RUN, reason="always runs"))
             continue
         if isinstance(node, MapNode):
             provider = node.over.split(".")[0]
@@ -231,5 +290,10 @@ def render_plan(entries: Iterable[PlanEntry], stream: TextIO = sys.stdout) -> No
             )
 
 
-def plan(resolved: ResolvedGraph, state_store: StateStoreBackend) -> None:
-    render_plan(build_plan(resolved, state_store))
+def plan(
+    resolved: ResolvedGraph,
+    state_store: StateStoreBackend,
+    *,
+    config_values: Mapping[str, Any] | None = None,
+) -> None:
+    render_plan(build_plan(resolved, state_store, config_values=config_values))

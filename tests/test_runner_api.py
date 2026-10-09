@@ -315,7 +315,7 @@ def test_plan_uses_shared_resolution() -> None:
         plan(pipeline, profile="dev")
 
     mock_resolve.assert_called_once_with(pipeline, Path.cwd(), "dev")
-    mock_plan.assert_called_once_with(resolved, state_store)
+    mock_plan.assert_called_once_with(resolved, state_store, config_values={})
 
 
 def _run_and_get_factory(graph: Graph):
