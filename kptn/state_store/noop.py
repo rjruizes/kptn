@@ -11,6 +11,9 @@ class NoOpBackend:
     def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None:
         return None
 
+    def read_hashes(self, storage_key: str, pipeline: str) -> dict[str, str | None]:
+        return {}
+
     def write_hash(self, storage_key: str, pipeline: str, task: str, hash: str) -> None:
         pass
 

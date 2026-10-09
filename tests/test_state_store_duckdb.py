@@ -90,6 +90,12 @@ def test_read_hash_duckdb_error_raises_state_store_error(tmp_path):
         b.read_hash("sk", "pipe", "task")
 
 
+def test_read_hashes_duckdb_error_raises_state_store_error(tmp_path):
+    b = _make_erroring_backend(tmp_path)
+    with pytest.raises(StateStoreError):
+        b.read_hashes("sk", "pipe")
+
+
 def test_delete_duckdb_error_raises_state_store_error(tmp_path):
     b = _make_erroring_backend(tmp_path)
     with pytest.raises(StateStoreError):
@@ -219,6 +225,37 @@ def test_backend_factory_mode_calls_factory_each_time(tmp_path):
     assert result == "hash1"
     assert call_count >= 2  # factory was called at least for write + read
     conn_b.close()
+
+
+def test_backend_factory_mode_read_hashes_calls_factory_once(tmp_path):
+    """One bulk read is one connection, however many tasks it answers for."""
+    conn = duckdb.connect(str(tmp_path / "shared.duckdb"))
+    b = DuckDbBackend(factory=lambda: conn)
+    for i in range(5):
+        b.write_hash("sk", "pipe", f"t{i}", f"h{i}")
+    calls = 0
+
+    def get_engine():
+        nonlocal calls
+        calls += 1
+        return conn
+
+    b._factory = get_engine
+    hashes = b.read_hashes("sk", "pipe")
+
+    assert hashes == {f"t{i}": f"h{i}" for i in range(5)}
+    assert calls == 1
+    conn.close()
+
+
+def test_read_hashes_before_the_table_exists_is_empty(tmp_path):
+    """A factory connection whose state table was dropped reads as never-run."""
+    conn = duckdb.connect(str(tmp_path / "shared.duckdb"))
+    b = DuckDbBackend(factory=lambda: conn)
+    conn.execute("DROP TABLE _kptn.task_state")
+
+    assert b.read_hashes("sk", "pipe") == {}
+    conn.close()
 
 
 def test_backend_factory_mode_close_delegates_to_factory():

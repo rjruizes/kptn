@@ -120,6 +120,12 @@ def test_read_hash_sqlite_error_raises_state_store_error(tmp_path):
         b.read_hash("sk", "pipe", "task")
 
 
+def test_read_hashes_sqlite_error_raises_state_store_error(tmp_path):
+    b = _make_erroring_backend(tmp_path)
+    with pytest.raises(StateStoreError):
+        b.read_hashes("sk", "pipe")
+
+
 def test_delete_sqlite_error_raises_state_store_error(tmp_path):
     b = _make_erroring_backend(tmp_path)
     with pytest.raises(StateStoreError):

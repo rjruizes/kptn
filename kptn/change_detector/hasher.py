@@ -168,12 +168,19 @@ def _find_package_root(file_path: Path) -> Path:
     return current
 
 
+# Line breaks as the tokenizer counts them, so ``lineno`` indexes the result.
+# ``str.splitlines`` also breaks on form feeds and other separators, which would
+# shift every function after one.
+_LINE_BREAK = re.compile(r"(?<=\r\n)|(?<=\r)(?!\n)|(?<=\n)")
+
+
 class _ModuleSummary:
     """Lightweight AST index for a single Python source file."""
 
     def __init__(self, file_path: Path, source: str, package_root: Path) -> None:
         self.file_path = file_path
         self.source = source
+        self.lines: list[str] = _LINE_BREAK.split(source)
         self.package_root = package_root
         self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
         self.module_aliases: dict[str, str] = {}          # bound → full module
@@ -182,14 +189,17 @@ class _ModuleSummary:
         self._index()
 
     def _infer_package_parts(self) -> list[str]:
+        """The dotted parts of the package this file belongs to.
+
+        That is the file's own package for ``__init__.py`` and its parent
+        package for any other module -- the anchor ``from . import`` resolves
+        against.
+        """
         try:
             rel = self.file_path.relative_to(self.package_root)
-            parts = list(rel.with_suffix("").parts)
-            if parts and parts[-1] == "__init__":
-                parts = parts[:-1]
-            return parts
         except ValueError:
             return []
+        return list(rel.with_suffix("").parts[:-1])
 
     def _index(self) -> None:
         try:
@@ -219,7 +229,7 @@ class _ModuleSummary:
         if level == 0:
             return module
         n = len(self._package_parts)
-        if level - 1 > n:
+        if level - 1 >= n:  # above the top-level package, an ImportError
             return None
         base = self._package_parts[: n - (level - 1)]
         extra = module.split(".") if module else []
@@ -246,12 +256,22 @@ class _ModuleSummary:
                     yield "attr", (func.value.id, func.attr)
 
 
+#: Parsed modules shared by every hash in the process, so a pipeline whose
+#: tasks share helper modules parses each one once rather than once per task.
+#: Entries are revalidated by mtime and size on every use -- the check
+#: ``.pyc`` files and ``linecache`` rely on -- so an edited file is re-read,
+#: which the long-lived ``kptn ui`` server depends on. Keyed by package root
+#: as well as path because the root shapes how relative imports resolve.
+_SUMMARY_CACHE: dict[
+    tuple[Path, Path], tuple[tuple[int, int], "_ModuleSummary | None"]
+] = {}
+
+
 class _SourceCollector:
     """Collect source snippets for a function and all user-defined callees."""
 
     def __init__(self, package_root: Path) -> None:
         self._root = package_root
-        self._cache: dict[Path, _ModuleSummary | None] = {}
 
     def collect(self, fn: Any) -> list[str]:
         """Return source strings for *fn* and every transitively called function
@@ -280,13 +300,11 @@ class _SourceCollector:
             if fn_node is None:
                 continue
 
-            src = ast.get_source_segment(summary.source, fn_node)
-            if src is None:
-                lines = summary.source.splitlines(keepends=True)
-                start = getattr(fn_node, "lineno", None)
-                end = getattr(fn_node, "end_lineno", None)
-                if start is not None and end is not None:
-                    src = "".join(lines[start - 1 : end])
+            # Whole lines rather than ast.get_source_segment, which re-splits the
+            # entire module on every call. Only top-level functions are indexed,
+            # so the lines differ from the exact segment by at most a trailing
+            # comment, which normalization strips; hashes are unchanged.
+            src = "".join(summary.lines[fn_node.lineno - 1 : fn_node.end_lineno])
             if src:
                 sources.append(src)
 
@@ -299,15 +317,22 @@ class _SourceCollector:
 
     def _load(self, file_path: Path) -> _ModuleSummary | None:
         resolved = file_path.resolve()
-        if resolved in self._cache:
-            return self._cache[resolved]
+        try:
+            stat = resolved.stat()
+        except OSError:
+            return None
+        key = (self._root, resolved)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        cached = _SUMMARY_CACHE.get(key)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
         try:
             source = resolved.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            self._cache[resolved] = None
-            return None
-        summary = _ModuleSummary(resolved, source, self._root)
-        self._cache[resolved] = summary
+            summary = None
+        else:
+            summary = _ModuleSummary(resolved, source, self._root)
+        _SUMMARY_CACHE[key] = (stamp, summary)
         return summary
 
     def _resolve(
@@ -334,7 +359,10 @@ class _SourceCollector:
             if not mod_name:
                 sym = summary.symbol_aliases.get(base)
                 if sym:
-                    mod_name = sym[0]
+                    # ``from pkg import mod`` binds the submodule when there
+                    # is one; otherwise look for *attr* in pkg itself.
+                    submodule = f"{sym[0]}.{sym[1]}"
+                    mod_name = submodule if self._find_module(submodule) else sym[0]
             if not mod_name:
                 return None
             mod_path = self._find_module(mod_name)

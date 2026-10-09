@@ -55,6 +55,18 @@ class SqliteBackend:
         except sqlite3.Error as exc:
             raise StateStoreError("read_hash failed") from exc
 
+    def read_hashes(self, storage_key: str, pipeline: str) -> dict[str, str | None]:
+        """Every stored hash for *pipeline*, by task name, in one query."""
+        try:
+            rows = self._conn.execute(
+                "SELECT task_name, output_hash FROM task_state "
+                "WHERE storage_key=? AND pipeline_name=?",
+                (storage_key, pipeline),
+            ).fetchall()
+            return {task: hash for task, hash in rows}
+        except sqlite3.Error as exc:
+            raise StateStoreError("read_hashes failed") from exc
+
     def delete(self, storage_key: str, pipeline: str, task: str) -> None:
         try:
             self._conn.execute(

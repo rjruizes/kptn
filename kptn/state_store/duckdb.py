@@ -118,6 +118,24 @@ class DuckDbBackend:
         except duckdb.Error as exc:
             raise StateStoreError("read_hash failed") from exc
 
+    def read_hashes(self, storage_key: str, pipeline: str) -> dict[str, str | None]:
+        """Every stored hash for *pipeline*, by task name, in one query.
+
+        Lets a caller checking many tasks open one connection rather than one
+        per task, which in factory mode means one call to the factory.
+        """
+        try:
+            rows = self._conn().execute(
+                "SELECT task_name, output_hash FROM _kptn.task_state "
+                "WHERE storage_key=? AND pipeline_name=?",
+                (storage_key, pipeline),
+            ).fetchall()
+            return {task: hash for task, hash in rows}
+        except duckdb.CatalogException:
+            return {}
+        except duckdb.Error as exc:
+            raise StateStoreError("read_hashes failed") from exc
+
     def delete(self, storage_key: str, pipeline: str, task: str) -> None:
         try:
             conn = self._conn()

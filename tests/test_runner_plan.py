@@ -358,3 +358,98 @@ def test_plan_map_empty_over_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="empty 'over' expression"):
         plan(resolved, FakeStateStore())
+
+
+# ─── Bulk hash reads ──────────────────────────────────────────────────────────
+
+
+def _task_one() -> int:
+    return 1
+
+
+def _task_two() -> int:
+    return 2
+
+
+def _task_three() -> int:
+    return 3
+
+
+class _BulkReadingStore(FakeStateStore):
+    """A FakeStateStore that offers read_hashes and counts every read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.single_reads = 0
+        self.bulk_reads = 0
+
+    def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None:
+        self.single_reads += 1
+        return super().read_hash(storage_key, pipeline, task)
+
+    def read_hashes(self, storage_key: str, pipeline: str) -> dict[str, str | None]:
+        self.bulk_reads += 1
+        return {
+            t: h for (sk, p, t), h in self._store.items() if (sk, p) == (storage_key, pipeline)
+        }
+
+
+def _three_task_graph() -> tuple[ResolvedGraph, list[TaskNode]]:
+    nodes = [
+        TaskNode(fn=fn, spec=TaskSpec(outputs=[]), name=fn.__name__.lstrip("_"))
+        for fn in (_task_one, _task_two, _task_three)
+    ]
+    return _make_resolved(Graph(nodes=nodes, edges=[])), nodes
+
+
+def _record(store: FakeStateStore, *nodes: TaskNode) -> None:
+    from kptn.change_detector.hasher import hash_task_source
+
+    for node in nodes:
+        store.write_hash("kptn", "default", node.name, hash_task_source(node.fn))
+
+
+def test_build_plan_reads_every_hash_in_one_bulk_query() -> None:
+    resolved, nodes = _three_task_graph()
+    store = _BulkReadingStore()
+    _record(store, nodes[0], nodes[2])
+
+    entries = build_plan(resolved, store)
+
+    assert [(e.task_name, e.action) for e in entries] == [
+        ("task_one", PlanAction.SKIP),
+        ("task_two", PlanAction.RUN),
+        ("task_three", PlanAction.SKIP),
+    ]
+    assert (store.bulk_reads, store.single_reads) == (1, 0)
+
+
+def test_build_plan_answers_the_same_with_and_without_bulk_reads() -> None:
+    resolved, nodes = _three_task_graph()
+    bulk, single = _BulkReadingStore(), FakeStateStore()
+    _record(bulk, nodes[1])
+    _record(single, nodes[1])
+
+    assert build_plan(resolved, bulk) == build_plan(resolved, single)
+
+
+def test_build_plan_does_not_touch_the_store_when_no_task_reads_a_hash() -> None:
+    graph = Graph(nodes=[_make_map_node("fan_out", "provider.items")], edges=[])
+    store = _BulkReadingStore()
+
+    build_plan(_make_resolved(graph), store)
+
+    assert (store.bulk_reads, store.single_reads) == (0, 0)
+
+
+def test_prefetched_hashes_pass_reads_for_another_key_to_the_store() -> None:
+    from kptn.runner.plan import _PrefetchedHashes
+
+    store = _BulkReadingStore()
+    store.write_hash("kptn", "default", "task", "mine")
+    store.write_hash("kptn", "other", "task", "theirs")
+    reader = _PrefetchedHashes(store, "kptn", "default")
+
+    assert reader.read_hash("kptn", "default", "task") == "mine"
+    assert reader.read_hash("kptn", "other", "task") == "theirs"
+    assert (store.bulk_reads, store.single_reads) == (1, 1)

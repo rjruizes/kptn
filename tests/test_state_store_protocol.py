@@ -166,3 +166,46 @@ def test_state_store_all_exports():
     assert "StateStoreBackend" in ss.__all__
     assert "SqliteBackend" in ss.__all__
     assert "init_state_store" in ss.__all__
+
+
+# ─── read_hashes: every stored hash in one query ─────────────────────────── #
+
+
+def test_read_hashes_matches_read_hash_for_every_task(backend):
+    backend.write_hash("sk", "pipe", "taskA", "hashA")
+    backend.write_hash("sk", "pipe", "taskB", "hashB")
+
+    hashes = backend.read_hashes("sk", "pipe")
+
+    assert hashes == {"taskA": "hashA", "taskB": "hashB"}
+    assert hashes == {t: backend.read_hash("sk", "pipe", t) for t in hashes}
+
+
+def test_read_hashes_is_scoped_to_storage_key_and_pipeline(backend):
+    backend.write_hash("sk", "pipe", "taskA", "mine")
+    backend.write_hash("sk2", "pipe", "taskB", "other key")
+    backend.write_hash("sk", "pipe2", "taskC", "other pipeline")
+
+    assert backend.read_hashes("sk", "pipe") == {"taskA": "mine"}
+
+
+def test_read_hashes_is_empty_for_a_store_with_nothing_recorded(backend):
+    assert backend.read_hashes("sk", "pipe") == {}
+
+
+def test_noop_backend_read_hashes_is_empty():
+    from kptn.state_store.noop import NoOpBackend
+
+    assert NoOpBackend().read_hashes("sk", "pipe") == {}
+
+
+def test_read_hashes_is_optional_for_conformance():
+    """Stores written before read_hashes existed must still conform."""
+
+    class ReadHashOnly:
+        def read_hash(self, storage_key, pipeline, task): ...
+        def write_hash(self, storage_key, pipeline, task, hash): ...
+        def delete(self, storage_key, pipeline, task): ...
+        def list_tasks(self, storage_key, pipeline): ...
+
+    assert isinstance(ReadHashOnly(), StateStoreBackend)

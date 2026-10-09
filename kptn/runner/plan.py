@@ -131,10 +131,36 @@ def emit_checkpoint_stale(task_name: str, stale_task: str, timestamp: bool = Fal
     print(f"[CHECKPOINT_STALE]{ts} {task_name} — {stale_task} is stale, backup deleted", flush=True)
 
 
+class _PrefetchedHashes:
+    """Answers ``read_hash`` from one bulk ``read_hashes`` query.
+
+    A plan reads a hash for nearly every task, and in factory mode each
+    ``read_hash`` opens a fresh connection through the project's factory. The
+    query runs on the first read, so a plan that reads nothing touches nothing;
+    reads for any other key go to the store itself. Only for planning: a run
+    writes hashes between reads, which a snapshot would miss.
+    """
+
+    def __init__(self, state_store: StateStoreBackend, storage_key: str, pipeline: str) -> None:
+        self._store = state_store
+        self._key = (storage_key, pipeline)
+        self._hashes: dict[str, str | None] | None = None
+
+    def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None:
+        if (storage_key, pipeline) != self._key:
+            return self._store.read_hash(storage_key, pipeline, task)
+        if self._hashes is None:
+            self._hashes = self._store.read_hashes(storage_key, pipeline)  # type: ignore[attr-defined]
+        return self._hashes.get(task)
+
+
 def build_plan(
     resolved: ResolvedGraph,
     state_store: StateStoreBackend,
 ) -> list[PlanEntry]:
+    reader: StateStoreBackend | _PrefetchedHashes = state_store
+    if callable(getattr(state_store, "read_hashes", None)):
+        reader = _PrefetchedHashes(state_store, resolved.storage_key, resolved.pipeline)
     entries: list[PlanEntry] = []
     for node in topo_sort(resolved.graph):
         if isinstance(node, _PLAN_NON_EXEC):
@@ -151,7 +177,7 @@ def build_plan(
             entries.append(PlanEntry(node.name, PlanAction.MAP, provider=provider))
             continue
         try:
-            stale, reason = is_stale(node, state_store, resolved.storage_key, resolved.pipeline)
+            stale, reason = is_stale(node, reader, resolved.storage_key, resolved.pipeline)
         except HashError:
             stale, reason = True, "hash unavailable"
         entries.append(
