@@ -17,6 +17,7 @@ from kptn.graph.nodes import (
     ParallelNode,
     PipelineNode,
     RTaskNode,
+    SourceNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -30,6 +31,13 @@ from kptn.exceptions import HashError, TaskError
 from kptn.runner.console import ConsoleEventSink
 from kptn.runner.events import EventEmitter, EventKind, JSONValue
 from kptn.runner.checkpoint import get_db_path, save_checkpoint, find_restore_candidate, restore_checkpoint
+from kptn.sources.build import (
+    build_table,
+    is_current,
+    plan_tables,
+    remove_stale_tables,
+    state_value,
+)
 from kptn.state_store.protocol import StateStoreBackend
 
 logger = logging.getLogger(__name__)
@@ -314,6 +322,74 @@ def _try_restore(
     logger.info("Restored checkpoint from %s — pipeline DB rewound", candidate)
 
 
+def _execute_source(
+    node: SourceNode,
+    *,
+    resolved: ResolvedGraph,
+    state_store: StateStoreBackend,
+    config_kwargs: dict[str, Any],
+    emitter: EventEmitter,
+    root: Path,
+    force: bool,
+    no_cache: bool,
+    groups: list[str] | None,
+) -> bool:
+    """Bring every table of *node* up to date. True if any table changed.
+
+    A source is judged only on its own files, check files and code; upstream
+    dirtiness is deliberately ignored, so a rebuilt schema does not force a
+    re-read of unchanged files.
+    """
+    try:
+        plans = plan_tables(node.name, node.spec, config_kwargs, root=root)
+    except Exception as exc:  # includes errors raised by a files= or table= callable
+        started_at = _emit_task_started(emitter, node.name, mode="source", groups=groups, count=0)
+        _emit_task_finished(
+            emitter, node.name, mode="source", status="failed", started_at=started_at, error=str(exc)
+        )
+        raise TaskError(f"Source '{node.name}': {exc}") from exc
+
+    started_at = _emit_task_started(
+        emitter, node.name, mode="source", groups=groups, count=len(plans)
+    )
+    changed = bool(remove_stale_tables(node.name, {p.table for p in plans}, root=root))
+    for plan in plans:
+        if not force and not no_cache and is_current(
+            plan, state_store, resolved.storage_key, resolved.pipeline
+        ):
+            _emit_task_skipped(emitter, plan.state_name, mode="source_table", groups=groups)
+            continue
+        table_started = _emit_task_started(
+            emitter, plan.state_name, mode="source_table", groups=groups
+        )
+        try:
+            with emitter.task_scope(plan.state_name):
+                build_table(plan, node.spec, root=root)
+        except Exception as exc:
+            _emit_task_finished(
+                emitter, plan.state_name, mode="source_table", status="failed",
+                started_at=table_started, error=str(exc),
+            )
+            _emit_task_finished(
+                emitter, node.name, mode="source", status="failed",
+                started_at=started_at, error=f"table '{plan.table}' failed",
+            )
+            raise TaskError(f"Source '{node.name}', table '{plan.table}': {exc}") from exc
+        if not no_cache:
+            state_store.write_hash(
+                resolved.storage_key, resolved.pipeline, plan.state_name, state_value(plan)
+            )
+        _emit_task_finished(
+            emitter, plan.state_name, mode="source_table", status="succeeded", started_at=table_started
+        )
+        changed = True
+
+    _emit_task_finished(
+        emitter, node.name, mode="source", status="succeeded", started_at=started_at, cached=not changed
+    )
+    return changed
+
+
 def execute(
     resolved: ResolvedGraph,
     state_store: StateStoreBackend,
@@ -508,6 +584,22 @@ def execute(
                     started_at=started_at,
                 )
             if any_item_ran_stale:
+                dirty_names.add(node.name)
+            continue
+
+        # SourceNode — table by table; upstream dirtiness is ignored (see helper)
+        if isinstance(node, SourceNode):
+            if _execute_source(
+                node,
+                resolved=resolved,
+                state_store=state_store,
+                config_kwargs=config_kwargs,
+                emitter=emitter,
+                root=Path(cwd),
+                force=force,
+                no_cache=no_cache,
+                groups=group_paths.get(node.name),
+            ):
                 dirty_names.add(node.name)
             continue
 
