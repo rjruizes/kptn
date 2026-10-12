@@ -334,6 +334,30 @@ function initOutline(console_, list) {
     }
   }
 
+  function flash(item) {
+    /* Light up the card's output for a moment, so the eye lands on it after
+     * the jump: its tasks' folds, and its own rows outside them. */
+    var owners = list.querySelectorAll("[data-fold='task'], .event[data-task]");
+    for (var i = 0; i < owners.length; i += 1) {
+      var el = owners[i];
+      if (el.classList.contains("event") && foldOf(el) && foldOf(el).getAttribute("data-fold") === "task") {
+        continue;
+      }
+      if (!owns(item, el.getAttribute("data-key") || el.getAttribute("data-task"))) {
+        continue;
+      }
+      el.classList.remove("is-flashing");
+      void el.offsetWidth; /* restart the animation on a second click */
+      el.classList.add("is-flashing");
+    }
+  }
+
+  list.addEventListener("animationend", function (event) {
+    if (event.animationName === "console-flash") {
+      event.target.closest(".is-flashing") && event.target.closest(".is-flashing").classList.remove("is-flashing");
+    }
+  });
+
   function reveal(item) {
     /* Open every fold of the card's tasks, and the stages around them, and
      * bring the first into view. The folds are then the reader's, and are
@@ -371,6 +395,7 @@ function initOutline(console_, list) {
     var item = event.target.closest("[data-select]");
     if (item && nav.contains(item)) {
       reveal(item);
+      flash(item);
     }
   });
   window.addEventListener("scroll", schedule, { passive: true });
@@ -404,6 +429,59 @@ function initOutline(console_, list) {
     refilter: schedule,
     ended: schedule
   };
+}
+
+/* The console in boxes, with the page showing between them: one box per
+ * step of the pipeline -- a task, with its own rows -- and, inside a stage
+ * or pipeline at the top, one box per branch (a source with its tables, a
+ * module pipeline whole). Worked out from the order of the console's own
+ * elements, so it holds for a page and for a stream alike; without it the
+ * console is the single panel the stylesheet draws by default. */
+function segmentConsole(list) {
+  function base(name) {
+    return name ? name.split("[")[0] : "";
+  }
+  function keyOf(el) {
+    var fold = el.getAttribute("data-fold");
+    if (fold === "group") {
+      return "group:" + el.getAttribute("data-key");
+    }
+    if (fold === "task") {
+      return "task:" + base(el.getAttribute("data-key"));
+    }
+    var task = el.getAttribute("data-task");
+    return task ? "task:" + base(task) : "run";
+  }
+  function box(children) {
+    var keys = children.map(keyOf);
+    for (var i = 0; i < children.length; i += 1) {
+      var parts = children[i].classList;
+      parts.remove("seg-group");
+      parts.add("seg");
+      parts.toggle("seg--start", i === 0 || keys[i] !== keys[i - 1]);
+      parts.toggle("seg--end", i === children.length - 1 || keys[i] !== keys[i + 1]);
+    }
+  }
+  var top = [];
+  for (var el = list.firstElementChild; el; el = el.nextElementSibling) {
+    if (el.getAttribute("data-fold") !== "group") {
+      top.push(el);
+      continue;
+    }
+    /* A stage at the top is not a box of its own: its branches are. */
+    el.classList.remove("seg", "seg--start", "seg--end");
+    el.classList.add("seg-group");
+    var body = el.firstElementChild && el.firstElementChild.querySelector(":scope > .fold__body");
+    var branches = [];
+    for (var c = body ? body.firstElementChild : null; c; c = c.nextElementSibling) {
+      if (!c.hasAttribute("data-fold-gutter")) {
+        branches.push(c);
+      }
+    }
+    box(branches);
+  }
+  box(top);
+  list.classList.add("is-segmented");
 }
 
 function rememberTouchedFolds(console_) {
@@ -592,6 +670,7 @@ function initConsole() {
   jumpToFoldEnds(console_);
   collapseFromGutters(console_);
   var outline = initOutline(console_, list);
+  segmentConsole(list);
   if (console_.getAttribute("data-terminal") === "true") {
     /* Already over. Its whole history is on the page, and its status came
      * from the run row -- there is nothing left to stream, and no ending
@@ -683,6 +762,7 @@ function initConsole() {
     if (autoScroll.following()) {
       settleFolds(list, newest);
     }
+    segmentConsole(list);
     if (outline) {
       outline.refilter();
     }

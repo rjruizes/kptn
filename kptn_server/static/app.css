@@ -845,6 +845,86 @@ details[open] > .fold__head::before {
   box-shadow: inset -2px 0 var(--accent);
 }
 
+/* -- the console in boxes ---------------------------------------------- */
+
+/* app.js marks the console's parts (segmentConsole): one box per step, and
+   inside a stage at the top, one per branch, with the page between them.
+   Each part draws its share of its box -- the sides, plus the top for the
+   first and the bottom for the last -- so a box needs no wrapper element
+   and a streamed row simply joins the box it belongs to. */
+.console__events.is-segmented {
+  border: none;
+  background: none;
+}
+
+.is-segmented .seg {
+  border: 1px solid var(--line);
+  border-top-width: 0;
+  border-bottom-width: 0;
+  border-radius: 0;
+  background: var(--surface-sunken);
+}
+
+.is-segmented .seg:not(.seg--start) {
+  border-top-width: 1px;
+}
+
+.is-segmented .seg--start {
+  margin-top: 10px;
+  border-top-width: 1px;
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+}
+
+.is-segmented > .seg--start:first-child {
+  margin-top: 0;
+}
+
+.is-segmented .seg--end {
+  border-bottom-width: 1px;
+  border-bottom-left-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+
+/* A stage at the top sits on the page, its branches boxed beneath it. */
+.is-segmented .seg-group {
+  margin-top: 10px;
+  border-bottom: none;
+}
+
+.is-segmented .seg-group > details > .fold__body {
+  margin-left: 10px;
+  padding-left: 10px;
+  border-top: none;
+}
+
+.is-segmented .seg-group > details > .fold__body > .seg--start:nth-child(2) {
+  margin-top: 4px;
+}
+
+/* A card's output, lit for a moment after its card is clicked. */
+@keyframes console-flash {
+  from {
+    background-color: color-mix(in srgb, var(--accent) 22%, var(--surface-sunken));
+  }
+
+  to {
+    background-color: var(--surface-sunken);
+  }
+}
+
+.is-flashing,
+.is-flashing > details > .fold__head {
+  animation: console-flash 1.6s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-flashing,
+  .is-flashing > details > .fold__head {
+    animation-duration: 0.01s;
+  }
+}
+
 /* -- the pipeline sidebar ----------------------------------------------- */
 
 /* The run page's pipeline beside its console: a card per step, top to
