@@ -27,7 +27,7 @@
   <span class="event__seq">{{ event.sequence }}</span>
   <time class="event__clock" datetime="{{ event.timestamp }}">{{ event.clock }}</time>
   {% if event.label %}<span class="event__kind">{{ event.label }}</span>{% endif %}
-  {% if event.task and not event.in_task %}<span class="event__task">{% if event.ingest %}{{ ingest_icon("ingest-icon") }}{% endif %}{{ event.task }}</span>{% endif %}
+  {% if event.task and not event.in_task %}<span class="event__task">{{ event.task }}</span>{% endif %}
   {% if event.text %}{% if event.is_log %}<pre class="event__text">{{ event.text }}</pre>{% else %}<span class="event__summary">{{ event.text }}</span>{% endif %}{% endif %}
 </li>
 {%- endmacro %}
@@ -39,10 +39,25 @@
   frame replaces just this.
 #}
 {% macro fold_outcome(fold, finished) -%}
+{%- if fold.table %}{{ table_state(fold, finished) }}{% else -%}
 <span class="fold__outcome" id="{{ fold.id }}-outcome">
   {%- if finished and finished.status %}<span class="fold__status fold__status--{{ finished.status }}">{{ finished.status }}</span>{% endif %}
   {%- if finished and finished.duration %} <span class="fold__duration">{{ finished.duration }}</span>{% endif -%}
 </span>
+{%- endif %}
+{%- endmacro %}
+
+{#
+  A table's square: its state is its colour, and its name and outcome are its
+  tooltip. The ``-outcome`` id is what a ``task_finished`` frame replaces, as
+  it replaces a task heading's outcome, so the square turns from running to
+  built or failed in place. ``data-state`` is what app.js counts.
+#}
+{% macro table_state(fold, finished) -%}
+{%- set state = (finished.status if finished and finished.status else fold.state) -%}
+{%- set word = {"succeeded": "built", "cached": "cached", "failed": "failed", "running": "running"}.get(state, state) -%}
+<span class="table-square__state table-square__state--{{ state }}" id="{{ fold.id }}-outcome"
+      data-state="{{ state }}" title="{{ fold.label }}: {{ word }}{% if finished and finished.duration %} in {{ finished.duration }}{% endif %}"></span>
 {%- endmacro %}
 
 {#
@@ -55,11 +70,47 @@
 <span class="fold__count fold__count--warnings" data-fold-warnings="{{ fold.warnings }}"{% if not fold.warnings %} hidden{% endif %}>{{ "{:,}".format(fold.warnings) }} {{ "warning" if fold.warnings == 1 else "warnings" }}</span>
 {%- endmacro %}
 
+{#
+  A source: one row in its stage's box, its name and then a square per
+  table. Its own start and finish rows land here too and are hidden by the
+  stylesheet -- they still count toward the run's tallies and the stream's
+  cursor -- unless they report a failure the tables cannot show.
+#}
+{% macro source_markup(fold, body) -%}
+<li class="fold fold--source" id="{{ fold.id }}" data-fold="source">
+  <ol class="fold__body source__row" id="{{ fold.body_id }}"><li class="source__name">{{ fold.key }}</li>{{ body }}</ol>
+</li>
+{%- endmacro %}
+
+{#
+  A table: a square that opens a panel holding the table's rows. The fold
+  itself is ``display: contents``, so the square sits in its source's row
+  and the panel opens on a line of its own beneath it.
+#}
+{% macro table_markup(fold, open, body) -%}
+<li class="fold fold--table" id="{{ fold.id }}" data-fold="table">
+  <button type="button" class="table-square{% if fold.warnings %} table-square--warned{% endif %}"
+          data-table-toggle aria-controls="{{ fold.id }}-panel"
+          aria-expanded="{{ 'true' if open else 'false' }}"
+          aria-label="{{ fold.label }}">{{ fold_outcome(fold, fold.outcome) }}</button>
+  <div class="table-panel" id="{{ fold.id }}-panel"{% if not open %} hidden{% endif %}>
+    <div class="table-panel__name">{{ fold.key }}</div>
+    <ol class="fold__body" id="{{ fold.body_id }}">{{ body }}</ol>
+  </div>
+</li>
+{%- endmacro %}
+
 {% macro fold_markup(fold, open, body) -%}
-<li class="fold fold--{{ fold.kind }}" id="{{ fold.id }}" data-fold="{{ fold.kind }}">
+{%- if fold.kind == "source" %}{{ source_markup(fold, body) }}
+{%- elif fold.table %}{{ table_markup(fold, open, body) }}
+{%- else -%}
+<li class="fold fold--{{ fold.kind }}{% if fold.ingest and fold.kind == 'group' %} fold--ingest{% endif %}" id="{{ fold.id }}" data-fold="{{ fold.kind }}">
   <details{% if open %} open{% endif %}>
     <summary class="fold__head">
       <span class="fold__name">{% if fold.ingest %}{{ ingest_icon("ingest-icon") }}{% endif %}{{ fold.key }}</span>
+      {%- if fold.ingest and fold.kind == "group" %}
+      <span class="ingest-summary" data-ingest-summary>{{ fold.ingest_summary() }}</span>
+      {%- endif %}
       {%- if fold.kind == "task" %}
       {{ fold_outcome(fold, fold.outcome) }}
       {{ fold_counts(fold) }}
@@ -76,11 +127,15 @@
     <ol class="fold__body" id="{{ fold.body_id }}"><li class="fold__gutter" data-fold-gutter aria-hidden="true" title="Collapse {{ fold.key }}"></li>{{ body }}</ol>
   </details>
 </li>
+{%- endif %}
 {%- endmacro %}
 
-{# A fold as the stream first sends it: open, with nothing in it yet. #}
+{#
+  A fold as the stream first sends it, with nothing in it yet: open, except a
+  table's panel, which waits to be asked for (app.js opens it on a failure).
+#}
 {% macro fold_shell(fold) -%}
-{{ fold_markup(fold, true, "") }}
+{{ fold_markup(fold, not fold.table, "") }}
 {%- endmacro %}
 
 {# The console's tree, as ``build_console`` lays it out: folds and rows. #}

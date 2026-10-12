@@ -18,8 +18,11 @@ its ``task_finished``.
   among them). The groups already open are reused as far as they agree with
   that path; the rest are opened. A started task then opens a fold of its
   own; a skipped one -- which prints nothing -- is a plain row in its group.
-* A mapped task's start and a source's start and finish are markers: rows in
-  their group. Their items (``task[item]``, ``source[table]``) get the folds.
+* A mapped task's start is a marker: a row in its group, with a fold for
+  each item (``task[item]``).
+* A source opens a *source* fold in its stage, and each of its tables --
+  built or cached -- a table fold inside it. The page draws the stage as a
+  box, the source as a row, and each table as a square opening onto its rows.
 * Any other event belongs to the task fold at the end of the open chain when
   it names that task, or names no task while that task is still running.
 * An event naming a task that has no fold open (output from a task whose
@@ -42,6 +45,8 @@ ROOT_ID = "console-events"
 
 FOLD_GROUP = "group"
 FOLD_TASK = "task"
+#: A ``kptn.source``: a row in its stage's box holding one square per table.
+FOLD_SOURCE = "source"
 
 _RUN_KINDS = frozenset({EventKind.RUN_STARTED.value, EventKind.RUN_FINISHED.value})
 
@@ -63,9 +68,12 @@ class Fold:
     children: list[Any] = field(default_factory=list)
     #: The task's outcome, from its ``task_finished``; empty while it runs.
     status: str = ""
-    #: Part of data ingest, which the heading marks with an icon: a source's
-    #: table, the views step, or the stage a source's event opened.
+    #: Part of data ingest, which the heading marks with an icon: the views
+    #: step, or the stage a source's event opened -- drawn as a box.
     ingest: bool = False
+    #: A source's table: a task fold drawn as a square in its source's row,
+    #: with its rows in a panel the square opens.
+    table: bool = False
     #: The prepared ``task_finished`` row, for the fold's heading.
     outcome: dict[str, Any] | None = None
     lines: int = 0
@@ -80,6 +88,45 @@ class Fold:
     @property
     def parent_id(self) -> str:
         return self.parent.body_id if self.parent is not None else ROOT_ID
+
+    @property
+    def label(self) -> str:
+        """A table's own name, without its source: ``foodtotals``."""
+        if self.table and "[" in self.key:
+            return self.key.split("[", 1)[1].rstrip("]")
+        return self.key
+
+    @property
+    def state(self) -> str:
+        """A table's square: ``succeeded``, ``failed``, ``cached``, or ``running``."""
+        return self.status or "running"
+
+    def ingest_summary(self) -> str:
+        """An ingest stage's heading: "5 tables · 3 built · 2 cached".
+
+        Counted from the tree a whole history builds; a stream's empty shell
+        says nothing, and ``app.js`` writes the same words from the squares.
+        """
+        tables = [fold for fold in self._descendants() if fold.table]
+        if not tables:
+            return ""
+        parts = [f"{len(tables)} {'table' if len(tables) == 1 else 'tables'}"]
+        for state, word in _TABLE_STATE_WORDS:
+            count = sum(1 for fold in tables if fold.state == state)
+            if count:
+                parts.append(f"{count} {word}")
+        warned = sum(1 for fold in tables if fold.warnings)
+        if warned:
+            parts.append(f"{warned} with warnings")
+        return " · ".join(parts)
+
+    def _descendants(self) -> list[Fold]:
+        found: list[Fold] = []
+        for child in self.children:
+            if isinstance(child, Fold):
+                found.append(child)
+                found.extend(child._descendants())
+        return found
 
     def ancestors(self) -> list[Fold]:
         chain: list[Fold] = []
@@ -109,7 +156,7 @@ class Placement:
     @property
     def in_task(self) -> bool:
         """Is the row inside its task's own fold? Then it need not name it."""
-        return self.container is not None and self.container.kind == FOLD_TASK
+        return self.container is not None and self.container.kind in (FOLD_TASK, FOLD_SOURCE)
 
 
 class ConsoleLayout:
@@ -133,16 +180,14 @@ class ConsoleLayout:
         ):
             return self._land(event, task)
 
+        # A source's own events after its tables have started -- its outcome,
+        # mostly -- go back to the source's row.
+        source = self._source(event.task_name)
+        if source is not None:
+            return self._land(event, source)
+
         groups = self._groups()
         if event.task_name is None:
-            return Placement(container=groups[-1] if groups else None)
-
-        if _is_marker(event):
-            # A source's own outcome, after its tables' folds: a row in its
-            # group, like the marker it started with.
-            if event.payload.get("status") == "failed":
-                for fold in groups:
-                    fold.failed = True
             return Placement(container=groups[-1] if groups else None)
 
         # Output from a task with no fold open. It still gets one, next to
@@ -160,12 +205,19 @@ class ConsoleLayout:
         )
 
     def _task(self) -> Fold | None:
-        if self._chain and self._chain[-1].kind == FOLD_TASK:
+        if self._chain and self._chain[-1].kind in (FOLD_TASK, FOLD_SOURCE):
             return self._chain[-1]
         return None
 
     def _groups(self) -> list[Fold]:
         return [fold for fold in self._chain if fold.kind == FOLD_GROUP]
+
+    def _source(self, name: str | None) -> Fold | None:
+        """The open source fold named *name*, if there is one."""
+        for fold in self._chain:
+            if fold.kind == FOLD_SOURCE and fold.key == name:
+                return fold
+        return None
 
     def _place_task_row(self, event: StoredEvent) -> Placement:
         path = _group_path(event)
@@ -190,13 +242,40 @@ class ConsoleLayout:
             opens.append(fold)
 
         container = chain[-1] if chain else None
+        mode = event.payload.get("mode")
+        if mode == "source" and event.kind == EventKind.TASK_STARTED.value:
+            # A source opens its row in the stage's box; its tables land in it.
+            source = Fold(
+                id=f"fold-{event.sequence}-source",
+                kind=FOLD_SOURCE,
+                key=str(event.task_name),
+                parent=container,
+            )
+            chain.append(source)
+            opens.append(source)
+            self._chain = chain
+            return Placement(container=source, opens=tuple(opens))
+        if mode == "source_table" and event.task_name:
+            source = self._source(event.task_name.split("[", 1)[0])
+            if source is not None and source.parent is container:
+                # Built or cached, every table is a square in its source's row.
+                table = Fold(
+                    id=f"fold-{event.sequence}-task",
+                    kind=FOLD_TASK,
+                    key=event.task_name,
+                    parent=source,
+                    table=True,
+                    status="cached" if event.kind == EventKind.TASK_SKIPPED.value else "",
+                )
+                self._chain = [*chain, source, table]
+                return Placement(container=table, opens=(*opens, table))
         if _opens_task_fold(event):
             task = Fold(
                 id=f"fold-{event.sequence}-task",
                 kind=FOLD_TASK,
                 key=str(event.task_name),
                 parent=container,
-                ingest=is_ingest_event(event),
+                ingest=event.payload.get("mode") == "views",
             )
             chain.append(task)
             opens.append(task)
@@ -219,40 +298,31 @@ def _opens_task_row(event: StoredEvent) -> bool:
     return event.kind in (EventKind.TASK_STARTED.value, EventKind.TASK_SKIPPED.value)
 
 
-#: Modes of the events data ingest emits: a source, its tables, and the step
-#: creating views over them.
-_INGEST_MODES = frozenset({"source", "source_table", "views"})
-
-
-def is_ingest_event(event: StoredEvent) -> bool:
-    """Does *event* belong to a data-ingest step, which the console marks?"""
-    return event.payload.get("mode") in _INGEST_MODES
-
-
 def _is_source_event(event: StoredEvent) -> bool:
     return event.payload.get("mode") in ("source", "source_table")
 
 
-#: Task modes whose events only mark where their items start and end: a
-#: mapped task, and a source, whose tables are its items.
-_MARKER_MODES = frozenset({"map", "source"})
-
-
-def _is_marker(event: StoredEvent) -> bool:
-    return event.payload.get("mode") in _MARKER_MODES
+#: What a table's square says, in the order an ingest summary lists them.
+_TABLE_STATE_WORDS = (
+    ("succeeded", "built"),
+    ("cached", "cached"),
+    ("failed", "failed"),
+    ("running", "running"),
+)
 
 
 def _opens_task_fold(event: StoredEvent) -> bool:
     """Does this task get a fold, or only a row in its group?
 
     A started task gets a fold. A skipped one prints nothing, and the marker a
-    mapped task or a source emits before its items has nothing of its own to
-    hold -- each item is a task with its own ``task_started``, and its own fold.
+    mapped task emits before its items has nothing of its own to hold -- each
+    item is a task with its own ``task_started``, and its own fold. (Sources
+    and their tables are placed before this is asked.)
     """
     return (
         event.kind == EventKind.TASK_STARTED.value
         and bool(event.task_name)
-        and not _is_marker(event)
+        and event.payload.get("mode") != "map"
     )
 
 
@@ -264,7 +334,6 @@ def _group_path(event: StoredEvent) -> list[str]:
 
 
 __all__ = [
-    "is_ingest_event",
     "FOLD_GROUP",
     "FOLD_TASK",
     "OPEN_TASKS",
