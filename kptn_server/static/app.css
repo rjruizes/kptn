@@ -1060,6 +1060,18 @@ details[open] > .fold__head::before {
   color: var(--ink-muted);
 }
 
+/* A step's kind; a source adds an icon before the word (see _kind.html). */
+.kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.kind__icon {
+  flex: none;
+}
+
 .badge {
   border: 1px solid var(--line);
   border-radius: 10px;

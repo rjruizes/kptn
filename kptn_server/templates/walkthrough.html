@@ -16,6 +16,7 @@
   documentation, never the page.
 #}
 {% extends "base.html" %}
+{% from "_kind.html" import kind_label %}
 
 {% block title %}How it works - {{ project.display_name }} - kptn{% endblock %}
 
@@ -50,7 +51,7 @@
           {% if item.bypassed %}<span class="badge">bypassed</span>{% endif %}
           {% if item.docs_error %}<span class="badge">documentation link rejected</span>{% endif %}
         </td>
-        <td class="muted">{{ item.kind }}</td>
+        <td class="muted">{{ kind_label(item.kind) }}</td>
         <td class="muted">{{ item.description or not_documented }}</td>
         {% else %}
         <th class="walkthrough__heading" colspan="4" scope="colgroup">

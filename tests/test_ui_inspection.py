@@ -1079,3 +1079,27 @@ def test_the_inspection_routes_never_start_a_run(client: TestClient) -> None:
 
     assert store.list_runs(project.root) == []
     assert store.active_run(project.root) is None
+
+
+def test_source_steps_carry_an_icon(tmp_path: Path) -> None:
+    root = write_project(
+        tmp_path,
+        "sources",
+        module_source=(
+            "import kptn\n\n\n"
+            "@kptn.task(outputs=[])\n"
+            "def transform() -> None:\n    return None\n\n\n"
+            'raw = kptn.source("raw", files="in")\n'
+            'pipeline = kptn.Pipeline("sources", raw >> transform)\n'
+        ),
+    )
+    client = project_client(root)
+
+    page = client.get("/walkthrough").text
+    source_row = page.split('data-task="raw"')[1].split("</tr>")[0]
+    task_row = page.split('data-task="transform"')[1].split("</tr>")[0]
+    assert 'class="kind__icon"' in source_row
+    assert 'class="kind__icon"' not in task_row
+
+    assert 'class="kind__icon"' in client.get("/walkthrough/task/raw").text
+    assert 'class="kind__icon"' not in client.get("/walkthrough/task/transform").text
