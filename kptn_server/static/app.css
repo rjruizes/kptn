@@ -1072,8 +1072,9 @@ details[open] > .fold__head::before {
   flex: none;
 }
 
-/* The same icon in the run console, inline with a source's or a table's name. */
-.console-icon {
+/* The same icon inline with a name: an ingest stage's heading, and a
+   source, table or views step in the run console. */
+.ingest-icon {
   vertical-align: -2px;
   margin-right: 4px;
 }

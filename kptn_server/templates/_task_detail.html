@@ -16,7 +16,7 @@
   <header class="task-detail__header">
     <h2 class="task-detail__name"><code>{{ item.name }}</code></h2>
     <p class="muted">
-      {{ kind_label(item.kind) }}
+      {{ kind_label(item.kind, item.ingest) }}
       {%- if item.sequence is not none %} &middot; step {{ item.sequence }}{% endif %}
       {%- if item.bypassed %} &middot; <span class="badge">bypassed by this profile</span>{% endif %}
     </p>

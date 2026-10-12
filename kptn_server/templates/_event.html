@@ -16,7 +16,7 @@
   pipeline output -- untrusted bytes read out of the run's log file -- and this
   is the only place it is turned into markup. Do not add ``| safe`` to it.
 #}
-{% from "_kind.html" import source_icon %}
+{% from "_kind.html" import ingest_icon %}
 
 {% macro event_row(event) -%}
 <li class="event event--{{ event.kind }}{% if event.severity %} event--{{ event.severity }}{% endif %}{% if event.status %} event--{{ event.status }}{% endif %}"
@@ -27,7 +27,7 @@
   <span class="event__seq">{{ event.sequence }}</span>
   <time class="event__clock" datetime="{{ event.timestamp }}">{{ event.clock }}</time>
   {% if event.label %}<span class="event__kind">{{ event.label }}</span>{% endif %}
-  {% if event.task and not event.in_task %}<span class="event__task">{% if event.source %}{{ source_icon("console-icon") }}{% endif %}{{ event.task }}</span>{% endif %}
+  {% if event.task and not event.in_task %}<span class="event__task">{% if event.ingest %}{{ ingest_icon("ingest-icon") }}{% endif %}{{ event.task }}</span>{% endif %}
   {% if event.text %}{% if event.is_log %}<pre class="event__text">{{ event.text }}</pre>{% else %}<span class="event__summary">{{ event.text }}</span>{% endif %}{% endif %}
 </li>
 {%- endmacro %}
@@ -59,7 +59,7 @@
 <li class="fold fold--{{ fold.kind }}" id="{{ fold.id }}" data-fold="{{ fold.kind }}">
   <details{% if open %} open{% endif %}>
     <summary class="fold__head">
-      <span class="fold__name">{% if fold.mode == "source_table" %}{{ source_icon("console-icon") }}{% endif %}{{ fold.key }}</span>
+      <span class="fold__name">{% if fold.ingest %}{{ ingest_icon("ingest-icon") }}{% endif %}{{ fold.key }}</span>
       {%- if fold.kind == "task" %}
       {{ fold_outcome(fold, fold.outcome) }}
       {{ fold_counts(fold) }}

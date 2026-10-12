@@ -63,9 +63,9 @@ class Fold:
     children: list[Any] = field(default_factory=list)
     #: The task's outcome, from its ``task_finished``; empty while it runs.
     status: str = ""
-    #: The ``mode`` of the event that opened a task fold -- ``source_table``
-    #: marks a source's table -- or empty.
-    mode: str = ""
+    #: Part of data ingest, which the heading marks with an icon: a source's
+    #: table, the views step, or the stage a source's event opened.
+    ingest: bool = False
     #: The prepared ``task_finished`` row, for the fold's heading.
     outcome: dict[str, Any] | None = None
     lines: int = 0
@@ -181,6 +181,10 @@ class ConsoleLayout:
                 kind=FOLD_GROUP,
                 key=path[depth],
                 parent=chain[-1] if chain else None,
+                # The stage a source sits directly in. Decided as the fold
+                # opens, so the stream and a reload agree: a stage whose first
+                # task is not a source is not marked here.
+                ingest=depth == len(path) - 1 and _is_source_event(event),
             )
             chain.append(fold)
             opens.append(fold)
@@ -192,7 +196,7 @@ class ConsoleLayout:
                 kind=FOLD_TASK,
                 key=str(event.task_name),
                 parent=container,
-                mode=str(event.payload.get("mode") or ""),
+                ingest=is_ingest_event(event),
             )
             chain.append(task)
             opens.append(task)
@@ -213,6 +217,20 @@ class ConsoleLayout:
 def _opens_task_row(event: StoredEvent) -> bool:
     """Is this the event that puts a task in its group?"""
     return event.kind in (EventKind.TASK_STARTED.value, EventKind.TASK_SKIPPED.value)
+
+
+#: Modes of the events data ingest emits: a source, its tables, and the step
+#: creating views over them.
+_INGEST_MODES = frozenset({"source", "source_table", "views"})
+
+
+def is_ingest_event(event: StoredEvent) -> bool:
+    """Does *event* belong to a data-ingest step, which the console marks?"""
+    return event.payload.get("mode") in _INGEST_MODES
+
+
+def _is_source_event(event: StoredEvent) -> bool:
+    return event.payload.get("mode") in ("source", "source_table")
 
 
 #: Task modes whose events only mark where their items start and end: a
@@ -246,6 +264,7 @@ def _group_path(event: StoredEvent) -> list[str]:
 
 
 __all__ = [
+    "is_ingest_event",
     "FOLD_GROUP",
     "FOLD_TASK",
     "OPEN_TASKS",

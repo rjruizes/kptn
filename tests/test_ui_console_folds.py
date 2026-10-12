@@ -471,7 +471,7 @@ def test_an_open_task_heading_sticks_to_the_top() -> None:
 
 
 def _source_run(store: RunStore, root: Path) -> str:
-    """A source ``s`` with one table, then a python task."""
+    """Stage ``bronze`` holding a source ``s``, its views, then a python task."""
     record = store.create_run(RunRequest(project_root=root, pipeline="fixture"))
     run_id = record.run_id
     store.append_event(run_id, "run_started")
@@ -492,6 +492,13 @@ def _source_run(store: RunStore, root: Path) -> str:
             task_name=name,
             payload={"mode": mode, "status": "succeeded", "duration_seconds": 1.0},
         )
+    store.append_event(run_id, "task_started", task_name="bronze_views", payload={"mode": "views"})
+    store.append_event(
+        run_id,
+        "task_finished",
+        task_name="bronze_views",
+        payload={"mode": "views", "status": "succeeded", "duration_seconds": 1.0},
+    )
     store.append_event(run_id, "task_started", task_name="after", payload={"mode": "python"})
     store.append_event(
         run_id,
@@ -504,21 +511,30 @@ def _source_run(store: RunStore, root: Path) -> str:
     return run_id
 
 
-_ICON = 'class="console-icon"'
+_ICON = 'class="ingest-icon"'
 
 
-def test_source_tables_and_source_rows_carry_the_source_icon(app, store, client) -> None:
+def test_ingest_steps_carry_the_ingest_icon(app, store, client) -> None:
     run_id = _source_run(store, app.state.project.root)
     html = client.get(f"/runs/{run_id}").text
-    icon = r'<svg class="console-icon"[^>]*>.*?</svg>'
+    icon = r'<svg class="ingest-icon"[^>]*>.*?</svg>'
 
+    # The stage a source opened, the table's fold, and the views step's fold.
+    assert re.search(rf'<span class="fold__name">{icon}bronze</span>', html, re.S)
     assert re.search(rf'<span class="fold__name">{icon}s\[t\]</span>', html, re.S)
+    assert re.search(rf'<span class="fold__name">{icon}bronze_views</span>', html, re.S)
     # The source's own start and finish rows, and a cached table's row.
     assert len(re.findall(rf'<span class="event__task">{icon}s</span>', html, re.S)) == 2
     assert re.search(rf'<span class="event__task">{icon}s\[cached\]</span>', html, re.S)
-    # Nothing else: not the python task, not the stage.
-    assert html.count(_ICON) == 4
+    # Nothing else: not the python task.
     assert '<span class="fold__name">after</span>' in html
+    assert html.count(_ICON) == 6
+
+
+def test_a_stage_opened_by_a_python_task_is_not_marked() -> None:
+    layout = ConsoleLayout()
+    [stage, _] = layout.place(_event(1, "task_started", "a", groups=["datasets"], mode="python")).opens
+    assert not stage.ingest
 
 
 def test_a_streamed_source_table_shell_carries_the_icon(app, store, client) -> None:

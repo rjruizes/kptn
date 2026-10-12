@@ -16,7 +16,7 @@
   documentation, never the page.
 #}
 {% extends "base.html" %}
-{% from "_kind.html" import kind_label %}
+{% from "_kind.html" import ingest_icon, kind_label %}
 
 {% block title %}How it works - {{ project.display_name }} - kptn{% endblock %}
 
@@ -51,11 +51,11 @@
           {% if item.bypassed %}<span class="badge">bypassed</span>{% endif %}
           {% if item.docs_error %}<span class="badge">documentation link rejected</span>{% endif %}
         </td>
-        <td class="muted">{{ kind_label(item.kind) }}</td>
+        <td class="muted">{{ kind_label(item.kind, item.ingest) }}</td>
         <td class="muted">{{ item.description or not_documented }}</td>
         {% else %}
         <th class="walkthrough__heading" colspan="4" scope="colgroup">
-          <span class="walkthrough__heading-name">{{ item.name }}</span>
+          <span class="walkthrough__heading-name">{% if item.ingest %}{{ ingest_icon("ingest-icon") }}{% endif %}{{ item.name }}</span>
           <span class="muted">{{ item.kind }}{% if item.description %} &mdash; {{ item.description }}{% endif %}</span>
         </th>
         {% endif %}

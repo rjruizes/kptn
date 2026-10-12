@@ -77,6 +77,9 @@ class InspectionItem:
     docs_error: str | None
     predecessors: tuple[str, ...]
     successors: tuple[str, ...]
+    #: Part of data ingest: a source, a views step, or a stage holding a
+    #: source. The UI marks these with one icon.
+    ingest: bool = False
 
 
 @dataclass(frozen=True)
@@ -260,6 +263,8 @@ def inspect_pipeline(
         successors[id(src)].append(dst.name)
         predecessors[id(dst)].append(src.name)
 
+    source_names = {n.name for n in graph.nodes if isinstance(n, SourceNode)}
+
     items: list[InspectionItem] = []
     sequence = 0
     for node in ordered:
@@ -292,6 +297,8 @@ def inspect_pipeline(
                 docs_error=docs_error,
                 predecessors=tuple(predecessors[id(node)]),
                 successors=tuple(successors[id(node)]),
+                ingest=isinstance(node, (SourceNode, SourceViewsNode))
+                or (isinstance(node, StageNode) and bool(node.members & source_names)),
             )
         )
 

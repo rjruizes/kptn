@@ -29,6 +29,20 @@ def test_inspection_shows_sources_as_tasks(tmp_path: Path) -> None:
     assert views.inputs == ("_bronze/asa24/*.parquet",)
 
 
+def test_inspection_marks_the_ingest_steps(tmp_path: Path) -> None:
+    @kptn.task(outputs=[])
+    def transform() -> None: ...
+
+    a = kptn.source("asa24", files="in/asa24")
+    bronze = kptn.Stage("bronze", a)
+    other = kptn.Stage("silver", transform)
+    pipeline = kptn.Pipeline("p", bronze >> kptn.source_views(bronze) >> other)
+
+    inspection = inspect_pipeline(pipeline, KptnConfig(), None, tmp_path)
+    ingest = {i.name for i in inspection.items if i.ingest}
+    assert ingest == {"bronze", "asa24", "bronze_views"}
+
+
 def test_console_prints_source_line() -> None:
     out = io.StringIO()
     emitter = EventEmitter("r", "p", None, ConsoleEventSink(stream_out=out, stream_err=io.StringIO()))

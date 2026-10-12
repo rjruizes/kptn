@@ -96,6 +96,7 @@ from kptn_server.console_layout import (
     ConsoleLayout,
     Fold,
     Placement,
+    is_ingest_event,
 )
 from kptn_server.context import ui
 from kptn_server.log_render import render_run_log
@@ -351,9 +352,9 @@ def console_event(
         "label": _label(event),
         "task": event.task_name,
         "in_task": in_task,
-        # A source's own rows and a skipped table's row, which name it with
-        # its icon. Rows inside a table's fold do not name the task at all.
-        "source": event.payload.get("mode") in ("source", "source_table"),
+        # A row naming an ingest step -- a source's own rows, a skipped
+        # table's -- carries its icon. Rows inside a fold do not name the task.
+        "ingest": is_ingest_event(event),
         # The instant, unambiguous, for the ``datetime`` attribute...
         "timestamp": _isoformat(event.timestamp),
         # ...and the developer's own wall clock for the text beside it. Events
