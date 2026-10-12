@@ -96,6 +96,7 @@ from kptn_server.console_layout import (
     ConsoleLayout,
     Fold,
     Placement,
+    is_ingest_event,
 )
 from kptn_server.context import ui
 from kptn_server.log_render import render_run_log
@@ -351,6 +352,9 @@ def console_event(
         "label": _label(event),
         "task": event.task_name,
         "in_task": in_task,
+        # A row naming an ingest step -- a source's own rows, a skipped
+        # table's -- carries its icon. Rows inside a fold do not name the task.
+        "ingest": is_ingest_event(event),
         # The instant, unambiguous, for the ``datetime`` attribute...
         "timestamp": _isoformat(event.timestamp),
         # ...and the developer's own wall clock for the text beside it. Events
@@ -410,13 +414,11 @@ def build_console(
     Each fold's ``open`` is what ``app.js`` would have left it as by now:
     only the newest :data:`~kptn_server.console_layout.OPEN_TASKS` task
     folds, and only the groups the newest event sits in, stay open -- except
-    around a failure, which is never folded away. An ingest stage's box stays
-    open, being a line per source; a table's panel opens only on a failure.
+    around a failure, which is never folded away.
     """
     layout = ConsoleLayout()
     top: list[Any] = []
     tasks: list[Fold] = []
-    tables: list[Fold] = []
     groups: list[Fold] = []
     last: Placement | None = None
 
@@ -424,12 +426,7 @@ def build_console(
         placement = layout.place(event)
         for fold in placement.opens:
             (fold.parent.children if fold.parent is not None else top).append(fold)
-            if fold.table:
-                tables.append(fold)
-            elif fold.kind == FOLD_TASK:
-                tasks.append(fold)
-            else:
-                groups.append(fold)
+            (tasks if fold.kind == FOLD_TASK else groups).append(fold)
         row = console_event(event, log_path, in_task=placement.in_task)
         container = placement.container
         (container.children if container is not None else top).append(row)
@@ -444,10 +441,8 @@ def build_console(
     current = set(last.container.ancestors()) if last and last.container else set()
     for index, fold in enumerate(tasks):
         fold.open = index >= len(tasks) - OPEN_TASKS or fold.failed
-    for fold in tables:
-        fold.open = fold.failed
     for fold in groups:
-        fold.open = fold in current or fold.failed or fold.ingest
+        fold.open = fold in current or fold.failed
     return top
 
 

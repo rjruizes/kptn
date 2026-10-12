@@ -127,56 +127,28 @@ def test_skipped_tasks_and_map_markers_are_rows_in_their_group() -> None:
     assert placed[2] == ("fold-3-task-body", ["items[x]"])
 
 
-def test_a_source_is_a_row_in_its_stage_holding_a_fold_per_table() -> None:
-    layout = ConsoleLayout()
-    started = layout.place(_event(1, "task_started", "s", groups=["bronze"], mode="source", count=2))
-    bronze, source = started.opens
-    assert (bronze.kind, bronze.ingest) == ("group", True)
-    assert (source.kind, source.key, source.parent) == ("source", "s", bronze)
-    assert started.container is source and started.in_task
+def test_a_source_and_its_outcome_are_rows_around_its_tables() -> None:
+    placed = _place_all(
+        [
+            _event(1, "task_started", "s", groups=["bronze"], mode="source", count=2),
+            _event(2, "task_skipped", "s[a]", groups=["bronze"], mode="source_table"),
+            _event(3, "task_started", "s[b]", groups=["bronze"], mode="source_table"),
+            _event(4, "task_finished", "s[b]", mode="source_table", status="succeeded"),
+            _event(5, "task_finished", "s", mode="source", status="succeeded"),
+        ]
+    )
 
-    cached = layout.place(_event(2, "task_skipped", "s[a]", groups=["bronze"], mode="source_table"))
-    built = layout.place(_event(3, "task_started", "s[b]", groups=["bronze"], mode="source_table"))
-    for placement, key, status in ((cached, "s[a]", "cached"), (built, "s[b]", "")):
-        [table] = placement.opens
-        assert (table.key, table.table, table.parent, table.status) == (key, True, source, status)
-        assert placement.container is table
-    assert built.opens[0].label == "b"
-
-    log = layout.place(_event(4, "log", "s[b]"))
-    assert log.container is built.opens[0]
-    finished = layout.place(_event(5, "task_finished", "s[b]", mode="source_table", status="succeeded"))
-    assert finished.finishes is built.opens[0]
-    # The source's outcome, after its tables, goes back to its own row.
-    outcome = layout.place(_event(6, "task_finished", "s", mode="source", status="succeeded"))
-    assert outcome.container is source and outcome.opens == ()
-    # The next source shares the stage's box.
-    after = layout.place(_event(7, "task_started", "u", groups=["bronze"], mode="source", count=1))
-    assert [fold.key for fold in after.opens] == ["u"] and after.opens[0].parent is bronze
-
-
-def test_an_ingest_summary_counts_the_tables_by_state() -> None:
-    layout = ConsoleLayout()
-    [bronze, source] = layout.place(
-        _event(1, "task_started", "s", groups=["bronze"], mode="source", count=3)
-    ).opens
-    tables = [
-        layout.place(_event(i, kind, f"s[{name}]", groups=["bronze"], mode="source_table")).opens[0]
-        for i, (kind, name) in enumerate(
-            [("task_skipped", "a"), ("task_started", "b"), ("task_started", "c")], start=2
-        )
-    ]
-    tables[1].status = "succeeded"
-    tables[1].warnings = 1
-    bronze.children.append(source)
-    source.children.extend(tables)
-
-    assert bronze.ingest_summary() == "3 tables · 1 built · 1 cached · 1 running · 1 with warnings"
+    assert placed[0] == ("fold-1-0-body", ["bronze"])
+    assert placed[1] == ("fold-1-0-body", [])
+    assert placed[2] == ("fold-3-task-body", ["s[b]"])
+    assert placed[3] == ("fold-3-task-body", [])
+    # Not a bare fold of its own: the source's outcome sits in its group.
+    assert placed[4] == ("fold-1-0-body", [])
 
 
 def test_a_failed_source_marks_its_groups() -> None:
     layout = ConsoleLayout()
-    [bronze, _source] = layout.place(
+    [bronze] = layout.place(
         _event(1, "task_started", "s", groups=["bronze"], mode="source", count=0)
     ).opens
     layout.place(_event(2, "task_finished", "s", mode="source", status="failed", error="x"))
@@ -498,11 +470,8 @@ def test_an_open_task_heading_sticks_to_the_top() -> None:
     assert "background:" in rule, "rows scroll beneath it, so it must be opaque"
 
 
-def _source_run(store: RunStore, root: Path, *, fail: bool = False) -> str:
-    """Stage ``bronze`` holding a source ``s``, its views, then a python task.
-
-    ``s`` has a cached table and a built one, ``t`` -- which fails with *fail*.
-    """
+def _source_run(store: RunStore, root: Path) -> str:
+    """Stage ``bronze`` holding a source ``s``, its views, then a python task."""
     record = store.create_run(RunRequest(project_root=root, pipeline="fixture"))
     run_id = record.run_id
     store.append_event(run_id, "run_started")
@@ -521,11 +490,7 @@ def _source_run(store: RunStore, root: Path, *, fail: bool = False) -> str:
             run_id,
             "task_finished",
             task_name=name,
-            payload={
-                "mode": mode,
-                "status": "failed" if fail else "succeeded",
-                "duration_seconds": 1.0,
-            },
+            payload={"mode": mode, "status": "succeeded", "duration_seconds": 1.0},
         )
     store.append_event(run_id, "task_started", task_name="bronze_views", payload={"mode": "views"})
     store.append_event(
@@ -546,31 +511,24 @@ def _source_run(store: RunStore, root: Path, *, fail: bool = False) -> str:
     return run_id
 
 
-def test_an_ingest_stage_renders_as_a_box_of_sources_and_squares(app, store, client) -> None:
+_ICON = 'class="ingest-icon"'
+
+
+def test_ingest_steps_carry_the_ingest_icon(app, store, client) -> None:
     run_id = _source_run(store, app.state.project.root)
     html = client.get(f"/runs/{run_id}").text
+    icon = r'<svg class="ingest-icon"[^>]*>.*?</svg>'
 
-    box = html[html.index('class="fold fold--group fold--ingest"') : html.index("bronze_views")]
-    assert '<span class="ingest-summary" data-ingest-summary>2 tables · 1 built · 1 cached</span>' in box
-    assert '<li class="source__name">s</li>' in box
-    states = re.findall(r'data-state="(\w+)" title="([^"]*)"', box)
-    assert states == [("cached", "cached: cached"), ("succeeded", "t: built in 1.0s")]
-    # Panels wait for a click, and the box stays open.
-    assert box.count("table-panel") and 'class="table-panel"' in box and " hidden>" in box
-    assert re.search(r'fold--ingest" [^>]*>\s*<details open>', html)
-    # The views step keeps its icon; the plain task has none.
-    assert re.search(r'<span class="fold__name"><svg class="ingest-icon"[^>]*>.*?</svg>bronze_views</span>', html, re.S)
+    # The stage a source opened, the table's fold, and the views step's fold.
+    assert re.search(rf'<span class="fold__name">{icon}bronze</span>', html, re.S)
+    assert re.search(rf'<span class="fold__name">{icon}s\[t\]</span>', html, re.S)
+    assert re.search(rf'<span class="fold__name">{icon}bronze_views</span>', html, re.S)
+    # The source's own start and finish rows, and a cached table's row.
+    assert len(re.findall(rf'<span class="event__task">{icon}s</span>', html, re.S)) == 2
+    assert re.search(rf'<span class="event__task">{icon}s\[cached\]</span>', html, re.S)
+    # Nothing else: not the python task.
     assert '<span class="fold__name">after</span>' in html
-
-
-def test_a_failed_table_renders_with_its_rows_open(app, store, client) -> None:
-    run_id = _source_run(store, app.state.project.root, fail=True)
-    html = client.get(f"/runs/{run_id}").text
-
-    assert 'data-state="failed"' in html
-    panel = re.search(r'<div class="table-panel" id="[^"]+-panel"( hidden)?>\s*<div class="table-panel__name">s\[t\]', html)
-    assert panel is not None and panel.group(1) is None
-    assert "1 failed" in html
+    assert html.count(_ICON) == 6
 
 
 def test_a_stage_opened_by_a_python_task_is_not_marked() -> None:
@@ -579,22 +537,10 @@ def test_a_stage_opened_by_a_python_task_is_not_marked() -> None:
     assert not stage.ingest
 
 
-def test_streamed_ingest_frames_build_the_box(app, store, client) -> None:
+def test_a_streamed_source_table_shell_carries_the_icon(app, store, client) -> None:
     run_id = _source_run(store, app.state.project.root)
-    html = client.get(f"/runs/{run_id}").text
     frames = _payloads(client.get(f"/runs/{run_id}/events").text)
-
-    source = next(frame for frame in frames if frame["task"] == "s")
-    assert [opened["html"].split('"')[1] for opened in source["opens"]] == [
-        "fold fold--group fold--ingest",
-        "fold fold--source",
-    ]
     table = next(frame for frame in frames if frame["task"] == "s[t]" and frame["opens"])
-    shell = table["opens"][-1]["html"]
-    assert 'data-state="running"' in shell and " hidden>" in shell
-    finished = next(
-        frame for frame in frames if frame["task"] == "s[t]" and frame["kind"] == "task_finished"
-    )
-    assert 'data-state="succeeded"' in finished["outcome"]["html"]
-    for frame in frames:
-        assert frame["parent"] == _parent_of(html, frame["sequence"]), frame["sequence"]
+
+    assert _ICON in table["opens"][-1]["html"]
+    assert _ICON in next(frame for frame in frames if frame["task"] == "s")["html"]

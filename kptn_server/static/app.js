@@ -197,10 +197,6 @@ function settleFolds(list, newest) {
 }
 
 function closeFold(fold) {
-  /* An ingest stage's box is a line per source, and stays open. */
-  if (fold.classList.contains("fold--ingest")) {
-    return;
-  }
   var details = fold.firstElementChild;
   if (
     details &&
@@ -210,84 +206,6 @@ function closeFold(fold) {
   ) {
     details.open = false;
   }
-}
-
-/* What a table's square says, in the order an ingest box's heading lists
- * them -- _TABLE_STATE_WORDS in kptn_server/console_layout.py, whose
- * Fold.ingest_summary() renders the same words for a reloaded page. */
-var TABLE_STATE_WORDS = [
-  ["succeeded", "built"],
-  ["cached", "cached"],
-  ["failed", "failed"],
-  ["running", "running"]
-];
-
-function openTable(table, open) {
-  var panel = document.getElementById(table.id + "-panel");
-  var square = table.querySelector("[data-table-toggle]");
-  if (panel) {
-    panel.hidden = !open;
-  }
-  if (square) {
-    square.setAttribute("aria-expanded", open ? "true" : "false");
-  }
-}
-
-function refreshIngest(list) {
-  /* Each ingest box's squares and heading, recounted off the DOM like the
-   * run's counters: a table that warned wears a ring, a failed one opens
-   * its panel (unless the reader closed it), and the heading says how many
-   * tables are in which state. */
-  var boxes = list.querySelectorAll(".fold--ingest");
-  for (var b = 0; b < boxes.length; b += 1) {
-    var tables = boxes[b].querySelectorAll('[data-fold="table"]');
-    var counts = {};
-    var warned = 0;
-    for (var t = 0; t < tables.length; t += 1) {
-      var stateOf = tables[t].querySelector("[data-state]");
-      var state = stateOf ? stateOf.getAttribute("data-state") : "running";
-      counts[state] = (counts[state] || 0) + 1;
-      var warning = tables[t].querySelector('[data-kind="warning"]') !== null;
-      if (warning) {
-        warned += 1;
-      }
-      var square = tables[t].querySelector("[data-table-toggle]");
-      if (square) {
-        square.classList.toggle("table-square--warned", warning);
-      }
-      if (state === "failed" && !tables[t].hasAttribute("data-fold-touched")) {
-        openTable(tables[t], true);
-      }
-    }
-    var summary = boxes[b].querySelector("[data-ingest-summary]");
-    if (!summary || !tables.length) {
-      continue;
-    }
-    var parts = [tables.length + (tables.length === 1 ? " table" : " tables")];
-    for (var w = 0; w < TABLE_STATE_WORDS.length; w += 1) {
-      if (counts[TABLE_STATE_WORDS[w][0]]) {
-        parts.push(counts[TABLE_STATE_WORDS[w][0]] + " " + TABLE_STATE_WORDS[w][1]);
-      }
-    }
-    if (warned) {
-      parts.push(warned + " with warnings");
-    }
-    summary.textContent = parts.join(" \u00b7 ");
-  }
-}
-
-function toggleTables(console_) {
-  /* A table's square opens and closes its rows. Once clicked, the table is
-   * the reader's: a failure no longer opens it for them. */
-  console_.addEventListener("click", function (event) {
-    var square = event.target.closest("[data-table-toggle]");
-    if (!square || !console_.contains(square)) {
-      return;
-    }
-    var table = square.closest('[data-fold="table"]');
-    table.setAttribute("data-fold-touched", "");
-    openTable(table, square.getAttribute("aria-expanded") !== "true");
-  });
 }
 
 function rememberTouchedFolds(console_) {
@@ -475,7 +393,6 @@ function initConsole() {
   rememberTouchedFolds(console_);
   jumpToFoldEnds(console_);
   collapseFromGutters(console_);
-  toggleTables(console_);
   if (console_.getAttribute("data-terminal") === "true") {
     /* Already over. Its whole history is on the page, and its status came
      * from the run row -- there is nothing left to stream, and no ending
@@ -558,7 +475,6 @@ function initConsole() {
       empty = null;
     }
     updateCounters(console_, list);
-    refreshIngest(list);
     /* Folding while the reader is scrolled up would pull the text they are
      * reading out from under them. The next batch that arrives while they
      * are following catches up. */
