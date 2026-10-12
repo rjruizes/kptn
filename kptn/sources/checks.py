@@ -25,8 +25,18 @@ def _scan_in_schema(scan: Any, schema: str) -> None:
     scan._configuration.data_source_properties_by_name["duckdb"]["schema"] = schema
 
 
-def run_checks(conn: duckdb.DuckDBPyConnection, *, source: str, table: str, root: Path) -> bool:
+def run_checks(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    source: str,
+    table: str,
+    root: Path,
+    declared_at: tuple[str, int] | None = None,
+) -> bool:
     """Run the table's check file against ``raw.<source>_<table>`` on *conn*.
+
+    *declared_at* is where ``kptn.source(...)`` was called; a missing-check
+    warning points there rather than into kptn.
 
     Returns:
         True if checks ran and passed; False if the table has no check file.
@@ -36,11 +46,12 @@ def run_checks(conn: duckdb.DuckDBPyConnection, *, source: str, table: str, root
     """
     path = check_path(root, source, table)
     if not path.exists():
-        warnings.warn(
-            f"No checks for {source}.{table}: add {path.relative_to(root)} to validate it.",
-            UserWarning,
-            stacklevel=2,
-        )
+        message = f"No checks for {source}.{table}: add {path.relative_to(root)} to validate it."
+        if declared_at is not None:
+            filename, lineno = declared_at
+            warnings.warn_explicit(message, UserWarning, filename, lineno)
+        else:
+            warnings.warn(message, UserWarning, stacklevel=2)
         return False
     try:
         from soda.scan import Scan

@@ -139,7 +139,9 @@ def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path) -> bool:
     conn = duckdb.connect()
     try:
         view = create_table_view(conn, plan.source, plan.table, list(plan.files), spec.read)
-        checked = run_checks(conn, source=plan.source, table=plan.table, root=root)
+        checked = run_checks(
+            conn, source=plan.source, table=plan.table, root=root, declared_at=spec.declared_at
+        )
         target = "'" + str(tmp).replace("'", "''") + "'"
         conn.execute(f"COPY (SELECT * FROM {view}) TO {target} (FORMAT parquet)")
         os.replace(tmp, plan.parquet)

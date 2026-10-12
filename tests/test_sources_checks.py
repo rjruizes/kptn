@@ -64,3 +64,15 @@ def test_failing_checks_raise(tmp_path: Path) -> None:
     )
     with pytest.raises(TaskError, match="asa24.foodtotals"):
         run_checks(_conn_with_view(), source="asa24", table="foodtotals", root=tmp_path)
+
+
+def test_missing_check_warning_points_at_the_declaration(tmp_path: Path) -> None:
+    with pytest.warns(UserWarning) as record:
+        run_checks(
+            _conn_with_view(),
+            source="asa24",
+            table="foodtotals",
+            root=tmp_path,
+            declared_at=("/project/pipeline.py", 31),
+        )
+    assert (record[0].filename, record[0].lineno) == ("/project/pipeline.py", 31)
