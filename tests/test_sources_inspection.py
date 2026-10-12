@@ -41,3 +41,10 @@ def test_ui_task_kinds_include_sources() -> None:
     from kptn_server.routes.inspect import TASK_KINDS
 
     assert {"source", "views"} <= TASK_KINDS
+
+
+def test_console_source_line_says_one_table() -> None:
+    out = io.StringIO()
+    emitter = EventEmitter("r", "p", None, ConsoleEventSink(stream_out=out, stream_err=io.StringIO()))
+    emitter.emit(EventKind.TASK_STARTED, task_name="devices", mode="source", count=1)
+    assert out.getvalue().strip().endswith("devices — 1 table")

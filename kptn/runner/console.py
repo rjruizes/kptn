@@ -19,8 +19,10 @@ class ConsoleEventSink:
         if event.kind is EventKind.TASK_STARTED:
             mode = event.payload.get("mode", "run")
             if mode == "source":
+                count = event.payload["count"]
+                tables = "table" if count == 1 else "tables"
                 print(
-                    self._timestamped("[SOURCE]", event, f" — {event.payload['count']} tables"),
+                    self._timestamped("[SOURCE]", event, f" — {count} {tables}"),
                     file=self.out,
                     flush=True,
                 )
