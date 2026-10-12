@@ -468,3 +468,63 @@ def test_an_open_task_heading_sticks_to_the_top() -> None:
     assert "position: sticky" in rule
     assert "top: 0" in rule
     assert "background:" in rule, "rows scroll beneath it, so it must be opaque"
+
+
+def _source_run(store: RunStore, root: Path) -> str:
+    """A source ``s`` with one table, then a python task."""
+    record = store.create_run(RunRequest(project_root=root, pipeline="fixture"))
+    run_id = record.run_id
+    store.append_event(run_id, "run_started")
+    groups = {"groups": ["bronze"]}
+    store.append_event(
+        run_id, "task_started", task_name="s", payload={"mode": "source", "count": 1, **groups}
+    )
+    store.append_event(
+        run_id, "task_skipped", task_name="s[cached]", payload={"mode": "source_table", **groups}
+    )
+    store.append_event(
+        run_id, "task_started", task_name="s[t]", payload={"mode": "source_table", **groups}
+    )
+    for name, mode in (("s[t]", "source_table"), ("s", "source")):
+        store.append_event(
+            run_id,
+            "task_finished",
+            task_name=name,
+            payload={"mode": mode, "status": "succeeded", "duration_seconds": 1.0},
+        )
+    store.append_event(run_id, "task_started", task_name="after", payload={"mode": "python"})
+    store.append_event(
+        run_id,
+        "task_finished",
+        task_name="after",
+        payload={"mode": "python", "status": "succeeded", "duration_seconds": 1.0},
+    )
+    store.append_event(run_id, "run_finished", payload={"status": STATUS_SUCCEEDED})
+    store.finish_run(run_id, STATUS_SUCCEEDED, exit_code=0)
+    return run_id
+
+
+_ICON = 'class="console-icon"'
+
+
+def test_source_tables_and_source_rows_carry_the_source_icon(app, store, client) -> None:
+    run_id = _source_run(store, app.state.project.root)
+    html = client.get(f"/runs/{run_id}").text
+    icon = r'<svg class="console-icon"[^>]*>.*?</svg>'
+
+    assert re.search(rf'<span class="fold__name">{icon}s\[t\]</span>', html, re.S)
+    # The source's own start and finish rows, and a cached table's row.
+    assert len(re.findall(rf'<span class="event__task">{icon}s</span>', html, re.S)) == 2
+    assert re.search(rf'<span class="event__task">{icon}s\[cached\]</span>', html, re.S)
+    # Nothing else: not the python task, not the stage.
+    assert html.count(_ICON) == 4
+    assert '<span class="fold__name">after</span>' in html
+
+
+def test_a_streamed_source_table_shell_carries_the_icon(app, store, client) -> None:
+    run_id = _source_run(store, app.state.project.root)
+    frames = _payloads(client.get(f"/runs/{run_id}/events").text)
+    table = next(frame for frame in frames if frame["task"] == "s[t]" and frame["opens"])
+
+    assert _ICON in table["opens"][-1]["html"]
+    assert _ICON in next(frame for frame in frames if frame["task"] == "s")["html"]

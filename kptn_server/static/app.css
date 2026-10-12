@@ -1072,6 +1072,12 @@ details[open] > .fold__head::before {
   flex: none;
 }
 
+/* The same icon in the run console, inline with a source's or a table's name. */
+.console-icon {
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
 .badge {
   border: 1px solid var(--line);
   border-radius: 10px;

@@ -63,6 +63,9 @@ class Fold:
     children: list[Any] = field(default_factory=list)
     #: The task's outcome, from its ``task_finished``; empty while it runs.
     status: str = ""
+    #: The ``mode`` of the event that opened a task fold -- ``source_table``
+    #: marks a source's table -- or empty.
+    mode: str = ""
     #: The prepared ``task_finished`` row, for the fold's heading.
     outcome: dict[str, Any] | None = None
     lines: int = 0
@@ -189,6 +192,7 @@ class ConsoleLayout:
                 kind=FOLD_TASK,
                 key=str(event.task_name),
                 parent=container,
+                mode=str(event.payload.get("mode") or ""),
             )
             chain.append(task)
             opens.append(task)
