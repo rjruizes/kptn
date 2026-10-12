@@ -713,16 +713,48 @@ button:disabled {
   border-bottom: none;
 }
 
-/* Tasks are set apart by whitespace rather than a rule: each one's output
-   reads as its own block, and the gap is where one task ends. */
-.fold--task {
+/* Each task is a box of its own, with the page showing between them: the
+   console reads as a run of separate tasks, not one long panel. Rows that
+   stand alone -- the run's start and end, a skipped task, a source's own
+   start -- are small boxes too. Stage and pipeline headings sit on the page,
+   with the guide line down their contents. */
+.console__events {
+  border: none;
+  background: none;
+}
+
+.console__events > *,
+.fold--group > details > .fold__body > :not(.fold__gutter) {
+  margin-top: 8px;
+}
+
+.console__events > :first-child {
+  margin-top: 0;
+}
+
+.fold--task,
+.console__events > .event,
+.fold--group > details > .fold__body > .event {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.fold--task > details > .fold__head {
+  border-radius: var(--radius);
+}
+
+.fold--group {
   border-bottom: none;
 }
 
-.fold--task + *,
-.fold__body > :not(.fold__gutter) + .fold--task,
-.console__events > * + .fold--task {
-  margin-top: 10px;
+.fold--group > details > .fold__body {
+  border-top: none;
+  padding-left: 10px;
+}
+
+.fold--task > details > .fold__body {
+  border-top: 1px solid var(--line);
 }
 
 .fold__head {
