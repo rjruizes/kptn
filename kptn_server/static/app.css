@@ -853,8 +853,7 @@ details[open] > .fold__head::before {
 .run-panel .run-body--outlined {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
-  /* Wide enough for the ribbons drawn between the columns. */
-  gap: 16px 56px;
+  gap: 16px;
   align-items: start;
   margin-top: 14px;
 }
@@ -867,16 +866,6 @@ details[open] > .fold__head::before {
   .run-panel .run-body--outlined {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-
-/* Out of the grid's flow and fixed to the window: app.js places it in the
-   gap between the sidebar and the console, and redraws on every scroll. */
-.outline__ribbons {
-  position: fixed;
-  top: 0;
-  left: 0;
-  overflow: visible;
-  pointer-events: none;
 }
 
 .outline {

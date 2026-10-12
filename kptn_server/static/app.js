@@ -226,15 +226,6 @@ function initOutline(console_, list) {
   var current = null;
   var scheduled = false;
   var quietUntil = 0;
-  /* The ribbons between the sidebar and the console (see drawRibbons). */
-  var ribbons = document.getElementById("outline-ribbons");
-  var SVG_NS = "http://www.w3.org/2000/svg";
-  var INGEST_COLOUR = "#1D9E75";
-  var TASK_COLOUR = "#7F77DD";
-  /* Each card's stretch of the console, worked out once per change to
-   * either side rather than on every scroll. */
-  var blocks = null;
-  var cardFor = {};
 
   function tasksOf(item) {
     var names = item.getAttribute("data-tasks");
@@ -249,14 +240,6 @@ function initOutline(console_, list) {
   }
 
   function itemFor(name) {
-    if (Object.prototype.hasOwnProperty.call(cardFor, name)) {
-      return cardFor[name];
-    }
-    cardFor[name] = findItem(name);
-    return cardFor[name];
-  }
-
-  function findItem(name) {
     /* The most specific card for a task: a stage's row before the stage's
      * own heading, which owns every task in the stage. Two passes, because
      * querySelectorAll returns document order whatever the selector says. */
@@ -311,127 +294,8 @@ function initOutline(console_, list) {
     }
   }
 
-  function inTaskFold(element) {
-    var fold = foldOf(element);
-    return !!fold && fold.getAttribute("data-fold") === "task";
-  }
-
-  function buildBlocks() {
-    /* For each card, the console elements holding its output, in order:
-     * its tasks' folds, and rows of its own outside any fold (a source's
-     * start and finish, a skipped task). */
-    var owners = list.querySelectorAll("[data-fold='task'], .event[data-task]");
-    var found = [];
-    var index = new Map();
-    for (var i = 0; i < owners.length; i += 1) {
-      var el = owners[i];
-      if (el.classList.contains("event") && inTaskFold(el)) {
-        continue;
-      }
-      var item = itemFor(el.getAttribute("data-key") || el.getAttribute("data-task"));
-      if (!item) {
-        continue;
-      }
-      if (!index.has(item)) {
-        index.set(item, found.length);
-        found.push({ item: item, elements: [] });
-      }
-      found[index.get(item)].elements.push(el);
-    }
-    return found;
-  }
-
-  function extent(elements) {
-    /* The on-screen span of a card's output, skipping anything folded away. */
-    var top = null;
-    var bottom = null;
-    var i;
-    for (i = 0; i < elements.length; i += 1) {
-      var first = elements[i].getBoundingClientRect();
-      if (first.height) {
-        top = first.top;
-        break;
-      }
-    }
-    for (i = elements.length - 1; i >= 0; i -= 1) {
-      var last = elements[i].getBoundingClientRect();
-      if (last.height) {
-        bottom = last.bottom;
-        break;
-      }
-    }
-    return top === null || bottom === null ? null : { top: top, bottom: bottom };
-  }
-
-  function drawRibbons() {
-    /* A band from each card to its stretch of the console, for every
-     * stretch on screen: the sidebar is the console's outline, and the
-     * ribbons show which part of the log is which step. Drawn in the gap
-     * between the two columns, in a layer fixed to the window, since one
-     * side stays put while the other scrolls. Green for data ingest, purple
-     * for other tasks; the marked card's band is drawn strongest. */
-    if (!ribbons) {
-      return;
-    }
-    var side = nav.getBoundingClientRect();
-    var area = list.getBoundingClientRect();
-    var width = area.left - side.right;
-    while (ribbons.firstChild) {
-      ribbons.removeChild(ribbons.firstChild);
-    }
-    if (width < 24) {
-      return; /* one column: nothing between them to draw in */
-    }
-    var clipTop = Math.max(area.top, 0);
-    var clipBottom = Math.min(area.bottom, window.innerHeight);
-    if (clipBottom <= clipTop) {
-      return;
-    }
-    ribbons.style.left = side.right + "px";
-    ribbons.setAttribute("width", String(width));
-    ribbons.setAttribute("height", String(window.innerHeight));
-    if (!blocks) {
-      blocks = buildBlocks();
-    }
-    var mid = width / 2;
-    for (var b = 0; b < blocks.length; b += 1) {
-      var item = blocks[b].item;
-      var from = item.getBoundingClientRect();
-      var to = extent(blocks[b].elements);
-      if (!from.height || !to || to.bottom < clipTop || to.top > clipBottom) {
-        continue;
-      }
-      var a1 = Math.max(from.top, side.top);
-      var a2 = Math.min(from.bottom, side.bottom);
-      var b1 = Math.max(to.top, clipTop);
-      var b2 = Math.min(to.bottom, clipBottom);
-      if (a2 <= a1 || b2 <= b1) {
-        continue;
-      }
-      var path = document.createElementNS(SVG_NS, "path");
-      path.setAttribute(
-        "d",
-        "M0," + a1 + " C" + mid + "," + a1 + " " + mid + "," + b1 + " " + width + "," + b1 +
-          " L" + width + "," + b2 + " C" + mid + "," + b2 + " " + mid + "," + a2 + " 0," + a2 + " Z"
-      );
-      var step = item.closest(".outline__step");
-      var colour = step && step.querySelector(".ingest-icon") ? INGEST_COLOUR : TASK_COLOUR;
-      path.setAttribute("fill", colour);
-      path.setAttribute("fill-opacity", item === current ? "0.32" : "0.1");
-      path.setAttribute("stroke", colour);
-      path.setAttribute("stroke-opacity", item === current ? "0.6" : "0.25");
-      path.setAttribute("stroke-width", "0.75");
-      ribbons.appendChild(path);
-    }
-  }
-
   function track() {
     scheduled = false;
-    markTop();
-    drawRibbons();
-  }
-
-  function markTop() {
     if (Date.now() < quietUntil) {
       return; /* the scroll a click just made: the click's mark stands */
     }
@@ -511,9 +375,6 @@ function initOutline(console_, list) {
   });
   window.addEventListener("scroll", schedule, { passive: true });
   window.addEventListener("resize", schedule);
-  /* Opening or closing a fold moves everything below it; ``toggle`` does
-   * not bubble, so it is caught on the way down. */
-  list.addEventListener("toggle", schedule, true);
 
   /* A finished run opens on its failure; anything else where it is. */
   var opening = nav.getAttribute("data-selected");
@@ -538,17 +399,9 @@ function initOutline(console_, list) {
         }
         card.replaceWith(fragmentFrom(frame.outline.html));
       }
-      /* New cards: every card's elements are looked up again. */
-      cardFor = {};
-      blocks = null;
       schedule();
     },
-    /* After a batch of rows: new output, so the stretches are worked out
-     * again. */
-    refilter: function () {
-      blocks = null;
-      schedule();
-    },
+    refilter: schedule,
     ended: schedule
   };
 }
