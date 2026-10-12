@@ -208,166 +208,201 @@ function closeFold(fold) {
   }
 }
 
-/* The pipeline sidebar beside the console (_outline.html). Selecting a step
- * or a stage's row filters the console to its tasks; "All output" shows
- * everything. While a run is live the selection follows the step that is
- * running, until the reader picks one themselves. The cards are rendered by
- * the server -- the stream sends a step's card again whenever it changes --
- * so all this file does with them is swap them in and mark the selection. */
+/* The pipeline sidebar beside the console (_outline.html), kept in step with
+ * it. Tasks run one at a time in the sidebar's order, so each card or row
+ * owns one unbroken stretch of the console: scrolling the console marks the
+ * card whose output is at the top of the screen, and clicking a card opens
+ * its tasks and scrolls to them. The cards are rendered by the server -- the
+ * stream sends a step's card again whenever it changes -- so all this file
+ * does with them is swap them in and mark where the reader is. */
 function initOutline(console_, list) {
   var nav = document.getElementById("outline");
   if (!nav) {
     return null;
   }
-  var nothing = document.getElementById("console-nothing");
-  var follow = nav.querySelector("[data-outline-follow]");
-  var live = console_.getAttribute("data-terminal") !== "true";
-  var selected = nav.getAttribute("data-selected") || "all";
-  var following = live;
-  var running = live && selected !== "all" ? selected : null;
+  /* How far below the top of the screen counts as "what is being read":
+   * clear of a task's sticky heading. */
+  var PROBE_Y = 48;
+  var current = null;
+  var scheduled = false;
+  var quietUntil = 0;
 
-  function tasksOf(key) {
-    if (key === "all") {
-      return null;
-    }
-    var item = nav.querySelector('[data-select="' + key + '"]');
-    var names = item ? item.getAttribute("data-tasks") : "";
+  function tasksOf(item) {
+    var names = item.getAttribute("data-tasks");
     return names ? names.split(" ") : [];
   }
 
-  function matches(name, tasks) {
+  function owns(item, name) {
     /* A task, or one of its items: a source's tables and a map's items are
      * named "task[item]". */
+    var tasks = tasksOf(item);
     return !!name && (tasks.indexOf(name) !== -1 || tasks.indexOf(name.split("[")[0]) !== -1);
   }
 
-  function inTaskFold(element) {
-    var fold = foldOf(element);
-    return !!fold && fold.getAttribute("data-fold") === "task";
+  function itemFor(name) {
+    /* The most specific card for a task: a stage's row before the stage's
+     * own heading, which owns every task in the stage. Two passes, because
+     * querySelectorAll returns document order whatever the selector says. */
+    var passes = [".outline__row", ".outline__head"];
+    for (var p = 0; p < passes.length; p += 1) {
+      var items = nav.querySelectorAll(passes[p]);
+      for (var i = 0; i < items.length; i += 1) {
+        if (owns(items[i], name)) {
+          return items[i];
+        }
+      }
+    }
+    return null;
   }
 
-  function filter(open) {
-    var tasks = tasksOf(selected);
-    list.classList.toggle("console--filtered", tasks !== null);
-    var folds = list.querySelectorAll("[data-fold]");
-    var rows = list.querySelectorAll(".event");
-    var i;
-    if (tasks === null) {
-      for (i = 0; i < folds.length; i += 1) folds[i].hidden = false;
-      for (i = 0; i < rows.length; i += 1) rows[i].hidden = false;
-      if (nothing) nothing.hidden = true;
+  function taskAt(element) {
+    /* The task a console element belongs to. A stage's heading belongs to
+     * its first task. */
+    var owner = element && element.closest("[data-task], [data-key]");
+    if (!owner || !list.contains(owner)) {
+      return null;
+    }
+    if (owner.getAttribute("data-fold") === "group") {
+      owner = owner.querySelector("[data-task], [data-fold='task']");
+      if (!owner) {
+        return null;
+      }
+    }
+    return owner.getAttribute("data-task") || owner.getAttribute("data-key");
+  }
+
+  function mark(item) {
+    if (item === current) {
       return;
     }
-    var shown = 0;
-    for (i = 0; i < folds.length; i += 1) {
-      if (folds[i].getAttribute("data-fold") !== "task") {
+    if (current) {
+      current.removeAttribute("aria-current");
+    }
+    current = item;
+    if (!item) {
+      return;
+    }
+    item.setAttribute("aria-current", "location");
+    /* Keep the marked card in view when the sidebar itself scrolls -- by
+     * moving the sidebar only, never the page the reader is scrolling. */
+    var box = nav.getBoundingClientRect();
+    var at = item.getBoundingClientRect();
+    if (at.top < box.top) {
+      nav.scrollTop -= box.top - at.top + 8;
+    } else if (at.bottom > box.bottom) {
+      nav.scrollTop += at.bottom - box.bottom + 8;
+    }
+  }
+
+  function track() {
+    scheduled = false;
+    if (Date.now() < quietUntil) {
+      return; /* the scroll a click just made: the click's mark stands */
+    }
+    var area = list.getBoundingClientRect();
+    if (area.bottom < PROBE_Y || area.top > window.innerHeight) {
+      return;
+    }
+    var page = document.documentElement;
+    var y = Math.max(area.top + 4, PROBE_Y);
+    var step = 16;
+    if (window.scrollY > 0 && window.innerHeight + window.scrollY >= page.scrollHeight - 2) {
+      /* At the very bottom the last steps can never reach the top of the
+       * screen, and a live run being followed is down here: mark the last
+       * task in view instead. */
+      y = Math.min(area.bottom, window.innerHeight) - 6;
+      step = -16;
+    }
+    /* Rows that belong to no task -- the run's own start and end -- are
+     * stepped over, toward the rest of the console. */
+    for (var tries = 0; tries < 24; tries += 1, y += step) {
+      if (y < area.top || y > area.bottom) {
+        break;
+      }
+      var name = taskAt(document.elementFromPoint(area.left + 24, y));
+      if (name) {
+        mark(itemFor(name));
+        return;
+      }
+    }
+  }
+
+  function schedule() {
+    if (!scheduled) {
+      scheduled = true;
+      window.requestAnimationFrame(track);
+    }
+  }
+
+  function reveal(item) {
+    /* Open every fold of the card's tasks, and the stages around them, and
+     * bring the first into view. The folds are then the reader's, and are
+     * not folded away under them. */
+    var first = null;
+    var folds = list.querySelectorAll("[data-fold='task']");
+    for (var i = 0; i < folds.length; i += 1) {
+      if (!owns(item, folds[i].getAttribute("data-key"))) {
         continue;
       }
-      var mine = matches(folds[i].getAttribute("data-key"), tasks);
-      folds[i].hidden = !mine;
-      if (mine) {
-        shown += 1;
-        if (open) {
-          folds[i].firstElementChild.open = true;
+      for (var fold = folds[i]; fold; fold = foldOf(fold)) {
+        fold.firstElementChild.open = true;
+        fold.setAttribute("data-fold-touched", "");
+      }
+      first = first || folds[i];
+    }
+    var rows = list.querySelectorAll(".event[data-task]");
+    for (var k = 0; k < rows.length; k += 1) {
+      if (owns(item, rows[k].getAttribute("data-task"))) {
+        if (!first || first.compareDocumentPosition(rows[k]) & Node.DOCUMENT_POSITION_PRECEDING) {
+          first = rows[k];
         }
+        break;
       }
     }
-    for (i = 0; i < rows.length; i += 1) {
-      if (inTaskFold(rows[i])) {
-        continue; /* its fold decides */
-      }
-      rows[i].hidden = !matches(rows[i].getAttribute("data-task"), tasks);
-      if (!rows[i].hidden) {
-        shown += 1;
-      }
+    if (first) {
+      quietUntil = Date.now() + 300;
+      first.scrollIntoView({ block: "start" });
+      window.scrollBy(0, -8);
     }
-    /* A stage or pipeline shows while anything inside it does. Its heading
-     * is hidden by the stylesheet, so it is kept open: there would be no
-     * way to open it again. Deepest first, so a parent sees its children. */
-    var groups = list.querySelectorAll('[data-fold="group"]');
-    for (i = groups.length - 1; i >= 0; i -= 1) {
-      var details = groups[i].firstElementChild;
-      var body = details.querySelector(":scope > .fold__body");
-      var any = false;
-      for (var c = body ? body.firstElementChild : null; c; c = c.nextElementSibling) {
-        if (!c.hidden && !c.hasAttribute("data-fold-gutter")) {
-          any = true;
-          break;
-        }
-      }
-      groups[i].hidden = !any;
-      if (any) {
-        details.open = true;
-      }
-    }
-    if (nothing) {
-      nothing.hidden = shown > 0;
-    }
-  }
-
-  function mark() {
-    var items = nav.querySelectorAll("[data-select]");
-    for (var i = 0; i < items.length; i += 1) {
-      if (items[i].getAttribute("data-select") === selected) {
-        items[i].setAttribute("aria-current", "true");
-      } else {
-        items[i].removeAttribute("aria-current");
-      }
-    }
-    if (follow) {
-      follow.hidden = following || !live || !running;
-    }
-  }
-
-  function select(key) {
-    selected = key;
-    mark();
-    filter(true);
+    mark(item);
   }
 
   nav.addEventListener("click", function (event) {
-    if (event.target.closest("[data-outline-follow]")) {
-      following = true;
-      select(running || "all");
-      return;
-    }
     var item = event.target.closest("[data-select]");
-    if (!item || !nav.contains(item)) {
-      return;
+    if (item && nav.contains(item)) {
+      reveal(item);
     }
-    following = false;
-    select(item.getAttribute("data-select"));
   });
+  window.addEventListener("scroll", schedule, { passive: true });
+  window.addEventListener("resize", schedule);
 
-  select(selected);
+  /* A finished run opens on its failure; anything else where it is. */
+  var opening = nav.getAttribute("data-selected");
+  var start = opening && opening !== "all" ? nav.querySelector('[data-select="' + opening + '"]') : null;
+  if (start && console_.getAttribute("data-terminal") === "true") {
+    reveal(start);
+  } else {
+    schedule();
+  }
 
   return {
-    /* A frame's card, swapped in; and, while following, its step selected. */
+    /* A frame's card, swapped in; the mark is put back on whatever is now
+     * at the top of the screen. */
     update: function (frame) {
       if (!frame.outline) {
         return;
       }
       var card = document.getElementById(frame.outline.id);
       if (card) {
+        if (current && card.contains(current)) {
+          current = null;
+        }
         card.replaceWith(fragmentFrom(frame.outline.html));
       }
-      if (frame.kind === "task_started" && frame.outline.focus) {
-        running = frame.outline.focus;
-        if (following && running !== selected) {
-          selected = running;
-          filter(true);
-        }
-      }
-      mark();
+      schedule();
     },
-    /* After a batch of rows: new rows outside the selection stay hidden. */
-    refilter: function () {
-      filter(false);
-    },
-    ended: function () {
-      live = false;
-      mark();
-    }
+    refilter: schedule,
+    ended: schedule
   };
 }
 

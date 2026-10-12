@@ -849,7 +849,7 @@ details[open] > .fold__head::before {
 
 /* The run page's pipeline beside its console: a card per step, top to
    bottom, joined by short connectors. It stays in view while the log
-   scrolls. Selecting a step or a stage's row filters the console to it. */
+   scrolls, marking the step whose output is at the top of the screen. */
 .run-panel .run-body--outlined {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
@@ -881,32 +881,6 @@ details[open] > .fold__head::before {
     position: static;
     max-height: none;
   }
-}
-
-.outline__top {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.outline__all,
-.outline__follow {
-  padding: 3px 9px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  cursor: pointer;
-}
-
-.outline__all[aria-current="true"] {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.outline__follow {
-  color: var(--accent);
 }
 
 .outline__steps {
@@ -1065,15 +1039,14 @@ details[open] > .fold__head::before {
   background: color-mix(in srgb, var(--line) 35%, transparent);
 }
 
-.outline__head[aria-current="true"],
-.outline__row[aria-current="true"] {
+/* The card whose output is at the top of the console. */
+.outline__head[aria-current="location"],
+.outline__row[aria-current="location"] {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .outline__head:focus-visible,
-.outline__row:focus-visible,
-.outline__all:focus-visible,
-.outline__follow:focus-visible {
+.outline__row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -1123,30 +1096,6 @@ details[open] > .fold__head::before {
    ring, set off by a gap so it does not blur into the square. */
 .outline__square--warned {
   box-shadow: 0 0 0 1px var(--surface), 0 0 0 2.5px var(--warning);
-}
-
-/* The console filtered to a step: only its tasks, without the headings of
-   the stages around them, which the sidebar already shows. */
-.console__events .event[hidden],
-.console__events .fold[hidden] {
-  display: none;
-}
-
-.console--filtered .fold--group > details > .fold__head {
-  display: none;
-}
-
-.console--filtered .fold--group > details > .fold__body {
-  margin-left: 0;
-  border: none;
-}
-
-.console--filtered .fold--group > details > .fold__body > .fold__gutter {
-  display: none;
-}
-
-.console__nothing {
-  margin: 10px 2px;
 }
 
 .notice--error {

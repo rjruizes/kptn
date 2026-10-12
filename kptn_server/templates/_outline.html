@@ -4,9 +4,11 @@
   can be rendered for an SSE frame (``outline_step``) exactly as the page
   renders it.
 
-  Every step and row is a button carrying ``data-select`` (what app.js marks
-  as selected) and ``data-tasks`` (the task names the console is filtered
-  to). The squares are decoration with a tooltip; the status words beside
+  Every step and row is a button carrying ``data-select`` and ``data-tasks``
+  (the task names whose output it owns in the console): app.js marks the one
+  whose output is at the top of the screen, and scrolls to a card's output
+  when it is clicked. ``data-selected`` on the nav is where a finished run
+  opens -- its failure, if it had one. The squares are decoration with a tooltip; the status words beside
   the names carry the same information as text.
 #}
 {% from "_kind.html" import ingest_icon %}
@@ -36,10 +38,6 @@
 
 {% macro outline_nav(steps, selected) -%}
 <nav class="outline" id="outline" aria-label="Pipeline steps" data-selected="{{ selected }}">
-  <div class="outline__top">
-    <button type="button" class="outline__all" data-select="all">All output</button>
-    <button type="button" class="outline__follow" data-outline-follow hidden>Follow the run</button>
-  </div>
   <ol class="outline__steps" id="outline-steps">
     {%- for step in steps %}
     {{ outline_step(step) }}
