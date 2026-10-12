@@ -713,6 +713,18 @@ button:disabled {
   border-bottom: none;
 }
 
+/* Tasks are set apart by whitespace rather than a rule: each one's output
+   reads as its own block, and the gap is where one task ends. */
+.fold--task {
+  border-bottom: none;
+}
+
+.fold--task + *,
+.fold__body > :not(.fold__gutter) + .fold--task,
+.console__events > * + .fold--task {
+  margin-top: 10px;
+}
+
 .fold__head {
   display: flex;
   flex-wrap: wrap;
