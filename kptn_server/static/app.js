@@ -208,6 +208,169 @@ function closeFold(fold) {
   }
 }
 
+/* The pipeline sidebar beside the console (_outline.html). Selecting a step
+ * or a stage's row filters the console to its tasks; "All output" shows
+ * everything. While a run is live the selection follows the step that is
+ * running, until the reader picks one themselves. The cards are rendered by
+ * the server -- the stream sends a step's card again whenever it changes --
+ * so all this file does with them is swap them in and mark the selection. */
+function initOutline(console_, list) {
+  var nav = document.getElementById("outline");
+  if (!nav) {
+    return null;
+  }
+  var nothing = document.getElementById("console-nothing");
+  var follow = nav.querySelector("[data-outline-follow]");
+  var live = console_.getAttribute("data-terminal") !== "true";
+  var selected = nav.getAttribute("data-selected") || "all";
+  var following = live;
+  var running = live && selected !== "all" ? selected : null;
+
+  function tasksOf(key) {
+    if (key === "all") {
+      return null;
+    }
+    var item = nav.querySelector('[data-select="' + key + '"]');
+    var names = item ? item.getAttribute("data-tasks") : "";
+    return names ? names.split(" ") : [];
+  }
+
+  function matches(name, tasks) {
+    /* A task, or one of its items: a source's tables and a map's items are
+     * named "task[item]". */
+    return !!name && (tasks.indexOf(name) !== -1 || tasks.indexOf(name.split("[")[0]) !== -1);
+  }
+
+  function inTaskFold(element) {
+    var fold = foldOf(element);
+    return !!fold && fold.getAttribute("data-fold") === "task";
+  }
+
+  function filter(open) {
+    var tasks = tasksOf(selected);
+    list.classList.toggle("console--filtered", tasks !== null);
+    var folds = list.querySelectorAll("[data-fold]");
+    var rows = list.querySelectorAll(".event");
+    var i;
+    if (tasks === null) {
+      for (i = 0; i < folds.length; i += 1) folds[i].hidden = false;
+      for (i = 0; i < rows.length; i += 1) rows[i].hidden = false;
+      if (nothing) nothing.hidden = true;
+      return;
+    }
+    var shown = 0;
+    for (i = 0; i < folds.length; i += 1) {
+      if (folds[i].getAttribute("data-fold") !== "task") {
+        continue;
+      }
+      var mine = matches(folds[i].getAttribute("data-key"), tasks);
+      folds[i].hidden = !mine;
+      if (mine) {
+        shown += 1;
+        if (open) {
+          folds[i].firstElementChild.open = true;
+        }
+      }
+    }
+    for (i = 0; i < rows.length; i += 1) {
+      if (inTaskFold(rows[i])) {
+        continue; /* its fold decides */
+      }
+      rows[i].hidden = !matches(rows[i].getAttribute("data-task"), tasks);
+      if (!rows[i].hidden) {
+        shown += 1;
+      }
+    }
+    /* A stage or pipeline shows while anything inside it does. Its heading
+     * is hidden by the stylesheet, so it is kept open: there would be no
+     * way to open it again. Deepest first, so a parent sees its children. */
+    var groups = list.querySelectorAll('[data-fold="group"]');
+    for (i = groups.length - 1; i >= 0; i -= 1) {
+      var details = groups[i].firstElementChild;
+      var body = details.querySelector(":scope > .fold__body");
+      var any = false;
+      for (var c = body ? body.firstElementChild : null; c; c = c.nextElementSibling) {
+        if (!c.hidden && !c.hasAttribute("data-fold-gutter")) {
+          any = true;
+          break;
+        }
+      }
+      groups[i].hidden = !any;
+      if (any) {
+        details.open = true;
+      }
+    }
+    if (nothing) {
+      nothing.hidden = shown > 0;
+    }
+  }
+
+  function mark() {
+    var items = nav.querySelectorAll("[data-select]");
+    for (var i = 0; i < items.length; i += 1) {
+      if (items[i].getAttribute("data-select") === selected) {
+        items[i].setAttribute("aria-current", "true");
+      } else {
+        items[i].removeAttribute("aria-current");
+      }
+    }
+    if (follow) {
+      follow.hidden = following || !live || !running;
+    }
+  }
+
+  function select(key) {
+    selected = key;
+    mark();
+    filter(true);
+  }
+
+  nav.addEventListener("click", function (event) {
+    if (event.target.closest("[data-outline-follow]")) {
+      following = true;
+      select(running || "all");
+      return;
+    }
+    var item = event.target.closest("[data-select]");
+    if (!item || !nav.contains(item)) {
+      return;
+    }
+    following = false;
+    select(item.getAttribute("data-select"));
+  });
+
+  select(selected);
+
+  return {
+    /* A frame's card, swapped in; and, while following, its step selected. */
+    update: function (frame) {
+      if (!frame.outline) {
+        return;
+      }
+      var card = document.getElementById(frame.outline.id);
+      if (card) {
+        card.replaceWith(fragmentFrom(frame.outline.html));
+      }
+      if (frame.kind === "task_started" && frame.outline.focus) {
+        running = frame.outline.focus;
+        if (following && running !== selected) {
+          selected = running;
+          filter(true);
+        }
+      }
+      mark();
+    },
+    /* After a batch of rows: new rows outside the selection stay hidden. */
+    refilter: function () {
+      filter(false);
+    },
+    ended: function () {
+      live = false;
+      mark();
+    }
+  };
+}
+
 function rememberTouchedFolds(console_) {
   /* A fold the reader has opened or closed is theirs from then on. Read off
    * the click rather than the ``toggle`` event, which fires for the folding
@@ -393,6 +556,7 @@ function initConsole() {
   rememberTouchedFolds(console_);
   jumpToFoldEnds(console_);
   collapseFromGutters(console_);
+  var outline = initOutline(console_, list);
   if (console_.getAttribute("data-terminal") === "true") {
     /* Already over. Its whole history is on the page, and its status came
      * from the run row -- there is nothing left to stream, and no ending
@@ -467,6 +631,9 @@ function initConsole() {
           outcome.replaceWith(fragmentFrom(frame.outcome.html));
         }
       }
+      if (outline) {
+        outline.update(frame);
+      }
     }
     queued = [];
     queuedSequences = {};
@@ -480,6 +647,9 @@ function initConsole() {
      * are following catches up. */
     if (autoScroll.following()) {
       settleFolds(list, newest);
+    }
+    if (outline) {
+      outline.refilter();
     }
     /* The list has no scroller of its own -- the page scrolls -- so
      * following the output means keeping the newest row in view. */
@@ -525,6 +695,9 @@ function initConsole() {
        * forever. */
       console_.setAttribute("data-terminal", "true");
       closed = true;
+      if (outline) {
+        outline.ended();
+      }
       if (source) {
         source.close();
       }

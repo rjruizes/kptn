@@ -252,7 +252,7 @@ def _fold_states(html: str) -> dict[str, bool]:
     """Each fold's name and whether it renders open, in document order."""
     states = {}
     for match in re.finditer(
-        r'<li class="fold [^"]*" id="[^"]*" data-fold="\w+">\s*<details( open)?>\s*'
+        r'<li class="fold [^"]*" id="[^"]*" data-fold="\w+" data-key="[^"]*">\s*<details( open)?>\s*'
         r'<summary class="fold__head">\s*<span class="fold__name">([^<]*)</span>',
         html,
     ):
@@ -516,7 +516,9 @@ _ICON = 'class="ingest-icon"'
 
 def test_ingest_steps_carry_the_ingest_icon(app, store, client) -> None:
     run_id = _source_run(store, app.state.project.root)
-    html = client.get(f"/runs/{run_id}").text
+    page = client.get(f"/runs/{run_id}").text
+    # The console only: the sidebar beside it marks the same steps.
+    html = page[page.index('id="console-events"') :]
     icon = r'<svg class="ingest-icon"[^>]*>.*?</svg>'
 
     # The stage a source opened, the table's fold, and the views step's fold.

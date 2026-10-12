@@ -89,6 +89,7 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 
+from kptn.inspection import OutlineEntry, pipeline_outline
 from kptn.runner.events import EventKind
 from kptn_server.console_layout import (
     FOLD_TASK,
@@ -101,6 +102,7 @@ from kptn_server.console_layout import (
 from kptn_server.context import ui
 from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
+from kptn_server.run_outline import RunOutline, build_outline, outline_frame, prime_outline
 from kptn_server.run_files import RUN_FILE_SUFFIX, counters, read_span_text
 from kptn_server.routes.support import (
     error_response,
@@ -884,6 +886,11 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
 
     log_path = Path(record.log_path)
     stored = store.events_after(run_id, 0)
+    outline = build_outline(
+        _outline_entries(request, record.profile),
+        stored,
+        terminal=record.status in TERMINAL_STATUSES,
+    )
     return ui(request).templates.TemplateResponse(
         request,
         "run.html",
@@ -894,6 +901,8 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             # plan for this run" is the obvious move from a finished one.
             "selected_profile": record.profile,
             "items": build_console(stored, log_path),
+            "outline": outline.views(),
+            "outline_selected": outline.selected(),
             # The console bar's counters. From the same aggregate the history
             # page uses, rather than from the events hydrated just above: one
             # counting path, so the two pages cannot disagree about one run.
@@ -904,6 +913,23 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             "last_sequence": stored[-1].sequence if stored else 0,
         },
     )
+
+
+def _outline_entries(request: Request, profile: str | None) -> list[OutlineEntry]:
+    """The steps a run with *profile* takes, for the sidebar -- or none.
+
+    Read from the project's pipeline as it is now, which for an old run may
+    have changed since: tasks the run reported that the pipeline no longer
+    has are added from the run's own events (see ``RunOutline``). A pipeline
+    that cannot be loaded leaves the sidebar to the events alone rather than
+    costing the reader the run page.
+    """
+    try:
+        with ui(request).project() as project:
+            return pipeline_outline(project.pipeline, project.config, profile)
+    except Exception:  # noqa: BLE001 -- any failure to load means "no outline"
+        _LOGGER.debug("no pipeline outline for the run page", exc_info=True)
+        return []
 
 
 def looks_wedged(record: RunRecord, *, now: datetime | None = None) -> bool:
@@ -1283,6 +1309,7 @@ async def event_frames(
     project_base: str,
     *,
     after: int = 0,
+    outline_entries: Sequence[OutlineEntry] | None = None,
 ) -> AsyncIterator[str]:
     """Yield SSE frames for *run_id*, starting after sequence *after*.
 
@@ -1300,9 +1327,12 @@ async def event_frames(
     cursor = after
     last_output_at = _monotonic()
     layout = ConsoleLayout()
+    outline = RunOutline(outline_entries) if outline_entries is not None else None
     if cursor > 0:
         history = await asyncio.to_thread(store.events_after, run_id, 0)
         layout = prime_layout(history, cursor)
+        if outline_entries is not None:
+            outline = prime_outline(outline_entries, history, cursor)
 
     while True:
         record = await asyncio.to_thread(store.get_run, run_id)
@@ -1315,11 +1345,12 @@ async def event_frames(
         events = await asyncio.to_thread(store.events_after, run_id, cursor)
         log_path = Path(record.log_path)
         for event in events:
-            yield _event_frame(
-                render_event(templates, event, log_path, layout.place(event)),
-                event.kind,
-                event.sequence,
-            )
+            payload = render_event(templates, event, log_path, layout.place(event))
+            changed = outline.apply(event) if outline is not None else None
+            if outline is not None and changed is not None:
+                # The sidebar card this event changed, re-rendered whole.
+                payload["outline"] = outline_frame(templates, outline, changed)
+            yield _event_frame(payload, event.kind, event.sequence)
             cursor = event.sequence
 
         if is_terminal:
@@ -1350,7 +1381,8 @@ async def event_frames(
 def run_events(request: Request, run_id: str, after: str | None = None):
     """Stream this run's events, resuming from a cursor the client supplies."""
     store: RunStore = ui(request).store
-    if project_run(request, run_id) is None:
+    record = project_run(request, run_id)
+    if record is None:
         return _no_such_run(request, run_id)
 
     return StreamingResponse(
@@ -1360,6 +1392,7 @@ def run_events(request: Request, run_id: str, after: str | None = None):
             run_id,
             ui(request).project_base,
             after=_cursor(request, after),
+            outline_entries=_outline_entries(request, record.profile),
         ),
         media_type="text/event-stream",
         headers={

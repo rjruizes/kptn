@@ -83,6 +83,23 @@ class InspectionItem:
 
 
 @dataclass(frozen=True)
+class OutlineEntry:
+    """One executable step of a pipeline, in run order, with where it sits.
+
+    ``groups`` are the stages and nested pipelines enclosing the step,
+    outermost first -- the same path the runner puts in each task event's
+    ``payload["groups"]``, so a run's events can be matched to the outline.
+    Parallel groups are not among them: the runner executes their branches
+    one after another, and the outline lists them that way.
+    """
+
+    name: str
+    kind: str
+    groups: tuple[str, ...]
+    bypassed: bool
+
+
+@dataclass(frozen=True)
 class PipelineInspection:
     """The full read-only inspection result for one pipeline + profile."""
 
@@ -221,6 +238,50 @@ def _source_for(node: AnyNode) -> tuple[Path | None, int | None]:
     return None, None
 
 
+def _resolved_graph(
+    pipeline: Pipeline, config: KptnConfig, profile: str | None
+) -> tuple[Graph, frozenset[str]]:
+    """The graph a run with *profile* executes, and the names it bypasses."""
+    if profile is not None:
+        resolved = ProfileResolver(config).compile(pipeline, profile)
+        graph: Graph = resolved.graph
+        bypassed_names = resolved.bypassed_names
+    else:
+        graph = pipeline
+        bypassed_names = frozenset()
+    return gate_disjunctive(graph), bypassed_names
+
+
+def pipeline_outline(
+    pipeline: Pipeline,
+    config: KptnConfig,
+    profile: str | None,
+) -> list[OutlineEntry]:
+    """Every executable step a run with *profile* would take, in run order.
+
+    The shape the run page's sidebar draws: steps in order, each with the
+    stages and nested pipelines around it. Like :func:`inspect_pipeline`, it
+    only reads the graph.
+    """
+    # Shared with the runner, so the outline's groups are the events' groups.
+    from kptn.runner.executor import _group_paths
+
+    graph, bypassed_names = _resolved_graph(pipeline, config, profile)
+    ordered = topo_sort(graph)
+    root = pipeline.name if isinstance(pipeline, Pipeline) else ""
+    paths = _group_paths(ordered, root)
+    return [
+        OutlineEntry(
+            name=node.name,
+            kind=_KIND_NAMES.get(type(node), type(node).__name__),
+            groups=tuple(paths.get(node.name, ())),
+            bypassed=node.name in bypassed_names,
+        )
+        for node in ordered
+        if isinstance(node, _EXECUTABLE_NODE_TYPES)
+    ]
+
+
 def inspect_pipeline(
     pipeline: Pipeline,
     config: KptnConfig,
@@ -245,16 +306,7 @@ def inspect_pipeline(
     reads the graph and its node specs; it never executes tasks or mutates
     the pipeline.
     """
-    if profile is not None:
-        resolved = ProfileResolver(config).compile(pipeline, profile)
-        graph: Graph = resolved.graph
-        bypassed_names = resolved.bypassed_names
-    else:
-        graph = pipeline
-        bypassed_names = frozenset()
-
-    graph = gate_disjunctive(graph)
-
+    graph, bypassed_names = _resolved_graph(pipeline, config, profile)
     ordered = topo_sort(graph)
 
     predecessors: dict[int, list[str]] = {id(n): [] for n in graph.nodes}

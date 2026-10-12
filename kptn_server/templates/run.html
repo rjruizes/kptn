@@ -5,6 +5,8 @@
   idea.
 
   ``_run_header``   the run row's own state -- status, Stop, force-finish.
+  ``_outline``      the pipeline beside the console, a card per step;
+                    selecting one filters the console to it.
   ``_console``      the event list, which ``app.js`` appends to live.
 
   The header is rendered from the run row, so a run that ends under an open
@@ -15,6 +17,7 @@
   which is what lets the stream replace one of them and leave the other.
 #}
 {% extends "base.html" %}
+{% from "_outline.html" import outline_nav %}
 
 {% block title %}{{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
 
@@ -22,6 +25,9 @@
 {% block content %}
 <section class="panel run-panel">
   {% include "_run_header.html" %}
-  {% include "_console.html" %}
+  <div class="run-body{% if outline %} run-body--outlined{% endif %}">
+    {% if outline %}{{ outline_nav(outline, outline_selected) }}{% endif %}
+    {% include "_console.html" %}
+  </div>
 </section>
 {% endblock %}

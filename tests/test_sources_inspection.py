@@ -62,3 +62,36 @@ def test_console_source_line_says_one_table() -> None:
     emitter = EventEmitter("r", "p", None, ConsoleEventSink(stream_out=out, stream_err=io.StringIO()))
     emitter.emit(EventKind.TASK_STARTED, task_name="devices", mode="source", count=1)
     assert out.getvalue().strip().endswith("devices — 1 table")
+
+
+def test_pipeline_outline_lists_steps_with_their_groups(tmp_path: Path) -> None:
+    from kptn.inspection import pipeline_outline
+
+    @kptn.task(outputs=[])
+    def init_database() -> None: ...
+
+    @kptn.task(outputs=[])
+    def load() -> None: ...
+
+    @kptn.task(outputs=[])
+    def report() -> None: ...
+
+    a = kptn.source("asa24", files="in/asa24")
+    bronze = kptn.Stage("bronze", a)
+    module = kptn.Pipeline("load_module", load)  # ty: ignore[invalid-argument-type]
+    pipeline = kptn.Pipeline(
+        "p",
+        kptn.parallel(init_database, bronze)
+        >> kptn.source_views(bronze)
+        >> kptn.Stage("datasets", module)
+        >> report,
+    )
+
+    outline = pipeline_outline(pipeline, KptnConfig(), None)
+    assert [(e.name, e.kind, e.groups) for e in outline] == [
+        ("init_database", "python", ()),
+        ("asa24", "source", ("bronze",)),
+        ("bronze_views", "views", ()),
+        ("load", "python", ("datasets", "load_module")),
+        ("report", "python", ()),
+    ]

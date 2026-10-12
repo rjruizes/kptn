@@ -1,0 +1,49 @@
+{#
+  The run page's sidebar: the pipeline as a column of steps, with the run on
+  it. Built in kptn_server.run_outline; macros only, so a single step's card
+  can be rendered for an SSE frame (``outline_step``) exactly as the page
+  renders it.
+
+  Every step and row is a button carrying ``data-select`` (what app.js marks
+  as selected) and ``data-tasks`` (the task names the console is filtered
+  to). The squares are decoration with a tooltip; the status words beside
+  the names carry the same information as text.
+#}
+{% from "_kind.html" import ingest_icon %}
+
+{% macro outline_squares(squares) -%}
+{%- for square in squares %}<span class="outline__square outline__square--{{ square.state }}{% if square.warned %} outline__square--warned{% endif %}" title="{{ square.title }}"></span>{% endfor -%}
+{%- endmacro %}
+
+{% macro outline_step(step) -%}
+<li class="outline__step outline__step--{{ step.state }}{% if step.group %} outline__step--group{% endif %}" id="outline-{{ step.key }}">
+  <button type="button" class="outline__head" data-select="{{ step.key }}" data-tasks="{{ step.tasks }}">
+    <span class="outline__name">{% if step.ingest %}{{ ingest_icon("ingest-icon") }}{% endif %}{{ step.name }}</span>
+    <span class="outline__status outline__status--{{ step.state }}">{{ step.status }}{% if step.duration %} · {{ step.duration }}{% endif %}</span>
+    {%- if step.squares %}
+    <span class="outline__squares">{{ outline_squares(step.squares) }}</span>
+    {%- endif %}
+  </button>
+  {%- if step.group %}
+  <ul class="outline__rows">
+    {%- for row in step.rows %}
+    <li><button type="button" class="outline__row outline__row--{{ row.state }}" data-select="{{ row.key }}" data-tasks="{{ row.tasks }}"><span class="outline__row-name">{{ row.name }}</span><span class="outline__squares">{{ outline_squares(row.squares) }}</span></button></li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+</li>
+{%- endmacro %}
+
+{% macro outline_nav(steps, selected) -%}
+<nav class="outline" id="outline" aria-label="Pipeline steps" data-selected="{{ selected }}">
+  <div class="outline__top">
+    <button type="button" class="outline__all" data-select="all">All output</button>
+    <button type="button" class="outline__follow" data-outline-follow hidden>Follow the run</button>
+  </div>
+  <ol class="outline__steps" id="outline-steps">
+    {%- for step in steps %}
+    {{ outline_step(step) }}
+    {%- endfor %}
+  </ol>
+</nav>
+{%- endmacro %}

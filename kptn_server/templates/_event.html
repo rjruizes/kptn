@@ -22,7 +22,8 @@
 <li class="event event--{{ event.kind }}{% if event.severity %} event--{{ event.severity }}{% endif %}{% if event.status %} event--{{ event.status }}{% endif %}"
     id="event-{{ event.sequence }}"
     data-sequence="{{ event.sequence }}"
-    data-kind="{{ event.kind }}"{% if event.is_log %}
+    data-kind="{{ event.kind }}"{% if event.task %}
+    data-task="{{ event.task }}"{% endif %}{% if event.is_log %}
     data-lines="{{ event.lines }}"{% endif %}>
   <span class="event__seq">{{ event.sequence }}</span>
   <time class="event__clock" datetime="{{ event.timestamp }}">{{ event.clock }}</time>
@@ -56,7 +57,7 @@
 {%- endmacro %}
 
 {% macro fold_markup(fold, open, body) -%}
-<li class="fold fold--{{ fold.kind }}" id="{{ fold.id }}" data-fold="{{ fold.kind }}">
+<li class="fold fold--{{ fold.kind }}" id="{{ fold.id }}" data-fold="{{ fold.kind }}" data-key="{{ fold.key }}">
   <details{% if open %} open{% endif %}>
     <summary class="fold__head">
       <span class="fold__name">{% if fold.ingest %}{{ ingest_icon("ingest-icon") }}{% endif %}{{ fold.key }}</span>

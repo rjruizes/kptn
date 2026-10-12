@@ -636,17 +636,14 @@ button:disabled {
   font-size: 12px;
 }
 
+/* No rule between rows: a log reads as lines, and the folds around them
+   already draw the structure. */
 .event {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   padding: 3px 8px;
-  border-bottom: 1px solid var(--line);
-}
-
-.event:last-child {
-  border-bottom: none;
 }
 
 .event__seq,
@@ -846,6 +843,310 @@ details[open] > .fold__head::before {
 .fold__gutter:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   box-shadow: inset -2px 0 var(--accent);
+}
+
+/* -- the pipeline sidebar ----------------------------------------------- */
+
+/* The run page's pipeline beside its console: a card per step, top to
+   bottom, joined by short connectors. It stays in view while the log
+   scrolls. Selecting a step or a stage's row filters the console to it. */
+.run-panel .run-body--outlined {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  margin-top: 14px;
+}
+
+.run-panel .run-body--outlined .console {
+  margin-top: 0;
+}
+
+@media (max-width: 760px) {
+  .run-panel .run-body--outlined {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.outline {
+  position: sticky;
+  top: 8px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .outline {
+    position: static;
+    max-height: none;
+  }
+}
+
+.outline__top {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.outline__all,
+.outline__follow {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.outline__all[aria-current="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.outline__follow {
+  color: var(--accent);
+}
+
+.outline__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.outline__step {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.outline__step--cached {
+  background: var(--surface-sunken);
+}
+
+.outline__step--running {
+  border-color: var(--accent);
+}
+
+.outline__step--failed {
+  border-color: var(--danger);
+}
+
+.outline__step--waiting,
+.outline__step--not_run,
+.outline__step--bypassed {
+  background: transparent;
+}
+
+/* The connector into each step after the first: a line down the gap and a
+   chevron at its end. Dashed into a step that has not run. */
+.outline__step + .outline__step::before {
+  content: "";
+  position: absolute;
+  top: -18px;
+  left: 18px;
+  height: 15px;
+  border-left: 1.5px solid var(--ink-muted);
+}
+
+.outline__step + .outline__step::after {
+  content: "";
+  position: absolute;
+  top: -8px;
+  left: 15px;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--ink-muted);
+  border-bottom: 1.5px solid var(--ink-muted);
+  transform: rotate(45deg);
+}
+
+.outline__step--waiting::before,
+.outline__step--not_run::before,
+.outline__step--bypassed::before {
+  border-left-style: dashed;
+}
+
+.outline__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.outline__name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.outline__step--waiting .outline__name,
+.outline__step--not_run .outline__name,
+.outline__step--bypassed .outline__name {
+  color: var(--ink-muted);
+}
+
+.outline__status {
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.outline__status--succeeded {
+  color: var(--ok);
+}
+
+.outline__status--failed {
+  color: var(--danger);
+}
+
+.outline__status--running {
+  color: var(--accent);
+}
+
+.outline__status--interrupted {
+  color: var(--warning);
+}
+
+.outline__head .outline__squares {
+  flex-basis: 100%;
+}
+
+.outline__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0 5px 6px;
+  list-style: none;
+}
+
+.outline__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  column-gap: 6px;
+  width: 100%;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--ink-muted);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.outline__row-name {
+  min-width: 9ch;
+  line-height: 14px;
+}
+
+.outline__head:hover,
+.outline__row:hover {
+  background: color-mix(in srgb, var(--line) 35%, transparent);
+}
+
+.outline__head[aria-current="true"],
+.outline__row[aria-current="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.outline__head:focus-visible,
+.outline__row:focus-visible,
+.outline__all:focus-visible,
+.outline__follow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.outline__squares {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding-top: 3px;
+}
+
+.outline__square {
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--line);
+}
+
+.outline__square--succeeded {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.outline__square--failed {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.outline__square--running {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.outline__square--cached {
+  border-color: var(--ink-muted);
+  background: none;
+}
+
+.outline__square--interrupted {
+  border-color: var(--warning);
+  background: none;
+}
+
+/* A task that warned (most often: a table with no check file) wears a
+   ring, set off by a gap so it does not blur into the square. */
+.outline__square--warned {
+  box-shadow: 0 0 0 1px var(--surface), 0 0 0 2.5px var(--warning);
+}
+
+/* The console filtered to a step: only its tasks, without the headings of
+   the stages around them, which the sidebar already shows. */
+.console__events .event[hidden],
+.console__events .fold[hidden] {
+  display: none;
+}
+
+.console--filtered .fold--group > details > .fold__head {
+  display: none;
+}
+
+.console--filtered .fold--group > details > .fold__body {
+  margin-left: 0;
+  border: none;
+}
+
+.console--filtered .fold--group > details > .fold__body > .fold__gutter {
+  display: none;
+}
+
+.console__nothing {
+  margin: 10px 2px;
 }
 
 .notice--error {
