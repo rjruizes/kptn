@@ -26,7 +26,11 @@
 <section class="panel run-panel">
   {% include "_run_header.html" %}
   <div class="run-body{% if outline %} run-body--outlined{% endif %}">
-    {% if outline %}{{ outline_nav(outline, outline_selected) }}{% endif %}
+    {% if outline %}
+    {{ outline_nav(outline, outline_selected) }}
+    {# The ribbons from each step to its output; drawn by app.js. #}
+    <svg class="outline__ribbons" id="outline-ribbons" aria-hidden="true" focusable="false"></svg>
+    {% endif %}
     {% include "_console.html" %}
   </div>
 </section>
