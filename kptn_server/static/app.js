@@ -218,6 +218,9 @@ function initLogControls(console_) {
    * wholesale by the stream's closing frame. */
   var list = document.getElementById("console-events");
   var VIEW_KEYS = { timestamps: "kptn.showTimestamps", numbers: "kptn.showLineNumbers" };
+  /* Until the reader says otherwise: line numbers on, timestamps off -- the
+   * numbers place a line, and the times mostly repeat one another. */
+  var VIEW_DEFAULTS = { timestamps: false, numbers: true };
 
   function anyOpen() {
     return list.querySelector("[data-section]:not(.is-closed):not(.is-empty)") !== null;
@@ -242,9 +245,9 @@ function initLogControls(console_) {
   function viewOption(name) {
     try {
       var stored = window.localStorage.getItem(VIEW_KEYS[name]);
-      return stored === null ? true : stored === "1";
+      return stored === null ? VIEW_DEFAULTS[name] : stored === "1";
     } catch (err) {
-      return true; /* private browsing, or storage disabled: the default stands */
+      return VIEW_DEFAULTS[name]; /* private browsing, or storage disabled */
     }
   }
 

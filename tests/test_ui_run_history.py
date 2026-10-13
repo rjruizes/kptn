@@ -1255,7 +1255,7 @@ def test_log_download_sits_in_the_header_after_retry(
     """
     body = client.get(f"/runs/{completed_run.run_id}").text
 
-    header = body[body.index('id="run-header"') : body.index('class="console"')]
+    header = body[body.index('id="run-header"') : body.index('id="console"')]
     retry_at = header.find('class="run-header__retry"')
     download_at = header.find(f'action="/runs/{completed_run.run_id}/log"')
 
@@ -1266,7 +1266,7 @@ def test_log_download_sits_in_the_header_after_retry(
     )
 
     # Where the console bar used to be: above the event list.
-    console = body[body.index('class="console"') : body.index('id="console-events"')]
+    console = body[body.index('id="console"') : body.index('id="console-events"')]
     assert "/log" not in console, "the download is still in the console too"
 
 
@@ -1284,7 +1284,7 @@ def test_following_the_output_is_not_a_toggle(
 
     assert 'id="follow-output"' not in body
     assert "Follow output" not in body
-    assert 'class="console__bar"' not in body[body.index('class="console"') : body.index('id="console-events"')]
+    assert 'class="console__bar"' not in body[body.index('id="console"') : body.index('id="console-events"')]
 
 
 def test_the_run_page_maps_auto_scroll_for_app_js(
@@ -1434,7 +1434,7 @@ def test_a_live_run_offers_a_sound_toggle_that_is_on_by_default(
     assert "Sound" in dialog.group(1)
 
     # Where the console bar used to be: above the event list.
-    console = body[body.index('class="console"') : body.index('id="console-events"')]
+    console = body[body.index('id="console"') : body.index('id="console-events"')]
     assert 'id="run-sound"' not in console, "Sound is still in the console"
 
 

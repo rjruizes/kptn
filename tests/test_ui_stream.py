@@ -845,7 +845,7 @@ def test_counts_and_log_download_sit_in_the_run_bar(
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     body = client.get(f"/runs/{record.run_id}").text
-    header = body[body.index('id="run-header"') : body.index('class="console"')]
+    header = body[body.index('id="run-header"') : body.index('id="console"')]
 
     assert 'data-counter="ran"' in header
     assert f'action="/runs/{record.run_id}/log"' in header
@@ -895,3 +895,21 @@ def test_the_counts_read_ran_skipped_and_warned(app, store: RunStore, client) ->
     assert "</b> ran<" in run_page
     assert "</b> skipped<" in run_page
     assert "</b> with warnings<" in run_page
+
+
+def test_timestamps_are_off_until_the_reader_turns_them_on(
+    app, store: RunStore, client
+) -> None:
+    """Line numbers on, timestamps off: the log renders without them, and
+    View's box starts unticked; app.js applies the reader's own choice."""
+    record = _start_run(store, app.state.project.root)
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    body = client.get(f"/runs/{record.run_id}").text
+
+    assert 'class="console no-timestamps" id="console"' in body
+    assert '<input type="checkbox" data-view-option="timestamps">' in body
+    assert '<input type="checkbox" data-view-option="numbers" checked>' in body
+    assert "var VIEW_DEFAULTS = { timestamps: false, numbers: true };" in (
+        STATIC_DIR / "app.js"
+    ).read_text()
