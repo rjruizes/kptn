@@ -59,7 +59,10 @@
     {% endif %}
   </div>
   <div class="run-body">
-    {{ outline_nav(outline, outline_selected, outline_counts) }}
+    {#- No state card: what someone else's next run starts from is theirs. #}
+    <aside class="side" id="side">
+      {{ outline_nav(outline, outline_selected, outline_counts) }}
+    </aside>
     {% include "_console.html" %}
   </div>
 </section>

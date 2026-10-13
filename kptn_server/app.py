@@ -60,7 +60,6 @@ from starlette.types import Scope
 import kptn
 from kptn_server.assets import STATIC_DIR, VersionedStaticFiles, asset_version
 from kptn_server.context import RequestUI, RequestUIMiddleware
-from kptn_server.database_files import database_files
 from kptn_server.origin import enforce_same_origin
 from kptn_server.processes import RECONCILE_INTERVAL_SECONDS, RunProcessManager
 from kptn_server.project import ProjectContext, ProjectError
@@ -211,9 +210,6 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     same version still busts the browser's cache. See
     :mod:`kptn_server.assets`.
 
-    ``database_files`` is the project's database and its checkpoints, for
-    the app bar of every project page -- what the next run starts from.
-
     ``picker`` is the project picker's contents, on a server that offers more
     than one project. Supplied here for the same reason as ``active_run``:
     the picker is in the app bar of every page, error pages included, and a
@@ -242,8 +238,6 @@ def _build_templates(base: str = "") -> Jinja2Templates:
             project=current.entry,
             active_run=current.store.active_run(current.entry.root),
             project_base=current.project_base,
-            # What the next run starts from, beside the Run button.
-            database_files=database_files(current.store, current.entry.root),
         )
         return context
 

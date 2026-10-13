@@ -38,7 +38,10 @@ from pathlib import Path
 
 from kptn.exceptions import KptnError, ProfileError, ProjectConfigError
 from kptn.graph.pipeline import Pipeline
+from kptn.graph.requires import gate_disjunctive
 from kptn.profiles.loader import ProfileLoader
+from kptn.profiles.resolved import ResolvedGraph
+from kptn.profiles.resolver import ProfileResolver
 from kptn.profiles.schema import KptnConfig
 from kptn.project import load_pipeline
 
@@ -154,10 +157,44 @@ class ProjectContext:
         )
 
 
+#: Where ``kptn`` keeps task state when ``kptn.yaml`` names no ``db_path``.
+#: Mirrors :func:`kptn.state_store.factory.init_state_store`'s own default.
+DEFAULT_STATE_DB_PATH = ".kptn/kptn.db"
+
+
+def resolve_graph(project: ProjectContext, profile: str | None) -> ResolvedGraph:
+    """The graph the runner would execute for *profile*.
+
+    Mirrors :func:`kptn.runner.api.resolve_pipeline`: compile through the
+    profile resolver when a profile is named, take the pipeline as-is when it
+    is not, and gate disjunctive ``any_of`` requirements either way. The
+    ``storage_key`` stays the *configured* (usually relative) ``db_path``
+    string, because that is the key the CLI wrote its hashes under. Shared by
+    the plan page and the sidebar's state card.
+    """
+    if profile is not None:
+        resolved = ProfileResolver(project.config).compile(project.pipeline, profile)
+    else:
+        resolved = ResolvedGraph(
+            graph=project.pipeline,
+            pipeline=project.pipeline.name,
+            storage_key=project.config.settings.db_path or DEFAULT_STATE_DB_PATH,
+        )
+    return ResolvedGraph(
+        graph=gate_disjunctive(resolved.graph),
+        pipeline=resolved.pipeline,
+        storage_key=resolved.storage_key,
+        bypassed_names=resolved.bypassed_names,
+        profile_args=resolved.profile_args,
+    )
+
+
 __all__ = [
+    "DEFAULT_STATE_DB_PATH",
     "PROFILE_CONFIG_FILENAME",
     "RUN_LOG_RELATIVE_DIR",
     "UI_DATABASE_RELATIVE_PATH",
     "ProjectContext",
     "ProjectError",
+    "resolve_graph",
 ]

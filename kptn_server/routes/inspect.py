@@ -65,16 +65,18 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from kptn.exceptions import KptnError
-from kptn.graph.requires import gate_disjunctive
 from kptn.inspection import InspectionItem, PipelineInspection, inspect_pipeline
-from kptn.profiles.resolved import ResolvedGraph
-from kptn.profiles.resolver import ProfileResolver
 from kptn.runner.plan import PlanAction, PlanEntry, build_plan
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
 from kptn_server.context import ui
 from kptn_server.markdown import DocumentationError, render_project_markdown
-from kptn_server.project import PROFILE_CONFIG_FILENAME, ProjectContext
+from kptn_server.project import (
+    DEFAULT_STATE_DB_PATH,
+    PROFILE_CONFIG_FILENAME,
+    ProjectContext,
+    resolve_graph,
+)
 from kptn_server.routes.support import (
     error_response,
     is_fragment_request,
@@ -98,10 +100,6 @@ DOCS_REJECTION_ADVICE = (
     "declared on a task, Stage, or Pipeline in the project's own code."
 )
 
-#: Where ``kptn`` keeps task state when ``kptn.yaml`` names no ``db_path``.
-#: Mirrors :func:`kptn.state_store.factory.init_state_store`'s own default.
-DEFAULT_STATE_DB_PATH = ".kptn/kptn.db"
-
 #: Node kinds that represent a unit of work and therefore have a detail page.
 #: The rest -- pipeline, stage, parallel, noop, config -- are structure, and
 #: render as headings rather than steps.
@@ -116,33 +114,6 @@ TABLE_PREVIEW_PATH = "/table-preview-fragment"
 
 
 # -- the resolved graph and its state store --------------------------------
-
-
-def _resolved_graph(project: ProjectContext, profile: str | None) -> ResolvedGraph:
-    """The graph the runner would execute for *profile*.
-
-    Mirrors :func:`kptn.runner.api.resolve_pipeline`: compile through the
-    profile resolver when a profile is named, take the pipeline as-is when it
-    is not, and gate disjunctive ``any_of`` requirements either way. The
-    ``storage_key`` stays the *configured* (usually relative) ``db_path``
-    string, because that is the key the CLI wrote its hashes under -- only the
-    location of the database file is made absolute, further down.
-    """
-    if profile is not None:
-        resolved = ProfileResolver(project.config).compile(project.pipeline, profile)
-    else:
-        resolved = ResolvedGraph(
-            graph=project.pipeline,
-            pipeline=project.pipeline.name,
-            storage_key=project.config.settings.db_path or DEFAULT_STATE_DB_PATH,
-        )
-    return ResolvedGraph(
-        graph=gate_disjunctive(resolved.graph),
-        pipeline=resolved.pipeline,
-        storage_key=resolved.storage_key,
-        bypassed_names=resolved.bypassed_names,
-        profile_args=resolved.profile_args,
-    )
 
 
 class _NeverRunStateStore:
@@ -245,7 +216,7 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
         selected = requested_profile(profile)
 
         try:
-            resolved = _resolved_graph(project, selected)
+            resolved = resolve_graph(project, selected)
             store = _open_state_store(project)
             try:
                 entries = build_plan(resolved, store)

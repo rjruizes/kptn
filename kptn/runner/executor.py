@@ -31,7 +31,13 @@ from kptn.change_detector.detector import is_stale
 from kptn.exceptions import HashError, TaskError
 from kptn.runner.console import ConsoleEventSink
 from kptn.runner.events import EventEmitter, EventKind, JSONValue
-from kptn.runner.checkpoint import get_db_path, save_checkpoint, find_restore_candidate, restore_checkpoint
+from kptn.runner.checkpoint import (
+    find_restore_candidate,
+    get_db_path,
+    has_pipeline_state,
+    restore_checkpoint,
+    save_checkpoint,
+)
 from kptn.sources.build import (
     BRONZE_DIR,
     build_table,
@@ -334,15 +340,11 @@ def _restore_into(
     # A pre-existing database will have rows in _kptn.task_state for this pipeline;
     # a freshly created one will have an empty table (CREATE TABLE IF NOT EXISTS preserves
     # existing rows, so a real database retains its prior state through factory re-init).
-    try:
-        row_count = conn.execute(
-            "SELECT count(*) FROM _kptn.task_state WHERE storage_key=? AND pipeline_name=?",
-            (resolved.storage_key, resolved.pipeline),
-        ).fetchone()[0]
-        if row_count > 0:
-            return None
-    except Exception:
-        pass  # _kptn.task_state absent (separate state store); fall through to candidate check
+    # _kptn.task_state absent (separate state store) falls through to the
+    # candidate check. kptn.runner.checkpoint.starting_point mirrors this
+    # decision, read-only, for the UI: keep the two in step.
+    if has_pipeline_state(conn, resolved.storage_key, resolved.pipeline):
+        return None
     candidate = find_restore_candidate(ordered, resolved.storage_key, resolved.pipeline, db_path)
     if candidate is None:
         return None

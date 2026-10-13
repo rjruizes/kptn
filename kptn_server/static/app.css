@@ -458,110 +458,6 @@ a.project-picker__item:focus-visible {
   background: var(--accent-bg);
 }
 
-/* What the next run starts from: the database and its checkpoints, a chip
- * each, with a menu saying what the file does and offering Delete. */
-.dbfiles {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.dbchip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
-.dbchip:hover {
-  background: var(--surface-hover);
-}
-
-.dbchip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.dbchip svg {
-  flex: none;
-  width: 15px;
-  height: 15px;
-  color: var(--ink-muted);
-}
-
-.dbchip .btn__caret {
-  width: 13px;
-  height: 13px;
-  color: var(--ink-faint);
-}
-
-.dbchip__name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A checkpoint is the quieter of the two: it matters only once the
- * database is gone. */
-.dbchip--checkpoint {
-  color: var(--ink-muted);
-}
-
-.dbmenu {
-  left: 0;
-  right: auto;
-  width: 300px;
-  padding: 10px 6px 4px;
-  font-size: 13px;
-}
-
-.dbmenu__what,
-.dbmenu__meta {
-  margin: 0 6px 6px;
-}
-
-.dbmenu__meta {
-  color: var(--ink-faint);
-  font-size: 12px;
-}
-
-.dbmenu__path {
-  display: block;
-  margin: 0 6px 8px;
-  color: var(--ink-muted);
-  font-size: 11.5px;
-  overflow-wrap: anywhere;
-}
-
-.dbmenu form {
-  padding-top: 4px;
-  border-top: 1px solid var(--line);
-}
-
-.menu-item--danger,
-.menu-item--danger svg {
-  color: var(--danger);
-}
-
-.menu-item--danger:hover:not(:disabled) {
-  background: var(--danger-bg);
-}
-
-.menu-item:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
 /* Why the bar's controls are refused, sitting with them. No `display` of
  * its own: `hidden` has to keep working, and the poller toggles exactly
  * that. */
@@ -591,9 +487,7 @@ a.project-picker__item:focus-visible {
   .app-bar__nav,
   .project-picker-path__release,
   .project-picker-path__separator,
-  .selbox > span,
-  .dbchip__name,
-  .dbchip .btn__caret {
+  .selbox > span {
     display: none;
   }
 
@@ -1182,15 +1076,169 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.run-body.no-side .rail {
+.run-body.no-side .side {
   display: none;
 }
 
-.rail {
-  overflow: auto;
-  padding: 12px 10px 24px;
+/* The sidebar: the rail scrolls, and the state card stays at its foot. */
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   border-right: 1px solid var(--line);
   background: var(--surface-sunken);
+}
+
+.rail {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 10px 24px;
+}
+
+/* -- the state card: what the next run starts from (_next_start.html) -- */
+
+.state {
+  padding: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.state[hidden] {
+  display: none;
+}
+
+.statecard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+/* Lit for a moment when a delete hands the card to what comes next. */
+.statecard.swap {
+  animation: st-swap 1.6s ease-out;
+}
+
+@keyframes st-swap {
+  0%,
+  30% {
+    background: var(--accent-bg);
+  }
+
+  100% {
+    background: var(--surface);
+  }
+}
+
+.st-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.st-lbl {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.st-db {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.st-db svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 3px;
+  color: var(--accent);
+}
+
+.st-db .st-db__ckpt {
+  color: var(--ink-muted);
+}
+
+/* Wraps rather than truncates: a checkpoint's name is mostly its task's. */
+.st-db__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.st-db.none {
+  font-family: var(--font-ui);
+}
+
+.st-facts {
+  color: var(--ink-muted);
+  font-size: 12.5px;
+}
+
+.st-form {
+  display: flex;
+  margin: 0;
+}
+
+/* The trash: a first click arms it -- red, "Delete?" -- and a second
+ * deletes (app.js). */
+.st-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.st-del svg {
+  width: 16px;
+  height: 16px;
+}
+
+.st-del:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--danger);
+}
+
+.st-del:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.st-del:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.st-del .st-confirm {
+  display: none;
+}
+
+.st-del.armed,
+.st-del.armed:hover {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.st-del.armed .st-confirm {
+  display: inline;
 }
 
 /* The filters, which are the run's tallies too: a count over a word. */
@@ -1756,6 +1804,10 @@ button.sec-h:hover {
   .status-icon--running svg {
     animation: none;
   }
+
+  .statecard.swap {
+    animation-timing-function: step-end;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1772,10 +1824,13 @@ button.sec-h:hover {
     grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .rail {
-    max-height: 30vh;
+  .side {
     border-right: 0;
     border-bottom: 1px solid var(--line);
+  }
+
+  .rail {
+    max-height: 30vh;
   }
 
   .ln {

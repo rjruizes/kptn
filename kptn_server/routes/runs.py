@@ -93,7 +93,7 @@ from kptn.inspection import OutlineEntry, pipeline_outline
 from kptn.runner.events import EventKind
 from kptn_server.console_layout import ConsoleLayout, Placement
 from kptn_server.context import ui
-from kptn_server.database_files import delete_database_file
+from kptn_server.next_start import delete_start, next_start
 from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
 from kptn_server.run_outline import (
@@ -1236,18 +1236,34 @@ def stop_run(request: Request, run_id: str):
     return RedirectResponse(url=f"../{run_id}", status_code=303)
 
 
-# -- POST /database/delete ------------------------------------------------
+# -- the sidebar's state card ---------------------------------------------
 
 
-@router.post("/database/delete")
-async def delete_database(request: Request):
-    """Delete the project's database or one of its checkpoints.
+@router.get("/next-start", response_class=HTMLResponse)
+def next_start_card(request: Request, profile: str | None = None) -> HTMLResponse:
+    """The run page's state card: what the next run of *profile* starts from.
 
-    The app bar lists them (``kptn_server.database_files``), and this takes
-    a file's *name* only: it deletes the listed file of that name, so no
-    path the request names can reach anything else. Refused while a run is
-    in progress -- that run has the database open, and may be about to
-    restore or save a checkpoint -- the same rule the bar's controls follow.
+    A fragment only, fetched by app.js once the run page is up -- and again
+    when a run ends, a profile is chosen, or a file is deleted -- so reading
+    the files never holds up the page. Empty when the pipeline has no DuckDB
+    database for a run to start from.
+    """
+    return _next_start_response(request, profile)
+
+
+@router.post("/next-start/delete")
+async def delete_next_start(request: Request):
+    """Delete the file the next run starts from, then say what it starts from now.
+
+    Takes the *name* the card showed and deletes only the file kptn names
+    as the starting point now (:func:`kptn_server.next_start.delete_start`),
+    so no path the request names can reach anything else, and a stale card
+    cannot delete what has taken its file's place. Refused while a run is in
+    progress: that run has the database open, and may be about to restore or
+    save a checkpoint.
+
+    app.js posts it as a fragment request and swaps in the card that comes
+    back; a plain form post returns to the page it came from.
     """
     current = ui(request)
     if not _is_form_encoded(request):
@@ -1257,37 +1273,51 @@ async def delete_database(request: Request):
             title="Unsupported request body",
             detail="This takes an application/x-www-form-urlencoded body with a 'name' field.",
         )
-    name = await _submitted_field(request, "name")
-    active = current.store.active_run(current.entry.root)
-    if active is not None:
+    name = await _submitted_field(request, "name") or ""
+    profile = requested_profile(await _submitted_field(request, "profile"))
+    deleted = False
+    if current.store.active_run(current.entry.root) is None:
+        try:
+            with current.project() as project:
+                if profile is None or profile in project.profiles:
+                    deleted = delete_start(project, current.store, profile, name)
+        except OSError as exc:
+            return _error_response(
+                request,
+                status_code=500,
+                title=f"{name} could not be deleted",
+                detail=str(exc),
+            )
+    if is_fragment_request(request):
+        return _next_start_response(request, profile, status_code=200 if deleted else 409)
+    if not deleted:
         return _error_response(
             request,
             status_code=409,
-            title="A run is in progress",
+            title=f"{name} was not deleted",
             detail=(
-                "Its database cannot be deleted while a run has it open. Wait for "
-                "the run to finish, or stop it, and try again."
+                "It is not what the next run starts from now, or a run is in "
+                "progress. Reload the run page to see what the next run starts from."
             ),
-            run=active,
-            run_id=active.run_id,
-        )
-    try:
-        deleted = delete_database_file(current.store, current.entry.root, name or "")
-    except OSError as exc:
-        return _error_response(
-            request,
-            status_code=500,
-            title=f"{name} could not be deleted",
-            detail=str(exc),
-        )
-    if deleted is None:
-        return _error_response(
-            request,
-            status_code=404,
-            title="No such file",
-            detail=f"{name!r} is not this project's database or one of its checkpoints.",
         )
     return RedirectResponse(url=_back(request), status_code=303)
+
+
+def _next_start_response(
+    request: Request, profile: str | None, *, status_code: int = 200
+) -> HTMLResponse:
+    current = ui(request)
+    card = None
+    try:
+        with current.project() as project:
+            if profile is None or profile in project.profiles:
+                card = next_start(project, current.store, requested_profile(profile))
+    except Exception:  # noqa: BLE001 -- a project that will not load has no card
+        _LOGGER.debug("no state card", exc_info=True)
+    html = current.templates.get_template("_next_start.html").render(
+        card=card, profile=profile or "", project_base=current.project_base
+    )
+    return HTMLResponse(html, status_code=status_code)
 
 
 def _back(request: Request) -> str:
@@ -1300,7 +1330,7 @@ def _back(request: Request) -> str:
     parts = urllib.parse.urlsplit(request.headers.get("referer", ""))
     if parts.path.startswith("/") and not parts.path.startswith("//"):
         return parts.path + (f"?{parts.query}" if parts.query else "")
-    # ``..`` from ``<base>/database/delete`` is ``<base>/``.
+    # ``..`` from ``<base>/next-start/delete`` is ``<base>/``.
     return "../"
 
 

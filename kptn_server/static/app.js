@@ -710,19 +710,6 @@ function initMenus() {
   });
 }
 
-/* A form with ``data-confirm`` asks before it submits: deleting a database
- * cannot be undone. Without JavaScript it submits unasked, which is the
- * no-JS behaviour of every other control here. */
-function initConfirm() {
-  document.addEventListener("submit", function (event) {
-    var form = event.target;
-    var question = form.getAttribute && form.getAttribute("data-confirm");
-    if (question && !window.confirm(question)) {
-      event.preventDefault();
-    }
-  });
-}
-
 /* "Copy link to run": the page's own address, without any fragment. The
  * clipboard API needs a secure context, which loopback is; a page reached
  * some other way falls back to a hidden field and the copy command. The
@@ -809,6 +796,133 @@ function initTheme() {
       }
     });
   }
+}
+
+/* The sidebar's state card (_next_start.html): what the next run starts
+ * from. Server-rendered and fetched whole -- once the page is up, again when
+ * a run ends or another profile is chosen, and as the answer to a delete --
+ * so the card always says what kptn says, never what this file assumes.
+ *
+ * Its trash takes two clicks: the first arms it ("Delete?"), a second
+ * within three seconds deletes, and it disarms when the time runs out or
+ * focus moves away. The delete posts the form the server rendered, and the
+ * card that comes back is the next starting point. */
+var ARM_MS = 3000;
+
+function initNextStart() {
+  var slot = document.getElementById("next-start");
+  if (!slot || typeof window.fetch !== "function") {
+    return null;
+  }
+  var armTimer = null;
+
+  function profile() {
+    var select = document.getElementById("profile-select");
+    return select ? select.value : "";
+  }
+
+  function paint(html, swapped) {
+    slot.replaceChildren(fragmentFrom(html));
+    var card = slot.querySelector(".statecard");
+    slot.hidden = !card;
+    if (card && swapped) {
+      card.classList.add("swap");
+    }
+  }
+
+  function load() {
+    var url = slot.getAttribute("data-url");
+    var chosen = profile();
+    window
+      .fetch(chosen ? url + "?profile=" + encodeURIComponent(chosen) : url, {
+        headers: { "HX-Request": "true" }
+      })
+      .then(function (response) {
+        return response.ok ? response.text() : null;
+      })
+      .then(function (html) {
+        if (html !== null) {
+          paint(html, false);
+        }
+      })
+      .catch(function () {
+        /* A server restarting under the page: keep the card it has. */
+      });
+  }
+
+  function label(button, armed) {
+    var what = button.getAttribute("data-what");
+    var text = armed ? "Click again to delete " + what : "Delete " + what;
+    button.setAttribute("aria-label", text);
+    button.title = armed ? "Click again to delete" : text;
+  }
+
+  function disarm() {
+    window.clearTimeout(armTimer);
+    var armed = slot.querySelectorAll("[data-st-delete].armed");
+    for (var i = 0; i < armed.length; i += 1) {
+      armed[i].classList.remove("armed");
+      label(armed[i], false);
+    }
+  }
+
+  function remove(button) {
+    var form = button.closest("form");
+    button.disabled = true;
+    window
+      .fetch(form.getAttribute("action"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "HX-Request": "true"
+        },
+        body: new URLSearchParams(new FormData(form)).toString()
+      })
+      .then(function (response) {
+        /* Refused (409) still answers with the card as it is now. */
+        return response.text();
+      })
+      .then(function (html) {
+        paint(html, true);
+        var next = slot.querySelector("[data-st-delete]");
+        if (next) {
+          next.focus();
+        }
+      })
+      .catch(function () {
+        button.disabled = false;
+        load();
+      });
+  }
+
+  slot.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-st-delete]");
+    if (!button) {
+      return;
+    }
+    event.preventDefault();
+    if (!button.classList.contains("armed")) {
+      button.classList.add("armed");
+      label(button, true);
+      window.clearTimeout(armTimer);
+      armTimer = window.setTimeout(disarm, ARM_MS);
+      return;
+    }
+    disarm();
+    remove(button);
+  });
+  slot.addEventListener("focusout", disarm);
+  slot.addEventListener("animationend", function (event) {
+    event.target.classList.remove("swap");
+  });
+
+  var select = document.getElementById("profile-select");
+  if (select) {
+    select.addEventListener("change", load);
+  }
+
+  load();
+  return { reload: load };
 }
 
 function setUpRememberedToggle(toggle, storageKey) {
@@ -929,6 +1043,7 @@ function initConsole() {
   var controls = initLogControls(console_);
   var rail = initRail(console_, list);
   var sidebar = initSidebar(rail);
+  var nextStart = initNextStart();
   if (console_.getAttribute("data-terminal") === "true" || typeof window.EventSource !== "function") {
     /* Already over. Its whole history is on the page, and its status came
      * from the run row -- there is nothing left to stream, and no ending
@@ -1072,6 +1187,10 @@ function initConsole() {
         source.close();
       }
       announceRunEnd(frame.status);
+      /* The run may have made the database, or a checkpoint. */
+      if (nextStart) {
+        nextStart.reload();
+      }
     }
   }
 
@@ -1305,7 +1424,6 @@ function initSettings() {
 initTheme();
 initSettings();
 initMenus();
-initConfirm();
 initCopyLink();
 initConsole();
 initProfileNav();

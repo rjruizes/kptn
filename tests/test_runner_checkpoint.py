@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,7 +15,12 @@ duckdb = pytest.importorskip("duckdb")
 from kptn.change_detector.hasher import hash_task_source
 from kptn.graph.decorators import TaskSpec, _KptnCallable
 from kptn.graph.nodes import TaskNode
-from kptn.runner.checkpoint import checkpoint_path, find_restore_candidate
+from kptn.runner.checkpoint import (
+    StartingPoint,
+    checkpoint_path,
+    find_restore_candidate,
+    starting_point,
+)
 from kptn.graph.nodes import AnyNode
 from kptn.runner.events import EventEmitter, EventKind, RunEvent
 from kptn.runner.executor import _try_restore
@@ -431,3 +437,47 @@ def test_try_restore_reports_the_checkpoint_it_restored(tmp_path: Path) -> None:
 
     [event] = sink.events
     assert event.payload == {"path": str(db_path.resolve()), "checkpoint": str(cp.resolve())}
+
+
+# ---------------------------------------------------------------------------
+# starting_point: the restore decision, read-only
+# ---------------------------------------------------------------------------
+
+
+def _checkpointed(tmp_path: Path) -> tuple[list[AnyNode], Any]:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    tasks_py = pkg / "tasks.py"
+    tasks_py.write_text("def big_task():\n    pass\n")
+    fn = _load_fn(tasks_py, "big_task")
+    return [_node("big_task", fn, duckdb_checkpoint=True)], fn
+
+
+def test_starting_point_continues_a_database_with_state(tmp_path: Path) -> None:
+    ordered, fn = _checkpointed(tmp_path)
+    db_path = tmp_path / "pipeline.ddb"
+    _make_backup_db(db_path, {"big_task": "old"}, "kptn", "default")
+    _make_backup_db(checkpoint_path(db_path, "big_task"), {"big_task": hash_task_source(fn)}, "kptn", "default")
+
+    assert starting_point(ordered, "kptn", "default", db_path) == StartingPoint("database", db_path)
+
+
+def test_starting_point_restores_the_furthest_eligible_checkpoint(tmp_path: Path) -> None:
+    ordered, fn = _checkpointed(tmp_path)
+    db_path = tmp_path / "pipeline.ddb"
+    cp = checkpoint_path(db_path, "big_task")
+    _make_backup_db(cp, {"big_task": hash_task_source(fn)}, "kptn", "default")
+
+    assert starting_point(ordered, "kptn", "default", db_path) == StartingPoint("checkpoint", cp, "big_task")
+    assert cp.exists() and not db_path.exists(), "starting_point must not restore or delete"
+
+
+def test_starting_point_skips_a_stale_checkpoint_without_deleting_it(tmp_path: Path) -> None:
+    ordered, _fn = _checkpointed(tmp_path)
+    db_path = tmp_path / "pipeline.ddb"
+    cp = checkpoint_path(db_path, "big_task")
+    _make_backup_db(cp, {"big_task": "stale"}, "kptn", "default")
+
+    assert starting_point(ordered, "kptn", "default", db_path) == StartingPoint("fresh")
+    assert cp.exists()
