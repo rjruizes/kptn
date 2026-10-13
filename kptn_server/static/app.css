@@ -1207,26 +1207,32 @@ button:disabled {
   color: var(--ink-faint);
 }
 
-/* A group's heading: the caret sits where an icon would, over the row's
- * own button, and folds the tasks beneath it. */
+/* Every top-level row -- a task or a group -- keeps a narrow gutter at its
+ * left, so their names share one edge. A group's caret sits in the
+ * gutter, over the row's own button, and folds the tasks beneath it; the
+ * line down the side of those tasks drops from the caret's centre. */
+.rail-step > .rail-item,
+.rail-item--group {
+  padding-left: 22px;
+}
+
 .rail-group {
   position: relative;
 }
 
 .rail-item--group {
-  padding-left: 34px;
   font-weight: 500;
 }
 
 .rail-caret {
   position: absolute;
   top: 50%;
-  left: 7px;
+  left: 3px;
   z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
+  width: 16px;
   height: 20px;
   padding: 0;
   border: 0;
@@ -1281,8 +1287,8 @@ button:disabled {
 }
 
 .rail-kids {
-  margin-left: 17px;
-  padding-left: 8px;
+  margin-left: 11px;
+  padding-left: 10px;
   border-left: 1px solid var(--line);
 }
 
