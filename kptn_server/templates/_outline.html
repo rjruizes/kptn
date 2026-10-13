@@ -1,47 +1,68 @@
 {#
-  The run page's sidebar: the pipeline as a column of steps, with the run on
-  it. Built in kptn_server.run_outline; macros only, so a single step's card
-  can be rendered for an SSE frame (``outline_step``) exactly as the page
-  renders it.
+  The run page's rail: the pipeline as a tree of tasks, with the run on it.
+  Built in kptn_server.run_outline; macros only, so one step's part of the
+  rail can be rendered for an SSE frame (``outline_step``) exactly as the
+  page renders it.
 
-  Every step and row is a button carrying ``data-select`` and ``data-tasks``
-  (the task names whose output it owns in the console): app.js marks the one
-  whose output is at the top of the screen, and scrolls to a card's output
-  when it is clicked. ``data-selected`` on the nav is where a finished run
-  opens -- its failure, if it had one. The squares are decoration with a tooltip; the status words beside
-  the names carry the same information as text.
+  A task is a button carrying ``data-unit``: the name its section in the log
+  is found by. A step's heading carries ``data-units``, every task beneath
+  it. Clicking either scrolls the log to its section and lights it (app.js);
+  the rail marks what was clicked, not where the log is scrolled.
+  ``data-selected`` on the rail is the task a finished run opens on -- its
+  failure, if it had one.
 #}
 {% from "_kind.html" import ingest_icon %}
+{% from "_status.html" import status_icon %}
 
-{% macro outline_squares(squares) -%}
-{%- for square in squares %}<span class="outline__square outline__square--{{ square.state }}{% if square.warned %} outline__square--warned{% endif %}" title="{{ square.title }}"></span>{% endfor -%}
+{% macro rail_unit(unit) -%}
+<button type="button" class="rail-item" data-unit="{{ unit.unit }}">
+  <span class="rail-item__name">{{ unit.label }}</span>
+  {%- if unit.duration %}<span class="rail-item__dur">{{ unit.duration }}</span>{% endif %}
+  {{ status_icon(unit.state, warned=unit.warned) }}
+</button>
 {%- endmacro %}
 
 {% macro outline_step(step) -%}
-<li class="outline__step outline__step--{{ step.state }}{% if step.group %} outline__step--group{% endif %}" id="outline-{{ step.key }}">
-  <button type="button" class="outline__head" data-select="{{ step.key }}" data-tasks="{{ step.tasks }}">
-    <span class="outline__name">{% if step.ingest %}{{ ingest_icon("ingest-icon") }}{% endif %}{{ step.name }}</span>
-    <span class="outline__status outline__status--{{ step.state }}">{{ step.status }}{% if step.duration %} · {{ step.duration }}{% endif %}</span>
-    {%- if step.squares %}
-    <span class="outline__squares">{{ outline_squares(step.squares) }}</span>
-    {%- endif %}
+<div class="rail-step" id="outline-{{ step.key }}">
+  {%- if step.unit %}
+  {{ rail_unit(step.unit) }}
+  {%- else %}
+  <button type="button" class="rail-item rail-item--group" data-units="{{ step.units }}">
+    {%- if step.ingest %}{{ ingest_icon("rail-item__icon") }}
+    {%- else %}<svg class="rail-item__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 3 7.5l9 4.5 9-4.5L12 3z"/><path d="M3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5"/></svg>{% endif %}
+    <span class="rail-item__name">{{ step.name }}</span>
+    {%- if step.count %}<span class="rail-item__count">{{ step.count }}</span>{% endif %}
+    {{ status_icon(step.state, warned=step.warned) }}
   </button>
-  {%- if step.group %}
-  <ul class="outline__rows">
-    {%- for row in step.rows %}
-    <li><button type="button" class="outline__row outline__row--{{ row.state }}" data-select="{{ row.key }}" data-tasks="{{ row.tasks }}"><span class="outline__row-name">{{ row.name }}</span><span class="outline__squares">{{ outline_squares(row.squares) }}</span></button></li>
+  <div class="rail-kids">
+    {%- for branch in step.branches %}
+    {%- if branch.label %}
+    <div class="rail-label">{{ branch.label }}
+      {%- if not branch.units %} <span class="rail-label__state">{{ {"not_run": "not run"}.get(branch.state, branch.state) }}</span>{% endif -%}
+    </div>
+    <div class="rail-kids">
+      {%- for unit in branch.units %}
+      {{ rail_unit(unit) }}
+      {%- endfor %}
+    </div>
+    {%- else %}
+    {%- for unit in branch.units %}
+    {{ rail_unit(unit) }}
     {%- endfor %}
-  </ul>
+    {%- endif %}
+    {%- endfor %}
+  </div>
   {%- endif %}
-</li>
+</div>
 {%- endmacro %}
 
-{% macro outline_nav(steps, selected) -%}
-<nav class="outline" id="outline" aria-label="Pipeline steps" data-selected="{{ selected }}">
-  <ol class="outline__steps" id="outline-steps">
+{% macro outline_nav(steps, selected, count) -%}
+<nav class="rail" id="outline" aria-label="Tasks in this run" data-selected="{{ selected }}">
+  <div class="rail__head"><span data-rail-count>{{ count }} {{ "task" if count == 1 else "tasks" }}</span></div>
+  <div id="outline-steps">
     {%- for step in steps %}
     {{ outline_step(step) }}
     {%- endfor %}
-  </ol>
+  </div>
 </nav>
 {%- endmacro %}

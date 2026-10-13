@@ -1,32 +1,31 @@
 {#
-  One run's page.
+  One run's page: the run bar, then the rail and the log side by side, the
+  page as tall as the window and each pane scrolling on its own.
 
-  One panel, in two parts, and which of them can go stale is the organizing
-  idea.
-
-  ``_run_header``   the run row's own state -- status, Stop, force-finish.
-  ``_outline``      the pipeline beside the console, a card per step;
-                    selecting one filters the console to it.
-  ``_console``      the event list, which ``app.js`` appends to live.
+  ``_run_header``   the run row's own state -- status, counts, Stop,
+                    force-finish -- and the log's controls.
+  ``_outline``      the rail: the pipeline as a tree of tasks, with the run
+                    on it; clicking a task takes the log to it.
+  ``_console``      the log, which ``app.js`` appends to live.
 
   The header is rendered from the run row, so a run that ends under an open
   stream leaves it showing what was true when the page was rendered. It is a
   partial rather than markup inlined here precisely so the stream's closing
   frame can re-render it: one definition, two surfaces, and no way for the
-  fragment to drift from the page. Each keeps its own id inside the panel,
-  which is what lets the stream replace one of them and leave the other.
+  fragment to drift from the page.
 #}
 {% extends "base.html" %}
 {% from "_outline.html" import outline_nav %}
 
 {% block title %}{{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
 
+{% block body_class %}page--run{% endblock %}
 
 {% block content %}
-<section class="panel run-panel">
+<section class="run-page">
   {% include "_run_header.html" %}
-  <div class="run-body{% if outline %} run-body--outlined{% endif %}">
-    {% if outline %}{{ outline_nav(outline, outline_selected) }}{% endif %}
+  <div class="run-body">
+    {{ outline_nav(outline, outline_selected, outline_units) }}
     {% include "_console.html" %}
   </div>
 </section>

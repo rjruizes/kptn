@@ -265,12 +265,12 @@ def _warning_rows(page: str) -> set[str]:
     to show up now.
     """
     return set(
-        re.findall(r'<li class="event[^"]*"\s+id="(event-\d+)"[^>]*data-kind="warning"', page)
+        re.findall(r'<div class="ev[^"]*"\s+id="(event-\d+)"[^>]*data-kind="warning"', page)
     )
 
 
 def _event_ids(page: str) -> set[str]:
-    return set(re.findall(r'<li class="event[^"]*"\s+id="(event-\d+)"', page))
+    return set(re.findall(r'<div class="ev[^"]*"\s+id="(event-\d+)"', page))
 
 
 def _recorded_worker(project: Path, run_id: str) -> psutil.Process:

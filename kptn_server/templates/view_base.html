@@ -22,7 +22,7 @@
   <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version('app.css') }}">
   {% include "_modules.html" %}
 </head>
-<body data-base="{{ base }}" data-project-base="{{ project_base }}">
+<body class="{% block body_class %}{% endblock %}" data-base="{{ base }}" data-project-base="{{ project_base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
       {% include "_project_picker.html" %}

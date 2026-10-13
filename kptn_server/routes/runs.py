@@ -91,14 +91,7 @@ from fastapi.templating import Jinja2Templates
 
 from kptn.inspection import OutlineEntry, pipeline_outline
 from kptn.runner.events import EventKind
-from kptn_server.console_layout import (
-    FOLD_TASK,
-    OPEN_TASKS,
-    ConsoleLayout,
-    Fold,
-    Placement,
-    is_ingest_event,
-)
+from kptn_server.console_layout import ConsoleLayout, Placement, Section, run_counts
 from kptn_server.context import ui
 from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
@@ -335,7 +328,11 @@ def _label(event: StoredEvent) -> str:
 
 
 def console_event(
-    event: StoredEvent, log_path: Path, *, in_task: bool = False
+    event: StoredEvent,
+    log_path: Path,
+    *,
+    in_task: bool = False,
+    hidden: bool = False,
 ) -> dict[str, Any]:
     """Everything the event template needs, and nothing it has to compute.
 
@@ -343,20 +340,21 @@ def console_event(
     the SSE stream render byte-identical fragments -- the browser appends what
     a reload would have rendered.
 
-    *in_task* says the row sits inside its own task's fold (see
+    *in_task* says the row sits inside its own task's section (see
     :mod:`kptn_server.console_layout`), whose heading already names the task.
+    *hidden* keeps the row in the page -- the counters and the stream's cursor
+    count every event -- without showing it.
     """
     is_log = event.kind == EventKind.LOG.value
     text = log_text(log_path, event) if is_log else _summary(event)
+    shown = [] if hidden else _display_lines(event, text)
     return {
         "sequence": event.sequence,
         "kind": event.kind,
         "label": _label(event),
         "task": event.task_name,
         "in_task": in_task,
-        # A row naming an ingest step -- a source's own rows, a skipped
-        # table's -- carries its icon. Rows inside a fold do not name the task.
-        "ingest": is_ingest_event(event),
+        "hidden": hidden,
         # The instant, unambiguous, for the ``datetime`` attribute...
         "timestamp": _isoformat(event.timestamp),
         # ...and the developer's own wall clock for the text beside it. Events
@@ -370,16 +368,38 @@ def console_event(
         # colour a failure differently by -- and a failure rendered in the
         # success green says the opposite of what happened.
         "status": "" if is_log else str(event.payload.get("status") or ""),
-        # Captured output is a block: multi-line and whitespace-significant.
-        # A summary is a few words, and belongs on the row it describes.
         "is_log": is_log,
         "text": text,
-        # Lines of output, which a task fold's heading adds up. Counted here
+        # What the log shows for this event, one entry per line. Numbered
+        # across the whole run: ``first_line`` is filled in when a whole
+        # history is built, and by app.js for a row the stream appends.
+        "shown": shown,
+        "first_line": None,
+        # Lines of output, which a section's heading adds up. Counted here
         # so the page and the stream count the same way.
-        "lines": _line_count(text) if is_log else 0,
-        # How long a finished task took, for its fold's heading.
+        "lines": len(shown),
+        # How long a finished task took, for its section's heading.
         "duration": _duration(event),
     }
+
+
+def _display_lines(event: StoredEvent, text: str) -> list[str]:
+    """The lines the log shows for one event."""
+    if event.kind == EventKind.LOG.value:
+        return text.splitlines() or ([text] if text else [])
+    if event.kind == EventKind.WARNING.value:
+        return [text] if text else ["warning"]
+    if event.kind == EventKind.RUN_STARTED.value:
+        return ["run started"]
+    if event.kind == EventKind.RUN_FINISHED.value:
+        status = str(event.payload.get("status") or "finished")
+        detail = str(event.payload.get("detail") or "")
+        return [f"run {status}"] + (detail.splitlines() if detail else [])
+    if event.kind == EventKind.TASK_FINISHED.value:
+        error = str(event.payload.get("error") or "")
+        status = str(event.payload.get("status") or "finished")
+        return [f"task {status}"] + (error.splitlines() if error else [])
+    return [_label(event) + (f" {text}" if text else "")]
 
 
 def _duration(event: StoredEvent) -> str:
@@ -403,49 +423,53 @@ def _line_count(text: str) -> int:
     return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
 
-# -- the console's folds ---------------------------------------------------
+# -- the console's sections -------------------------------------------------
 
 
 def build_console(
     stored: Sequence[StoredEvent], log_path: Path
 ) -> list[Any]:
-    """A run's whole history as the console's tree of folds and rows.
+    """A run's whole history as the log's sections and the run's own rows.
 
     The same :class:`~kptn_server.console_layout.ConsoleLayout` the stream
     places events with, so a reload shows the structure the live page built.
-    Each fold's ``open`` is what ``app.js`` would have left it as by now:
-    only the newest :data:`~kptn_server.console_layout.OPEN_TASKS` task
-    folds, and only the groups the newest event sits in, stay open -- except
-    around a failure, which is never folded away.
+    Every shown line is numbered across the run, as app.js goes on numbering
+    the lines a stream appends.
     """
     layout = ConsoleLayout()
     top: list[Any] = []
-    tasks: list[Fold] = []
-    groups: list[Fold] = []
-    last: Placement | None = None
+    number = 1
 
     for event in stored:
         placement = layout.place(event)
-        for fold in placement.opens:
-            (fold.parent.children if fold.parent is not None else top).append(fold)
-            (tasks if fold.kind == FOLD_TASK else groups).append(fold)
-        row = console_event(event, log_path, in_task=placement.in_task)
+        top.extend(placement.opens)
+        row = console_event(
+            event, log_path, in_task=placement.in_task, hidden=placement.hidden
+        )
+        if row["shown"]:
+            row["first_line"] = number
+            number += len(row["shown"])
         container = placement.container
         (container.children if container is not None else top).append(row)
-        if container is not None and container.kind == FOLD_TASK:
+        if container is not None and event.kind == EventKind.LOG.value:
             container.lines += row["lines"]
-            if event.kind == EventKind.WARNING.value:
-                container.warnings += 1
         if placement.finishes is not None:
             placement.finishes.outcome = row
-        last = placement
-
-    current = set(last.container.ancestors()) if last and last.container else set()
-    for index, fold in enumerate(tasks):
-        fold.open = index >= len(tasks) - OPEN_TASKS or fold.failed
-    for fold in groups:
-        fold.open = fold in current or fold.failed
     return top
+
+
+def console_sections(items: Sequence[Any]) -> list[Section]:
+    """The sections among *items*, as :func:`build_console` returns them."""
+    return [item for item in items if isinstance(item, Section)]
+
+
+def event_counts(stored: Iterable[StoredEvent]) -> dict[str, int]:
+    """The run bar's tallies, from a run's events: placed, never read."""
+    layout = ConsoleLayout()
+    sections: list[Section] = []
+    for event in stored:
+        sections.extend(layout.place(event).opens)
+    return run_counts(sections)
 
 
 def _isoformat(value: datetime) -> str:
@@ -467,12 +491,14 @@ def render_event(
     but text.
 
     Where it goes is the server's decision too, from *placement*: ``opens``
-    are the folds to add first (each an empty shell, appended to the element
+    are the sections to add first (each an empty shell, appended to the element
     ``parent`` names unless the page already has it), ``parent`` is the id the
-    row is appended to, and ``outcome`` replaces a task fold's heading
+    row is appended to, and ``outcome`` replaces a section heading's
     outcome once the task has finished.
     """
-    prepared = console_event(event, log_path, in_task=placement.in_task)
+    prepared = console_event(
+        event, log_path, in_task=placement.in_task, hidden=placement.hidden
+    )
     # Jinja macros are attributes of a template's module at runtime; a
     # ``TemplateModule`` has no static surface for them.
     module = templates.get_template("_event.html").module
@@ -485,16 +511,16 @@ def render_event(
         "parent": placement.parent_id,
         "opens": [
             {
-                "id": fold.id,
-                "parent": fold.parent_id,
-                "html": str(module.fold_shell(fold)),  # ty: ignore[unresolved-attribute]
+                "id": section.id,
+                "parent": section.parent_id,
+                "html": str(module.section_shell(section)),  # ty: ignore[unresolved-attribute]
             }
-            for fold in placement.opens
+            for section in placement.opens
         ],
         "outcome": (
             {
                 "id": f"{finishes.id}-outcome",
-                "html": str(module.fold_outcome(finishes, prepared)),  # ty: ignore[unresolved-attribute]
+                "html": str(module.section_outcome(finishes, prepared)),  # ty: ignore[unresolved-attribute]
             }
             if finishes is not None
             else None
@@ -580,7 +606,7 @@ def render_region(
             # whole. Without them the numbers would blank the instant a run
             # went terminal under an open stream -- invisible on a reload,
             # which is where a reader would go looking for the bug.
-            "counters": counters(store.event_counts(record.run_id)),
+            "counts": event_counts(store.events_after(record.run_id, 0)),
             "project_base": project_base,
         }
     else:
@@ -891,6 +917,7 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
         stored,
         terminal=record.status in TERMINAL_STATUSES,
     )
+    items = build_console(stored, log_path)
     return ui(request).templates.TemplateResponse(
         request,
         "run.html",
@@ -900,13 +927,13 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             # Not from the URL: a run knows its own profile, and "show me the
             # plan for this run" is the obvious move from a finished one.
             "selected_profile": record.profile,
-            "items": build_console(stored, log_path),
+            "items": items,
             "outline": outline.views(),
+            "outline_units": outline.unit_count(),
             "outline_selected": outline.selected(),
-            # The console bar's counters. From the same aggregate the history
-            # page uses, rather than from the events hydrated just above: one
-            # counting path, so the two pages cannot disagree about one run.
-            "counters": counters(store.event_counts(run_id)),
+            # The run bar's tallies, from the sections the log shows. app.js
+            # recounts them off the page as a live run adds to them.
+            "counts": run_counts(console_sections(items)),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
             "force_finish_offered": looks_wedged(record),
             "is_terminal": record.status in TERMINAL_STATUSES,

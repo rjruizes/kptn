@@ -103,7 +103,7 @@ def test_their_run_page_renders_their_output_escaped(
 
     assert "hello &lt;b&gt;world&lt;/b&gt;" in body
     assert "<b>world</b>" not in body
-    assert 'data-counter="tasks">1<' in body
+    assert 'data-counter="ran">1<' in body
     assert f'data-stream-url="/view/{OTHER}/runs/{record.run_id}/events"' in body
 
 

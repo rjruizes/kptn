@@ -1,15 +1,16 @@
-"""The run page's sidebar: the pipeline as a column of steps, with the run on it.
+"""The run page's rail: the pipeline as a tree of tasks, with the run on it.
 
-A step is one task, or a stage (or nested pipeline) drawn as a card with a row
-per branch. Every task shows as a square -- or, for a source or a mapped task,
-a square per table or item, added as the run reports them. The sidebar is
-built from :func:`kptn.inspection.pipeline_outline` so steps that have not run
-yet are there, and then the run's events are applied to it in order, here on
-the server: the page renders the result, and the stream re-renders a step's
-card whenever an event changes it. The browser only swaps cards in.
+A step is one task, or a stage (or nested pipeline) with a branch per source
+or module beneath it, and the tasks -- a source's tables, a module's tasks --
+beneath those. Each task shows how it went and how long it took. The rail is
+built from :func:`kptn.inspection.pipeline_outline`, so tasks that have not
+run yet are there, and then the run's events are applied to it in order, here
+on the server: the page renders the result, and the stream re-renders a
+step's part of the rail whenever an event changes it. The browser only swaps
+them in.
 
-Selecting a step or a row filters the console beside it to that step's tasks;
-the ``data-tasks`` each one carries is what ``app.js`` filters by.
+Every task in the rail carries ``data-unit``, the name its section in the log
+is found by; a step's heading carries ``data-units``, every task beneath it.
 """
 
 from __future__ import annotations
@@ -57,8 +58,8 @@ class _Entry(Protocol):
 
 
 def _duration(seconds: object) -> str:
-    """A finished step's run time; nothing for one too quick to be worth a number."""
-    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or seconds < 0.05:
+    """A finished task's run time, in the units a reader thinks in."""
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
         return ""
     if seconds < 60:
         return f"{seconds:.1f}s"
@@ -234,83 +235,82 @@ class RunOutline:
             return "interrupted"
         return state
 
-    def squares(self, task: _Task) -> list[dict[str, Any]]:
+    def _unit(self, name: str, label: str, progress: _Progress, state: str) -> dict[str, Any]:
+        return {
+            "unit": name,
+            "label": label,
+            "state": state,
+            "duration": progress.duration if state in ("succeeded", "failed") else "",
+            "warned": progress.warned,
+        }
+
+    def _units(self, task: _Task) -> list[dict[str, Any]]:
+        """What the rail lists for *task*: its tables or items, or itself."""
         if task.items:
             return [
-                {
-                    "label": name.split("[", 1)[1].rstrip("]"),
-                    "state": (state := self._settle(item.state)),
-                    "warned": item.warned,
-                    "title": _title(name.split("[", 1)[1].rstrip("]"), state, item.duration, item.warned),
-                }
+                self._unit(name, name.split("[", 1)[1].rstrip("]"), item, self._settle(item.state))
                 for name, item in task.items.items()
             ]
-        state = self.state(task)
-        return [
-            {
-                "label": task.name,
-                "state": state,
-                "warned": task.progress.warned,
-                "title": _title(task.name, state, task.progress.duration, task.progress.warned),
-            }
-        ]
+        if task.kind in ("source", "map") and self.state(task) != "failed":
+            # Its tables or items are not known until it runs. One that
+            # failed before any is listed itself: its failure has a section.
+            return []
+        return [self._unit(task.name, task.name, task.progress, self.state(task))]
 
     def view(self, step: OutlineStep) -> dict[str, Any]:
-        """Everything ``_outline.html`` needs to draw *step*'s card."""
-        rows = []
+        """Everything ``_outline.html`` needs to draw *step*'s part of the rail."""
+        branches = []
         for row in step.rows:
-            states = [self.state(task) for task in row.tasks]
-            rows.append(
+            units = [unit for task in row.tasks for unit in self._units(task)]
+            alone = (
+                len(row.tasks) == 1
+                and len(units) == 1
+                and units[0]["unit"] == row.tasks[0].name
+                and row.name == row.tasks[0].name
+            )
+            branches.append(
                 {
-                    "key": row.key,
-                    "name": row.name,
-                    "state": _combine(states) or "waiting",
-                    "tasks": " ".join(task.name for task in row.tasks),
-                    "squares": [sq for task in row.tasks for sq in self.squares(task)],
+                    # A branch that is one plain task is listed as that task;
+                    # a source or a module is a label over its tasks.
+                    "label": None if alone else row.name,
+                    "state": _combine([self.state(task) for task in row.tasks]) or "waiting",
+                    "units": units,
                 }
             )
-        states = [row["state"] for row in rows]
-        state = _combine(states) or "waiting"
-        if step.group:
-            done = sum(1 for s in states if s in ("succeeded", "cached"))
-            status = f"{done} of {len(rows)}" if state == "running" else STATE_WORDS.get(state, state)
-            duration = ""
-        else:
-            task = step.rows[0].tasks[0]
-            status = STATE_WORDS.get(state, state)
-            duration = task.progress.duration if state in ("succeeded", "failed") else ""
+        units = [unit for branch in branches for unit in branch["units"]]
+        state = _combine([branch["state"] for branch in branches]) or "waiting"
+        lone = not step.group and len(units) == 1 and units[0]["unit"] == step.name
         return {
             "key": step.key,
             "name": step.name,
-            "group": step.group,
             "ingest": step.ingest,
             "state": state,
-            "status": status,
-            "duration": duration,
-            "tasks": " ".join(task.name for task in step.tasks()),
-            "rows": rows,
-            # A lone task shows squares only when it has items to show.
-            "squares": rows[0]["squares"] if not step.group and step.rows[0].tasks[0].items else [],
+            "warned": any(unit["warned"] for unit in units),
+            # A lone task is one line in the rail; anything with tasks
+            # beneath it is a heading over them.
+            "unit": units[0] if lone else None,
+            "units": " ".join(unit["unit"] for unit in units),
+            "count": len(units),
+            "branches": [] if lone else branches,
         }
 
     def views(self) -> list[dict[str, Any]]:
         return [self.view(step) for step in self.steps]
 
+    def unit_count(self) -> int:
+        """How many tasks the rail lists, for its heading."""
+        return sum(len(self._units(task)) for step in self.steps for task in step.tasks())
+
     def selected(self) -> str:
-        """What the page opens on: the running step, a failure, or everything."""
-        if not self.terminal and self.focus:
-            return self.focus
+        """The task a finished run opens on: its first failure, if it had one."""
+        if not self.terminal:
+            return ""
         for step in self.steps:
-            for row in step.rows:
-                if any(self.state(task) == "failed" for task in row.tasks):
-                    return row.key
-        return "all"
-
-
-def _title(name: str, state: str, duration: str, warned: bool = False) -> str:
-    word = STATE_WORDS.get(state, state)
-    title = f"{name}: {word} in {duration}" if duration else f"{name}: {word}"
-    return f"{title}, with warnings" if warned else title
+            for task in step.tasks():
+                for unit in self._units(task):
+                    if unit["state"] == "failed":
+                        return unit["unit"]
+        return ""
 
 
 def _combine(states: list[str]) -> str:
@@ -356,7 +356,7 @@ def prime_outline(
 
 
 def outline_frame(templates: Any, outline: RunOutline, step: OutlineStep) -> Mapping[str, Any]:
-    """The part of an SSE frame that redraws *step*'s card."""
+    """The part of an SSE frame that redraws *step*'s part of the rail."""
     module = templates.get_template("_outline.html").module
     return {
         "id": f"outline-{step.key}",

@@ -6,6 +6,9 @@
     profile_options - the profile <select>'s options, so a page can mark one
                       selected (the run console marks the profile in play)
     content         - the page body
+    body_class      - a class for <body>; the run page's ``page--run`` makes
+                      the page as tall as the window, with its panes
+                      scrolling inside it
     scripts         - extra page-local script tags
 
   The app bar holds the three controls that act on "the selected profile":
@@ -32,7 +35,7 @@
   <script src="{{ base }}/static/htmx.min.js?v={{ asset_version('htmx.min.js') }}" defer></script>
   {% include "_modules.html" %}
 </head>
-<body data-base="{{ base }}" data-project-base="{{ project_base }}">
+<body class="{% block body_class %}{% endblock %}" data-base="{{ base }}" data-project-base="{{ project_base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
       {#

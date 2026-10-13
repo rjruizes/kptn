@@ -969,7 +969,7 @@ def test_history_counts_ignore_log_events(client, store: RunStore, app) -> None:
 
     # And on the run page, where the events *are* hydrated for the console.
     console = client.get(f"/runs/{noisy.run_id}").text
-    assert '<b data-counter="tasks">1</b>' in console
+    assert '<b data-counter="ran">1</b>' in console
 
 
 def test_history_truncates_to_the_limit_dropping_the_oldest(
@@ -1191,7 +1191,10 @@ def test_warning_payloads_with_a_status_are_still_counted(
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     body = client.get(f"/runs/{record.run_id}").text
-    assert '<b data-counter="warnings">2</b>' in body
+    # The run bar counts tasks that warned; both warnings landed in alpha's
+    # section, and its heading counts them.
+    assert '<b data-counter="warned">1</b>' in body
+    assert re.search(r'data-unit="alpha"\s+data-state="\w+" data-warnings="2"', body)
 
 
 # -- the page and the stream render the same regions -----------------------

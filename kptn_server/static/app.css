@@ -8,16 +8,24 @@
 :root {
   color-scheme: light dark;
 
-  --ink: #16202b;
-  --ink-muted: #5c6b7a;
+  --ink: #1c2228;
+  --ink-muted: #5b6570;
+  --ink-faint: #8a939c;
   --surface: #ffffff;
-  --surface-sunken: #f4f6f8;
-  --line: #d6dde4;
-  --accent: #1f6feb;
+  --surface-sunken: #f6f7f8;
+  --surface-hover: #eceef0;
+  --line: #e2e5e8;
+  --accent: #2b5bd7;
+  --accent-bg: #e7edfc;
   --accent-ink: #ffffff;
   --danger: #b42318;
-  --warning: #9a5b00;
-  --ok: #1a7f37;
+  --danger-bg: #fbe9e7;
+  --warning: #965f06;
+  --warning-bg: #fbf0d8;
+  /* A warned line's background: quieter than a pill's. */
+  --warning-line: #fdf8ec;
+  --ok: #2d7a40;
+  --ok-bg: #e5f2e8;
   --radius: 6px;
   /* One measure for the whole app: the app bar's contents and the page
    * content line up on the same left and right edges. */
@@ -31,16 +39,23 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink: #e6edf3;
-    --ink-muted: #9aa7b2;
-    --surface: #161b22;
-    --surface-sunken: #0d1117;
-    --line: #30363d;
-    --accent: #4493f8;
-    --accent-ink: #0d1117;
+    --ink: #e6e9ec;
+    --ink-muted: #a3acb5;
+    --ink-faint: #737d87;
+    --surface: #15181b;
+    --surface-sunken: #1b1f23;
+    --surface-hover: #252a2f;
+    --line: #2c3237;
+    --accent: #86a7f6;
+    --accent-bg: #1f2a45;
+    --accent-ink: #15181b;
     --danger: #ff7b72;
-    --warning: #d29922;
-    --ok: #3fb950;
+    --danger-bg: #3a1d1c;
+    --warning: #e3ae52;
+    --warning-bg: #352913;
+    --warning-line: #231e14;
+    --ok: #6cc183;
+    --ok-bg: #1a2f21;
   }
 }
 
@@ -535,66 +550,76 @@ button:disabled {
 
 .status {
   display: inline-block;
-  padding: 1px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   background: var(--surface-sunken);
-  border: 1px solid var(--line);
+  color: var(--ink-muted);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
+  text-transform: capitalize;
 }
 
 .status--succeeded {
+  background: var(--ok-bg);
   color: var(--ok);
 }
 
 .status--failed,
 .status--errored {
+  background: var(--danger-bg);
   color: var(--danger);
+}
+
+.status--running,
+.status--queued {
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .status--stopped,
 .status--interrupted,
 .status--stop_requested {
+  background: var(--warning-bg);
   color: var(--warning);
 }
 
-/* -- the run console ---------------------------------------------------- */
+/* -- the run page ------------------------------------------------------- */
 
-/* Inline, because it renders inside the run panel's heading. On the 409 page
+/* As tall as the window: the run bar on top, then the rail and the log side
+ * by side, each scrolling on its own. A long run never makes the page itself
+ * scroll, so the rail is always beside the log it navigates. */
+.page--run {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.page--run .app-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-page {
+  display: grid;
+  flex: 1;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+/* Inline, because it renders inside the run bar's breadcrumb. On the 409 page
  * it is the whole body and stands on its own line, which an inline-flex box
  * does just as well. */
 .run-status {
   display: inline-flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
-}
-
-/* The run panel's heading is a breadcrumb: the crumbs sit on one line, and
- * the separator is quieter than either of them. */
-/* The breadcrumb on the left, Retry hard against the right edge. */
-.run-header__top {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
-  margin-bottom: 12px;
-}
-
-.run-header__crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
   gap: 8px;
-  margin: 0;
-}
-
-.run-header__retry {
-  margin: 0 0 0 auto;
-}
-
-.run-header__crumb-separator {
-  color: var(--ink-muted);
+  font-size: 13px;
   font-weight: 400;
 }
 
@@ -603,579 +628,657 @@ button:disabled {
   color: var(--warning);
 }
 
-/* The run's own controls and its console are one card, and now read as one:
- * no rule between them. The header's counters and log download already say
- * where its half ends, so a border only drew a seam across a single surface.
- * The spacing stays -- the output must not collide with the controls. */
-.run-panel .console {
-  margin-top: 14px;
-}
-
-.console__bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 14px;
-  margin-bottom: 10px;
-}
-
-/* The console is the one scrolling region in the UI: a long run must not turn
- * the whole page into a mile of output. */
-/* No height and no scroller of its own: the console is as long as the run,
- * and the page is what scrolls. A box that scrolled internally put a second
- * scrollbar inside the first, and left the output in a 60vh window while the
- * page around it stood still. */
-.console__events {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-sunken);
-  font-family: var(--font-mono);
+.run-status__task {
+  color: var(--ink-muted);
   font-size: 12px;
 }
 
-/* No rule between rows: a log reads as lines, and the folds around them
-   already draw the structure. */
-.event {
+/* -- the run bar -- */
+
+.run-bar {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 8px;
-}
-
-.event__seq,
-.event__clock {
-  color: var(--ink-muted);
-}
-
-.event__kind {
-  font-weight: 600;
-}
-
-.event__task {
-  color: var(--accent);
-}
-
-/* Captured output starts on the row that labels it and takes the rest of
-   the width, rather than claiming a line of its own: a single line of task
-   output is the common case, and a row whose text always began underneath
-   its own timestamp read like two entries instead of one.
-
-   ``pre-wrap`` and ``min-width: 0`` keep the multi-line case honest -- real
-   pipeline output is whitespace-significant, and a flex item needs the zero
-   minimum before it is allowed to wrap inside its track at all. */
-.event__text {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* A summary ("cached", "succeeded 1.23s") is a few words about the row it
-   sits on, so it stays on that row and wraps only when it has to. */
-.event__summary {
-  color: var(--ink-muted);
-  min-width: 0;
-  word-break: break-word;
-}
-
-.event--warning .event__kind,
-.event--stderr .event__kind {
-  color: var(--warning);
-}
-
-/* Coloured by outcome, never by kind: "task finished" is the same kind for a
-   success and a failure, and colouring the kind painted every failure in the
-   success green. Statuses with no rule here (stopped, interrupted) stay the
-   default ink rather than borrowing a colour that would overstate them. */
-.event--succeeded .event__kind {
-  color: var(--ok);
-}
-
-.event--failed .event__kind {
-  color: var(--danger);
-}
-
-/* -- console folds ------------------------------------------------------- */
-
-/* A fold is a row like any other, whose heading opens onto more rows: one
-   per pipeline or stage, one per task. Its body is indented behind a guide
-   line, as an editor draws folded code, so nesting reads at a glance. */
-.fold {
+  align-items: center;
+  gap: 12px 20px;
+  padding: 14px 24px;
   border-bottom: 1px solid var(--line);
 }
 
-.fold:last-child {
-  border-bottom: none;
-}
-
-.fold__head {
+.run-bar__crumb {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 3px 8px;
-  cursor: pointer;
-  list-style: none;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 400;
 }
 
-.fold__head::-webkit-details-marker {
+.run-bar__crumb a {
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.run-bar__crumb a:hover {
+  color: var(--accent);
+}
+
+.run-bar__sep {
+  color: var(--ink-faint);
+}
+
+.run-bar__crumb strong {
+  font-weight: 600;
+}
+
+.run-bar__counts {
+  display: flex;
+  gap: 16px;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.run-bar__counts b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.run-bar__warned b {
+  color: var(--warning);
+}
+
+.run-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.run-bar__actions form {
+  margin: 0;
+}
+
+/* Below the bar's own row: the force-finish hatch, and the read-only view's
+ * notes about a run that has gone quiet or cannot be read. */
+.run-bar > .run-actions__abandon,
+.run-bar__note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--surface-hover);
+}
+
+.btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.btn .btn__caret {
+  width: 13px;
+  height: 13px;
+  color: var(--ink-faint);
+}
+
+.btn--danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}
+
+.view-menu {
+  position: relative;
+}
+
+.view-menu__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  min-width: 190px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.view-menu__panel[hidden] {
   display: none;
 }
 
-.fold__head:hover {
-  background: color-mix(in srgb, var(--line) 35%, var(--surface-sunken));
+.view-opt {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
 }
 
-/* An open task's heading stays at the top of the screen while its output
-   scrolls under it, so the reader always knows whose lines these are -- and
-   has its outcome, its counts, and the jump to its end within reach. Sticky
-   inside its own <details>, so it lets go once the task's output has
-   scrolled past. Opaque, because the rows pass beneath it; the shadow is
-   the line its body's top border draws until it scrolls away. */
-.fold--task > details[open] > .fold__head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--surface-sunken);
-  box-shadow: 0 1px 0 var(--line);
+.view-opt:hover {
+  background: var(--surface-hover);
 }
 
-.fold--task > details[open] > .fold__head:hover {
-  background: color-mix(in srgb, var(--line) 35%, var(--surface-sunken));
+.view-opt input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
 }
 
-/* The arrow: a disclosure triangle that turns down when the fold is open. */
-.fold__head::before {
-  content: "\25B8";
-  display: inline-block;
-  width: 1ch;
-  color: var(--ink-muted);
-  transition: transform 0.1s ease-out;
-}
-
-details[open] > .fold__head::before {
-  transform: rotate(90deg);
-}
-
-.fold__name {
-  font-weight: 600;
-}
-
-.fold--task > details > .fold__head .fold__name {
-  color: var(--accent);
-}
-
-/* A fold holding a failure says so on its heading, open or not, so a
-   failed task inside a folded pipeline is not hidden behind a quiet line. */
-.fold:has(.event--failed) > details > .fold__head .fold__name {
-  color: var(--danger);
-}
-
-.fold__outcome,
-.fold__count {
-  color: var(--ink-muted);
-}
-
-.fold__status--succeeded {
-  color: var(--ok);
-}
-
-.fold__status--failed {
-  color: var(--danger);
-}
-
-.fold__count--warnings {
-  color: var(--warning);
-}
-
-/* Pushed to the far end of the heading, and quiet until the heading is
-   pointed at: it is a shortcut, not part of what the line says. */
-.fold__jump {
+.view-opt__box {
   display: inline-flex;
-  align-self: center;
-  margin-left: auto;
-  padding: 2px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: none;
-  color: var(--ink-muted);
-  font: inherit;
-  cursor: pointer;
-  opacity: 0.6;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--ink-faint);
+  border-radius: 4px;
+  color: var(--surface);
 }
 
-.fold__head:hover .fold__jump,
-.fold__jump:focus-visible {
-  opacity: 1;
+.view-opt__box svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0;
 }
 
-.fold__jump:hover {
-  border-color: var(--line);
-  color: var(--accent);
-}
-
-.fold__body {
-  position: relative;
-  margin: 0 0 0 12px;
-  padding: 0;
-  list-style: none;
-  border-top: 1px solid var(--line);
-  border-left: 1px solid var(--line);
-}
-
-/* The indent beside a fold's rows, guide line included, is a control: it
-   closes the fold. Laid over the margin rather than taking room of its own,
-   and lit on hover so it can be found. */
-.fold__gutter {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -13px;
-  width: 13px;
-  cursor: pointer;
-}
-
-.fold__gutter:hover {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  box-shadow: inset -2px 0 var(--accent);
-}
-
-/* -- the console in boxes ---------------------------------------------- */
-
-/* app.js marks the console's parts (segmentConsole): one box per step, and
-   inside a stage at the top, one per branch, with the page between them.
-   Each part draws its share of its box -- the sides, plus the top for the
-   first and the bottom for the last -- so a box needs no wrapper element
-   and a streamed row simply joins the box it belongs to. */
-.console__events.is-segmented {
-  border: none;
-  background: none;
-}
-
-.is-segmented .seg {
-  border: 1px solid var(--line);
-  border-top-width: 0;
-  border-bottom-width: 0;
-  border-radius: 0;
-  background: var(--surface-sunken);
-}
-
-.is-segmented .seg:not(.seg--start) {
-  border-top-width: 1px;
-}
-
-.is-segmented .seg--start {
-  margin-top: 10px;
-  border-top-width: 1px;
-  border-top-left-radius: var(--radius);
-  border-top-right-radius: var(--radius);
-}
-
-.is-segmented > .seg--start:first-child {
-  margin-top: 0;
-}
-
-.is-segmented .seg--end {
-  border-bottom-width: 1px;
-  border-bottom-left-radius: var(--radius);
-  border-bottom-right-radius: var(--radius);
-}
-
-/* A stage at the top sits on the page, its branches boxed beneath it. */
-.is-segmented .seg-group {
-  margin-top: 10px;
-  border-bottom: none;
-}
-
-.is-segmented .seg-group > details > .fold__body {
-  margin-left: 10px;
-  padding-left: 10px;
-  border-top: none;
-}
-
-.is-segmented .seg-group > details > .fold__body > .seg--start:nth-child(2) {
-  margin-top: 4px;
-}
-
-/* A card's output, lit for a moment after its card is clicked. */
-@keyframes console-flash {
-  from {
-    background-color: color-mix(in srgb, var(--accent) 22%, var(--surface-sunken));
-  }
-
-  to {
-    background-color: var(--surface-sunken);
-  }
-}
-
-.is-flashing,
-.is-flashing > details > .fold__head {
-  animation: console-flash 1.6s ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .is-flashing,
-  .is-flashing > details > .fold__head {
-    animation-duration: 0.01s;
-  }
-}
-
-/* -- the pipeline sidebar ----------------------------------------------- */
-
-/* The run page's pipeline beside its console: a card per step, top to
-   bottom, joined by short connectors. It stays in view while the log
-   scrolls, marking the step whose output is at the top of the screen. */
-.run-panel .run-body--outlined {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-  margin-top: 14px;
-}
-
-.run-panel .run-body--outlined .console {
-  margin-top: 0;
-}
-
-@media (max-width: 760px) {
-  .run-panel .run-body--outlined {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.outline {
-  position: sticky;
-  top: 8px;
-  max-height: calc(100vh - 16px);
-  overflow-y: auto;
-  font-size: 12px;
-}
-
-@media (max-width: 760px) {
-  .outline {
-    position: static;
-    max-height: none;
-  }
-}
-
-.outline__steps {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.outline__step {
-  position: relative;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.outline__step--cached {
-  background: var(--surface-sunken);
-}
-
-.outline__step--running {
-  border-color: var(--accent);
-}
-
-.outline__step--failed {
-  border-color: var(--danger);
-}
-
-.outline__step--waiting,
-.outline__step--not_run,
-.outline__step--bypassed {
-  background: transparent;
-}
-
-/* The connector into each step after the first: a line down the gap and a
-   chevron at its end. Dashed into a step that has not run. */
-.outline__step + .outline__step::before {
-  content: "";
-  position: absolute;
-  top: -18px;
-  left: 18px;
-  height: 15px;
-  border-left: 1.5px solid var(--ink-muted);
-}
-
-.outline__step + .outline__step::after {
-  content: "";
-  position: absolute;
-  top: -8px;
-  left: 15px;
-  width: 5px;
-  height: 5px;
-  border-right: 1.5px solid var(--ink-muted);
-  border-bottom: 1.5px solid var(--ink-muted);
-  transform: rotate(45deg);
-}
-
-.outline__step--waiting::before,
-.outline__step--not_run::before,
-.outline__step--bypassed::before {
-  border-left-style: dashed;
-}
-
-.outline__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 9px;
-  border: none;
-  border-radius: var(--radius);
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.outline__name {
-  font-family: var(--font-mono);
-  font-weight: 600;
-  color: var(--accent);
-  overflow-wrap: anywhere;
-}
-
-.outline__step--waiting .outline__name,
-.outline__step--not_run .outline__name,
-.outline__step--bypassed .outline__name {
-  color: var(--ink-muted);
-}
-
-.outline__status {
-  margin-left: auto;
-  color: var(--ink-muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.outline__status--succeeded {
-  color: var(--ok);
-}
-
-.outline__status--failed {
-  color: var(--danger);
-}
-
-.outline__status--running {
-  color: var(--accent);
-}
-
-.outline__status--interrupted {
-  color: var(--warning);
-}
-
-.outline__head .outline__squares {
-  flex-basis: 100%;
-}
-
-.outline__rows {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 0;
-  padding: 0 5px 6px;
-  list-style: none;
-}
-
-.outline__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  column-gap: 6px;
-  width: 100%;
-  padding: 2px 4px;
-  border: none;
-  border-radius: 3px;
-  background: none;
-  color: var(--ink-muted);
-  font: inherit;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.outline__row-name {
-  min-width: 9ch;
-  line-height: 14px;
-}
-
-.outline__head:hover,
-.outline__row:hover {
-  background: color-mix(in srgb, var(--line) 35%, transparent);
-}
-
-/* The card whose output is at the top of the console. */
-.outline__head[aria-current="location"],
-.outline__row[aria-current="location"] {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.outline__head:focus-visible,
-.outline__row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.outline__squares {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-  padding-top: 3px;
-}
-
-.outline__square {
-  width: 8px;
-  height: 8px;
-  box-sizing: border-box;
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  background: var(--line);
-}
-
-.outline__square--succeeded {
-  border-color: var(--ok);
-  background: var(--ok);
-}
-
-.outline__square--failed {
-  border-color: var(--danger);
-  background: var(--danger);
-}
-
-.outline__square--running {
+.view-opt input:checked + .view-opt__box {
   border-color: var(--accent);
   background: var(--accent);
 }
 
-.outline__square--cached {
-  border-color: var(--ink-muted);
-  background: none;
+.view-opt input:checked + .view-opt__box svg {
+  opacity: 1;
 }
 
-.outline__square--interrupted {
-  border-color: var(--warning);
-  background: none;
+.view-opt input:focus-visible + .view-opt__box {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-/* A task that warned (most often: a table with no check file) wears a
-   ring, set off by a gap so it does not blur into the square. */
-.outline__square--warned {
-  box-shadow: 0 0 0 1px var(--surface), 0 0 0 2.5px var(--warning);
+/* -- the rail and the log -- */
+
+.run-body {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.rail {
+  overflow: auto;
+  padding: 12px 10px 24px;
+  border-right: 1px solid var(--line);
+  background: var(--surface-sunken);
+}
+
+.rail__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 10px 10px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-item:hover {
+  background: var(--surface-hover);
+}
+
+.rail-item.is-active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.rail-item__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-item__dur {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+}
+
+.rail-item.is-active .rail-item__dur {
+  color: var(--accent);
+}
+
+.rail-item--group {
+  font-weight: 500;
+}
+
+.rail-item .rail-item__icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--ink-muted);
+}
+
+.rail-item__count {
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+}
+
+.rail-label {
+  padding: 8px 10px 2px;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.rail-label__state {
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+
+.rail-kids {
+  margin-left: 17px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
+.rail-kids .rail-kids {
+  margin-left: 10px;
+}
+
+.rail-item:focus-visible,
+.btn:focus-visible,
+.sec-h:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* How a task went, in the rail and in the log's headings (_status.html). */
+.status-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--ink-faint);
+}
+
+.status-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.status-icon--succeeded {
+  color: var(--ok);
+}
+
+.status-icon--failed {
+  color: var(--danger);
+}
+
+.status-icon--running {
+  color: var(--accent);
+}
+
+.status-icon--warned,
+.status-icon--interrupted,
+.status-icon--stopped {
+  color: var(--warning);
+}
+
+.status-icon--pill {
+  gap: 4px;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  background: var(--warning-bg);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.status-icon--running svg {
+  animation: status-spin 1s linear infinite;
+}
+
+/* The log: one continuous scroll of the run's lines and its sections. */
+.console {
+  position: relative;
+  min-width: 0;
+  overflow: auto;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.console__empty {
+  margin: 16px 24px;
+  font-family: var(--font-ui);
+}
+
+.ev[hidden] {
+  display: none;
+}
+
+.ln {
+  display: flex;
+  padding: 1px 24px 1px 18px;
+}
+
+.sec__lines .ln {
+  padding-left: 42px;
+}
+
+.ln:hover {
+  background: var(--surface-sunken);
+}
+
+.ln__no {
+  flex: none;
+  width: 40px;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.ln__ts {
+  flex: none;
+  width: 72px;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.ln__tx {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.console.no-timestamps .ln__ts,
+.console.no-numbers .ln__no {
+  display: none;
+}
+
+.ev--warning .ln {
+  background: var(--warning-line);
+}
+
+.ev--warning .ln__tx {
+  color: var(--warning);
+}
+
+/* Output a task wrote to stderr: tracebacks, and the echo of a warning whose
+ * own line above says it plainly. Quieter than ordinary output. */
+.ev--stderr .ln__tx {
+  color: var(--ink-muted);
+}
+
+.ev--failed .ln__tx {
+  color: var(--danger);
+}
+
+.ev--run_started .ln,
+.ev--run_finished .ln:first-child {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.ev--run_started .ln__tx,
+.ev--run_finished .ln:first-child .ln__tx {
+  font-weight: 500;
+}
+
+.ev--run_finished.ev--succeeded .ln__tx {
+  color: var(--ok);
+}
+
+.ev--run_finished {
+  border-top: 1px solid var(--line);
+}
+
+.sec {
+  border-top: 1px solid var(--line);
+}
+
+/* The heading folds its section, and stays at the top of the log while the
+ * section's lines scroll beneath it. */
+.sec-h {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 24px 9px 18px;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sec-h:hover {
+  background: var(--surface-sunken);
+}
+
+.sec-h__chev {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--ink-faint);
+  transition: transform 0.15s ease;
+}
+
+.sec.is-closed .sec-h__chev {
+  transform: rotate(-90deg);
+}
+
+.sec.is-closed .sec__lines {
+  display: none;
+}
+
+.sec-h__path {
+  color: var(--ink-faint);
+}
+
+.sec-h__name {
+  font-weight: 500;
+}
+
+.sec[data-state="failed"] .sec-h__name {
+  color: var(--danger);
+}
+
+.sec-h__end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.sec-h__meta {
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.sec-h .status-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sec-h .status-icon--pill svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sec__lines {
+  padding: 4px 0 8px;
+}
+
+/* A finished section that printed nothing says so, rather than leaving a gap. */
+.sec:not([data-state="running"]) .sec__lines:not(:has(.ln))::before {
+  content: "No output";
+  display: block;
+  padding: 1px 24px 1px 42px;
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+}
+
+/* The section a rail click took the log to, lit for a moment. */
+@keyframes sec-selected-head {
+  0%,
+  35% {
+    background: var(--accent-bg);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  100% {
+    background: var(--surface);
+    box-shadow: inset 3px 0 0 transparent;
+  }
+}
+
+@keyframes sec-selected-lines {
+  0%,
+  35% {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  100% {
+    box-shadow: inset 3px 0 0 transparent;
+  }
+}
+
+@keyframes sec-selected-name {
+  0%,
+  35% {
+    color: var(--accent);
+  }
+
+  100% {
+    color: var(--ink);
+  }
+}
+
+.sec.is-selected .sec-h {
+  animation: sec-selected-head 2.5s ease-out forwards;
+}
+
+.sec.is-selected .sec-h__name {
+  animation: sec-selected-name 2.5s ease-out forwards;
+}
+
+.sec.is-selected .sec__lines {
+  animation: sec-selected-lines 2.5s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sec.is-selected .sec-h,
+  .sec.is-selected .sec-h__name,
+  .sec.is-selected .sec__lines {
+    animation-timing-function: step-end;
+  }
+
+  .sec-h__chev {
+    transition: none;
+  }
+
+  .status-icon--running svg {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .run-bar {
+    padding: 12px 16px;
+  }
+
+  .run-bar__actions {
+    margin-left: 0;
+  }
+
+  .run-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .rail {
+    max-height: 34vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .ln {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .sec__lines .ln {
+    padding-left: 36px;
+  }
+
+  .ln__no {
+    width: 36px;
+  }
+
+  .ln__ts,
+  .view-opt--timestamps {
+    display: none;
+  }
+
+  .sec-h {
+    padding: 9px 12px;
+  }
+
+  .sec-h__meta {
+    display: none;
+  }
 }
 
 .notice--error {
@@ -1208,7 +1311,7 @@ details[open] > .fold__head::before {
  * the page has to read that way before it is opened.
  */
 .run-actions__abandon {
-  margin-top: 14px;
+  margin-top: 4px;
   border: 1px solid var(--line);
   border-left: 3px solid var(--danger);
   border-radius: var(--radius);
@@ -1247,23 +1350,6 @@ details[open] > .fold__head::before {
   border-radius: var(--radius);
   background: var(--surface);
   width: 14ch;
-}
-
-/* Both sit in the run header's top row beside Retry. No margin of their own:
- * the row's own ``gap`` does the spacing. The counters take the
- * ``margin-left: auto`` so the tallies sit out at the right, away from the
- * buttons -- reading matter, not another control. */
-.run-header__log {
-  margin: 0;
-}
-
-.run-header__counters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-left: auto;
-  color: var(--ink-muted);
-  font-size: 12px;
 }
 
 /* -- warnings ----------------------------------------------------------- */

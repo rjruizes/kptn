@@ -532,7 +532,7 @@ def test_run_page_links_its_event_stream(
 
 def _run_heading(body: str) -> str:
     """The run panel's heading, which is a breadcrumb rather than a title."""
-    match = re.search(r"<h2 class=\"run-header__crumbs\">.*?</h2>", body, re.S)
+    match = re.search(r"<h2 class=\"run-bar__crumb\">.*?</h2>", body, re.S)
     assert match, "the run panel has no heading"
     return match.group(0)
 
@@ -577,7 +577,7 @@ def test_run_heading_says_so_when_the_run_had_no_profile(
 
     heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
 
-    assert "no profile" in heading
+    assert "No profile" in heading
     assert "?profile=" not in heading, "the way back carries an empty profile"
 
 
@@ -663,10 +663,10 @@ def test_run_page_is_one_panel(client: TestClient, app, store: RunStore) -> None
     record = _seed_run(store, app.state.project.root)
 
     body = client.get(f"/runs/{record.run_id}").text
-    panels = re.findall(r'<section class="panel[^"]*"', body)
+    panels = re.findall(r'<section class="(?:panel|run-page)[^"]*"', body)
 
     assert len(panels) == 1, f"the run page renders {len(panels)} panels"
-    panel = body[body.index('<section class="panel') :]
+    panel = body[body.index('<section class="run-page') :]
     assert panel.index('id="run-header"') < panel.index('id="console"'), (
         "the console renders before the run's own header"
     )

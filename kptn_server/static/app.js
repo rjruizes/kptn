@@ -114,441 +114,339 @@ function fragmentFrom(html) {
   return holder.content;
 }
 
-function updateCounters(console_, list) {
-  /* Counted off the DOM rather than tallied in a variable, so the numbers
-   * survive a reconnect that re-sends nothing and a reload that re-renders
-   * everything.
+function updateCounters(list) {
+  /* The run bar's tallies, counted off the log's sections rather than kept in
+   * a variable, so they survive a reconnect that re-sends nothing and a
+   * reload that re-renders everything -- and agree with the server's count
+   * of the same sections (console_layout.run_counts).
    *
-   * Searched from the document, not from the console: the counters sit in
-   * the run header now, beside the controls that act on the run. Scoped to
-   * the console they would simply never be found, and would sit frozen at
-   * their server-rendered values for the life of the connection. */
+   * Searched from the document: the counters sit in the run bar, not in the
+   * log. */
+  var sections = list.querySelectorAll("[data-section]");
+  var counts = { ran: 0, skipped: 0, warned: 0 };
+  for (var i = 0; i < sections.length; i += 1) {
+    if (sections[i].getAttribute("data-state") === "cached") {
+      counts.skipped += 1;
+    } else {
+      counts.ran += 1;
+    }
+    if ((parseInt(sections[i].getAttribute("data-warnings"), 10) || 0) > 0) {
+      counts.warned += 1;
+    }
+  }
   var counters = document.querySelectorAll("[data-counter]");
-  for (var i = 0; i < counters.length; i += 1) {
-    var kind = { tasks: "task_started", skipped: "task_skipped", warnings: "warning" }[
-      counters[i].getAttribute("data-counter")
-    ];
-    if (kind) {
-      counters[i].textContent = String(
-        list.querySelectorAll('[data-kind="' + kind + '"]').length
-      );
+  for (var k = 0; k < counters.length; k += 1) {
+    var key = counters[k].getAttribute("data-counter");
+    if (Object.prototype.hasOwnProperty.call(counts, key)) {
+      counters[k].textContent = String(counts[key]);
     }
   }
 }
 
-/* Task folds left open behind the newest one -- OPEN_TASKS in
- * kptn_server/console_layout.py, which a reloaded page is rendered with. */
-var OPEN_TASKS = 2;
-
-function foldOf(element) {
-  /* The fold whose body holds *element*, or null at the top level. */
-  var body = element.parentElement;
-  return body ? body.closest("[data-fold]") : null;
-}
-
-function setCount(fold, attribute, singular, plural, delta) {
-  /* A task fold's "2,310 lines": the number lives in the attribute, and the
-   * text is written back from it in the form _event.html renders. */
-  var counter = fold.querySelector(":scope > details > summary [" + attribute + "]");
-  if (!counter || !delta) {
-    return;
-  }
-  var total = (parseInt(counter.getAttribute(attribute), 10) || 0) + delta;
-  counter.setAttribute(attribute, String(total));
-  counter.textContent = total.toLocaleString("en-US") + " " + (total === 1 ? singular : plural);
-  counter.hidden = total === 0;
-}
-
-function countRow(row) {
-  var fold = foldOf(row);
-  if (!fold || fold.getAttribute("data-fold") !== "task") {
-    return;
-  }
-  setCount(fold, "data-fold-lines", "line", "lines", parseInt(row.getAttribute("data-lines"), 10) || 0);
-  if (row.getAttribute("data-kind") === "warning") {
-    setCount(fold, "data-fold-warnings", "warning", "warnings", 1);
-  }
-}
-
-function foldFailed(fold) {
-  return fold.querySelector(".event--failed") !== null;
-}
-
-function settleFolds(list, newest) {
-  /* Fold away what the run has moved past, as build_console() renders a
-   * reloaded page: only the newest OPEN_TASKS task folds stay open, and only
-   * the groups the newest row sits in -- so a pipeline folds once the run
-   * leaves it. A failure is never folded away, and neither is anything the
-   * reader opened or closed themselves. */
-  var tasks = list.querySelectorAll('[data-fold="task"]');
-  for (var i = 0; i < tasks.length - OPEN_TASKS; i += 1) {
-    closeFold(tasks[i]);
-  }
-  var current = [];
-  for (var fold = newest && foldOf(newest); fold; fold = foldOf(fold)) {
-    current.push(fold);
-  }
-  var groups = list.querySelectorAll('[data-fold="group"]');
-  for (var k = 0; k < groups.length; k += 1) {
-    if (current.indexOf(groups[k]) === -1) {
-      closeFold(groups[k]);
+function numberLines(list) {
+  /* Lines are numbered across the whole run. The server numbers what it
+   * renders; a row the stream appends arrives unnumbered, and takes the next
+   * numbers after the last line on the page. */
+  var numbers = list.querySelectorAll(".ln__no");
+  var last = 0;
+  for (var i = 0; i < numbers.length; i += 1) {
+    var text = numbers[i].textContent;
+    if (text) {
+      last = parseInt(text, 10) || last;
+    } else {
+      last += 1;
+      numbers[i].textContent = String(last);
     }
   }
 }
 
-function closeFold(fold) {
-  var details = fold.firstElementChild;
-  if (
-    details &&
-    details.open &&
-    !fold.hasAttribute("data-fold-touched") &&
-    !foldFailed(fold)
-  ) {
-    details.open = false;
+function linesText(count) {
+  /* The form _event.html's ``lines_text`` renders. */
+  if (!count) {
+    return "no output";
+  }
+  return count === 1 ? "1 line" : count.toLocaleString("en-US") + " lines";
+}
+
+function refreshSection(section) {
+  /* A section's heading, brought up to date with what streamed into it: how
+   * many lines it printed, how many warnings, and -- once its outcome has
+   * been swapped in -- how it ended. */
+  var body = section.querySelector(".sec__lines");
+  var lines = 0;
+  var rows = body ? body.querySelectorAll(".ev[data-kind='log']:not([hidden]) .ln") : [];
+  lines = rows.length;
+  var warnings = body ? body.querySelectorAll(".ev[data-kind='warning']").length : 0;
+  section.setAttribute("data-warnings", String(warnings));
+  var counter = section.querySelector("[data-sec-lines]");
+  if (counter) {
+    counter.setAttribute("data-sec-lines", String(lines));
+    counter.textContent = linesText(lines);
+  }
+  var outcome = section.querySelector(".sec-h__end[data-state]");
+  if (outcome) {
+    section.setAttribute("data-state", outcome.getAttribute("data-state"));
   }
 }
 
-/* The pipeline sidebar beside the console (_outline.html), kept in step with
- * it. Tasks run one at a time in the sidebar's order, so each card or row
- * owns one unbroken stretch of the console: scrolling the console marks the
- * card whose output is at the top of the screen, and clicking a card opens
- * its tasks and scrolls to them. The cards are rendered by the server -- the
- * stream sends a step's card again whenever it changes -- so all this file
- * does with them is swap them in and mark where the reader is. */
-function initOutline(console_, list) {
-  var nav = document.getElementById("outline");
-  if (!nav) {
+function setSectionOpen(section, open) {
+  section.classList.toggle("is-closed", !open);
+  var heading = section.querySelector(".sec-h");
+  if (heading) {
+    heading.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+}
+
+function initLogControls(console_) {
+  /* The log's own controls: a section's heading folds it, Collapse all folds
+   * or unfolds every section, and View hides the timestamps or the line
+   * numbers -- remembered for this reader. All by delegation from the
+   * document, because the run bar holding Collapse all and View is replaced
+   * wholesale by the stream's closing frame. */
+  var list = document.getElementById("console-events");
+  var VIEW_KEYS = { timestamps: "kptn.showTimestamps", numbers: "kptn.showLineNumbers" };
+
+  function anyOpen() {
+    return list.querySelector("[data-section]:not(.is-closed)") !== null;
+  }
+
+  function syncFoldAll() {
+    /* The button says what it will do next. */
+    var buttons = document.querySelectorAll("[data-fold-all]");
+    var open = anyOpen();
+    for (var i = 0; i < buttons.length; i += 1) {
+      var label = buttons[i].querySelector("span");
+      var path = buttons[i].querySelector("path");
+      if (label) {
+        label.textContent = open ? "Collapse all" : "Expand all";
+      }
+      if (path) {
+        path.setAttribute("d", open ? "M7 4l5 5 5-5M7 20l5-5 5 5" : "M7 9l5-5 5 5M7 15l5 5 5-5");
+      }
+    }
+  }
+
+  function viewOption(name) {
+    try {
+      var stored = window.localStorage.getItem(VIEW_KEYS[name]);
+      return stored === null ? true : stored === "1";
+    } catch (err) {
+      return true; /* private browsing, or storage disabled: the default stands */
+    }
+  }
+
+  function applyViewOptions() {
+    console_.classList.toggle("no-timestamps", !viewOption("timestamps"));
+    console_.classList.toggle("no-numbers", !viewOption("numbers"));
+    var boxes = document.querySelectorAll("[data-view-option]");
+    for (var i = 0; i < boxes.length; i += 1) {
+      boxes[i].checked = viewOption(boxes[i].getAttribute("data-view-option"));
+    }
+  }
+
+  function setMenu(open) {
+    var toggle = document.querySelector("[data-view-toggle]");
+    var panel = document.getElementById("view-menu");
+    if (!toggle || !panel) {
+      return;
+    }
+    panel.hidden = !open;
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      var first = panel.querySelector("input");
+      if (first && first.offsetParent !== null) {
+        first.focus();
+      }
+    }
+  }
+
+  console_.addEventListener("click", function (event) {
+    var heading = event.target.closest(".sec-h");
+    if (heading && console_.contains(heading)) {
+      var section = heading.closest("[data-section]");
+      setSectionOpen(section, section.classList.contains("is-closed"));
+      syncFoldAll();
+    }
+  });
+
+  document.addEventListener("click", function (event) {
+    if (event.target.closest("[data-fold-all]")) {
+      var close = anyOpen();
+      var sections = list.querySelectorAll("[data-section]");
+      for (var i = 0; i < sections.length; i += 1) {
+        setSectionOpen(sections[i], !close);
+      }
+      syncFoldAll();
+      return;
+    }
+    var toggle = event.target.closest("[data-view-toggle]");
+    if (toggle) {
+      var panel = document.getElementById("view-menu");
+      setMenu(!!panel && panel.hidden);
+      return;
+    }
+    if (!event.target.closest("[data-view-menu]")) {
+      setMenu(false);
+    }
+  });
+
+  document.addEventListener("change", function (event) {
+    var box = event.target.closest && event.target.closest("[data-view-option]");
+    if (!box) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(VIEW_KEYS[box.getAttribute("data-view-option")], box.checked ? "1" : "0");
+    } catch (err) {
+      /* Not being able to remember the choice is not a reason to refuse it. */
+    }
+    applyViewOptions();
+  });
+
+  document.addEventListener("keydown", function (event) {
+    var panel = document.getElementById("view-menu");
+    if (event.key === "Escape" && panel && !panel.hidden) {
+      setMenu(false);
+      var toggle = document.querySelector("[data-view-toggle]");
+      if (toggle) {
+        toggle.focus();
+      }
+    }
+  });
+
+  applyViewOptions();
+  syncFoldAll();
+  return { syncFoldAll: syncFoldAll, applyViewOptions: applyViewOptions };
+}
+
+/* The rail (_outline.html) beside the log. Clicking a task takes the log to
+ * its section, opens it, and lights it for a moment; clicking a step's
+ * heading does the same for every task beneath it, from the first. The rail
+ * marks what was clicked -- not where the log is scrolled -- and clicking it
+ * again clears the mark. Its parts are rendered by the server -- the stream
+ * sends a step's part again whenever it changes -- so all this file does
+ * with them is swap them in and keep the mark. */
+function initRail(console_, list) {
+  var rail = document.getElementById("outline");
+  if (!rail) {
     return null;
   }
-  /* How far below the top of the screen counts as "what is being read":
-   * clear of a task's sticky heading. */
-  var PROBE_Y = 48;
-  var current = null;
-  var scheduled = false;
-  var quietUntil = 0;
+  var active = null; /* the clicked item's data-unit or data-units */
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  function tasksOf(item) {
-    var names = item.getAttribute("data-tasks");
-    return names ? names.split(" ") : [];
-  }
-
-  function owns(item, name) {
-    /* A task, or one of its items: a source's tables and a map's items are
-     * named "task[item]". */
-    var tasks = tasksOf(item);
-    return !!name && (tasks.indexOf(name) !== -1 || tasks.indexOf(name.split("[")[0]) !== -1);
-  }
-
-  function itemFor(name) {
-    /* The most specific card for a task: a stage's row before the stage's
-     * own heading, which owns every task in the stage. Two passes, because
-     * querySelectorAll returns document order whatever the selector says. */
-    var passes = [".outline__row", ".outline__head"];
-    for (var p = 0; p < passes.length; p += 1) {
-      var items = nav.querySelectorAll(passes[p]);
-      for (var i = 0; i < items.length; i += 1) {
-        if (owns(items[i], name)) {
-          return items[i];
-        }
+  function sectionFor(unit) {
+    var sections = list.querySelectorAll("[data-section]");
+    for (var i = 0; i < sections.length; i += 1) {
+      if (sections[i].getAttribute("data-unit") === unit) {
+        return sections[i];
       }
     }
     return null;
   }
 
-  function taskAt(element) {
-    /* The task a console element belongs to. A stage's heading belongs to
-     * its first task. */
-    var owner = element && element.closest("[data-task], [data-key]");
-    if (!owner || !list.contains(owner)) {
-      return null;
-    }
-    if (owner.getAttribute("data-fold") === "group") {
-      owner = owner.querySelector("[data-task], [data-fold='task']");
-      if (!owner) {
-        return null;
-      }
-    }
-    return owner.getAttribute("data-task") || owner.getAttribute("data-key");
+  function keyOf(item) {
+    return item.hasAttribute("data-units")
+      ? "units:" + item.getAttribute("data-units")
+      : "unit:" + item.getAttribute("data-unit");
   }
 
-  function mark(item) {
-    if (item === current) {
+  function mark() {
+    var items = rail.querySelectorAll(".rail-item");
+    for (var i = 0; i < items.length; i += 1) {
+      items[i].classList.toggle("is-active", active !== null && keyOf(items[i]) === active);
+    }
+  }
+
+  function clearLit() {
+    var lit = list.querySelectorAll(".sec.is-selected");
+    for (var i = 0; i < lit.length; i += 1) {
+      lit[i].classList.remove("is-selected");
+    }
+  }
+
+  function select(item) {
+    var units = item.hasAttribute("data-units")
+      ? item.getAttribute("data-units").split(" ")
+      : [item.getAttribute("data-unit")];
+    var sections = [];
+    for (var i = 0; i < units.length; i += 1) {
+      var section = units[i] ? sectionFor(units[i]) : null;
+      if (section) {
+        sections.push(section);
+      }
+    }
+    active = keyOf(item);
+    mark();
+    clearLit();
+    if (!sections.length) {
+      return; /* nothing of it in the log yet */
+    }
+    for (var k = 0; k < sections.length; k += 1) {
+      setSectionOpen(sections[k], true);
+    }
+    console_.scrollTo({
+      top: sections[0].offsetTop - list.offsetTop,
+      behavior: reduce ? "auto" : "smooth"
+    });
+    void list.offsetWidth; /* restart the light on a second click */
+    for (var n = 0; n < sections.length; n += 1) {
+      sections[n].classList.add("is-selected");
+    }
+  }
+
+  rail.addEventListener("click", function (event) {
+    var item = event.target.closest(".rail-item");
+    if (!item || !rail.contains(item)) {
       return;
     }
-    if (current) {
-      current.removeAttribute("aria-current");
-    }
-    current = item;
-    if (!item) {
+    if (active !== null && keyOf(item) === active) {
+      active = null;
+      mark();
+      clearLit();
       return;
     }
-    item.setAttribute("aria-current", "location");
-    /* Keep the marked card in view when the sidebar itself scrolls -- by
-     * moving the sidebar only, never the page the reader is scrolling. */
-    var box = nav.getBoundingClientRect();
-    var at = item.getBoundingClientRect();
-    if (at.top < box.top) {
-      nav.scrollTop -= box.top - at.top + 8;
-    } else if (at.bottom > box.bottom) {
-      nav.scrollTop += at.bottom - box.bottom + 8;
-    }
-  }
-
-  function track() {
-    scheduled = false;
-    if (Date.now() < quietUntil) {
-      return; /* the scroll a click just made: the click's mark stands */
-    }
-    var area = list.getBoundingClientRect();
-    if (area.bottom < PROBE_Y || area.top > window.innerHeight) {
-      return;
-    }
-    var page = document.documentElement;
-    var y = Math.max(area.top + 4, PROBE_Y);
-    var step = 16;
-    if (window.scrollY > 0 && window.innerHeight + window.scrollY >= page.scrollHeight - 2) {
-      /* At the very bottom the last steps can never reach the top of the
-       * screen, and a live run being followed is down here: mark the last
-       * task in view instead. */
-      y = Math.min(area.bottom, window.innerHeight) - 6;
-      step = -16;
-    }
-    /* Rows that belong to no task -- the run's own start and end -- are
-     * stepped over, toward the rest of the console. */
-    for (var tries = 0; tries < 24; tries += 1, y += step) {
-      if (y < area.top || y > area.bottom) {
-        break;
-      }
-      var name = taskAt(document.elementFromPoint(area.left + 24, y));
-      if (name) {
-        mark(itemFor(name));
-        return;
-      }
-    }
-  }
-
-  function schedule() {
-    if (!scheduled) {
-      scheduled = true;
-      window.requestAnimationFrame(track);
-    }
-  }
-
-  function flash(item) {
-    /* Light up the card's output for a moment, so the eye lands on it after
-     * the jump: its tasks' folds, and its own rows outside them. */
-    var owners = list.querySelectorAll("[data-fold='task'], .event[data-task]");
-    for (var i = 0; i < owners.length; i += 1) {
-      var el = owners[i];
-      if (el.classList.contains("event") && foldOf(el) && foldOf(el).getAttribute("data-fold") === "task") {
-        continue;
-      }
-      if (!owns(item, el.getAttribute("data-key") || el.getAttribute("data-task"))) {
-        continue;
-      }
-      el.classList.remove("is-flashing");
-      void el.offsetWidth; /* restart the animation on a second click */
-      el.classList.add("is-flashing");
-    }
-  }
+    select(item);
+  });
 
   list.addEventListener("animationend", function (event) {
-    if (event.animationName === "console-flash") {
-      event.target.closest(".is-flashing") && event.target.closest(".is-flashing").classList.remove("is-flashing");
+    if (event.animationName === "sec-selected-head") {
+      var section = event.target.closest(".sec");
+      if (section) {
+        section.classList.remove("is-selected");
+      }
     }
   });
 
-  function reveal(item) {
-    /* Open every fold of the card's tasks, and the stages around them, and
-     * bring the first into view. The folds are then the reader's, and are
-     * not folded away under them. */
-    var first = null;
-    var folds = list.querySelectorAll("[data-fold='task']");
-    for (var i = 0; i < folds.length; i += 1) {
-      if (!owns(item, folds[i].getAttribute("data-key"))) {
-        continue;
-      }
-      for (var fold = folds[i]; fold; fold = foldOf(fold)) {
-        fold.firstElementChild.open = true;
-        fold.setAttribute("data-fold-touched", "");
-      }
-      first = first || folds[i];
-    }
-    var rows = list.querySelectorAll(".event[data-task]");
-    for (var k = 0; k < rows.length; k += 1) {
-      if (owns(item, rows[k].getAttribute("data-task"))) {
-        if (!first || first.compareDocumentPosition(rows[k]) & Node.DOCUMENT_POSITION_PRECEDING) {
-          first = rows[k];
-        }
+  /* A finished run opens on its failure. */
+  var opening = rail.getAttribute("data-selected");
+  if (opening && console_.getAttribute("data-terminal") === "true") {
+    var items = rail.querySelectorAll(".rail-item[data-unit]");
+    for (var i = 0; i < items.length; i += 1) {
+      if (items[i].getAttribute("data-unit") === opening) {
+        select(items[i]);
         break;
       }
     }
-    if (first) {
-      quietUntil = Date.now() + 300;
-      first.scrollIntoView({ block: "start" });
-      window.scrollBy(0, -8);
-    }
-    mark(item);
-  }
-
-  nav.addEventListener("click", function (event) {
-    var item = event.target.closest("[data-select]");
-    if (item && nav.contains(item)) {
-      reveal(item);
-      flash(item);
-    }
-  });
-  window.addEventListener("scroll", schedule, { passive: true });
-  window.addEventListener("resize", schedule);
-
-  /* A finished run opens on its failure; anything else where it is. */
-  var opening = nav.getAttribute("data-selected");
-  var start = opening && opening !== "all" ? nav.querySelector('[data-select="' + opening + '"]') : null;
-  if (start && console_.getAttribute("data-terminal") === "true") {
-    reveal(start);
-  } else {
-    schedule();
   }
 
   return {
-    /* A frame's card, swapped in; the mark is put back on whatever is now
-     * at the top of the screen. */
+    /* A frame's part of the rail, swapped in, with the mark kept. */
     update: function (frame) {
       if (!frame.outline) {
         return;
       }
-      var card = document.getElementById(frame.outline.id);
-      if (card) {
-        if (current && card.contains(current)) {
-          current = null;
-        }
-        card.replaceWith(fragmentFrom(frame.outline.html));
+      var part = document.getElementById(frame.outline.id);
+      if (part) {
+        part.replaceWith(fragmentFrom(frame.outline.html));
       }
-      schedule();
-    },
-    refilter: schedule,
-    ended: schedule
+      mark();
+      var count = rail.querySelector("[data-rail-count]");
+      if (count) {
+        var n = rail.querySelectorAll(".rail-item[data-unit]").length;
+        count.textContent = n + (n === 1 ? " task" : " tasks");
+      }
+    }
   };
-}
-
-/* The console in boxes, with the page showing between them: one box per
- * step of the pipeline -- a task, with its own rows -- and, inside a stage
- * or pipeline at the top, one box per branch (a source with its tables, a
- * module pipeline whole). Worked out from the order of the console's own
- * elements, so it holds for a page and for a stream alike; without it the
- * console is the single panel the stylesheet draws by default. */
-function segmentConsole(list) {
-  function base(name) {
-    return name ? name.split("[")[0] : "";
-  }
-  function keyOf(el) {
-    var fold = el.getAttribute("data-fold");
-    if (fold === "group") {
-      return "group:" + el.getAttribute("data-key");
-    }
-    if (fold === "task") {
-      return "task:" + base(el.getAttribute("data-key"));
-    }
-    var task = el.getAttribute("data-task");
-    return task ? "task:" + base(task) : "run";
-  }
-  function box(children) {
-    var keys = children.map(keyOf);
-    for (var i = 0; i < children.length; i += 1) {
-      var parts = children[i].classList;
-      parts.remove("seg-group");
-      parts.add("seg");
-      parts.toggle("seg--start", i === 0 || keys[i] !== keys[i - 1]);
-      parts.toggle("seg--end", i === children.length - 1 || keys[i] !== keys[i + 1]);
-    }
-  }
-  var top = [];
-  for (var el = list.firstElementChild; el; el = el.nextElementSibling) {
-    if (el.getAttribute("data-fold") !== "group") {
-      top.push(el);
-      continue;
-    }
-    /* A stage at the top is not a box of its own: its branches are. */
-    el.classList.remove("seg", "seg--start", "seg--end");
-    el.classList.add("seg-group");
-    var body = el.firstElementChild && el.firstElementChild.querySelector(":scope > .fold__body");
-    var branches = [];
-    for (var c = body ? body.firstElementChild : null; c; c = c.nextElementSibling) {
-      if (!c.hasAttribute("data-fold-gutter")) {
-        branches.push(c);
-      }
-    }
-    box(branches);
-  }
-  box(top);
-  list.classList.add("is-segmented");
-}
-
-function rememberTouchedFolds(console_) {
-  /* A fold the reader has opened or closed is theirs from then on. Read off
-   * the click rather than the ``toggle`` event, which fires for the folding
-   * this file does too; Enter and Space on a summary arrive as clicks. */
-  console_.addEventListener("click", function (event) {
-    var summary = event.target.closest("summary.fold__head");
-    if (!summary || !console_.contains(summary)) {
-      return;
-    }
-    summary.closest("[data-fold]").setAttribute("data-fold-touched", "");
-    /* A task's heading sticks to the top of the screen while its output
-     * scrolls by, so it can be clicked from far down the task. Closing it
-     * there pulls everything below up past the reader; bring the heading
-     * back to the top instead, where it was. */
-    var details = summary.parentElement;
-    if (
-      details.open &&
-      !event.target.closest("[data-fold-jump]") &&
-      details.getBoundingClientRect().top < 0
-    ) {
-      window.requestAnimationFrame(function () {
-        summary.scrollIntoView({ block: "start" });
-      });
-    }
-  });
-}
-
-function collapseFromGutters(console_) {
-  /* The strip down the left of an open fold's body closes it, so a reader
-   * deep in a long task does not have to scroll back to its heading. The
-   * rows below then move up, so the heading is brought back into view if
-   * it was above the screen -- the place the reader just folded away is
-   * where they expect to be. Mouse-only: from the keyboard, the heading is
-   * the control. */
-  console_.addEventListener("click", function (event) {
-    var gutter = event.target.closest("[data-fold-gutter]");
-    if (!gutter || !console_.contains(gutter)) {
-      return;
-    }
-    var fold = gutter.closest("[data-fold]");
-    var details = fold.firstElementChild;
-    details.open = false;
-    fold.setAttribute("data-fold-touched", "");
-    details.querySelector(":scope > summary").scrollIntoView({ block: "nearest" });
-  });
-}
-
-function jumpToFoldEnds(console_) {
-  /* The "end" button in a task's heading: open the task if it is folded and
-   * bring its last row into view. The button sits inside the <summary>, so
-   * the click is kept from toggling the fold as well -- a folded task opens,
-   * an open one stays open. The click still reaches the listener above, so
-   * a task opened this way is the reader's and is not folded under them. */
-  console_.addEventListener("click", function (event) {
-    var button = event.target.closest("[data-fold-jump]");
-    if (!button || !console_.contains(button)) {
-      return;
-    }
-    event.preventDefault();
-    var details = button.closest("details");
-    details.open = true;
-    var body = details.querySelector(":scope > .fold__body");
-    var last = body && body.lastElementChild;
-    (last || details).scrollIntoView({ block: "end" });
-  });
 }
 
 function setUpRememberedToggle(toggle, storageKey) {
@@ -660,18 +558,15 @@ function announceRunEnd(status) {
 
 function initConsole() {
   var console_ = document.getElementById("console");
-  if (!console_ || typeof window.EventSource !== "function") {
+  if (!console_) {
     return;
   }
 
   var list = document.getElementById("console-events");
   var empty = document.getElementById("console-empty");
-  rememberTouchedFolds(console_);
-  jumpToFoldEnds(console_);
-  collapseFromGutters(console_);
-  var outline = initOutline(console_, list);
-  segmentConsole(list);
-  if (console_.getAttribute("data-terminal") === "true") {
+  var controls = initLogControls(console_);
+  var rail = initRail(console_, list);
+  if (console_.getAttribute("data-terminal") === "true" || typeof window.EventSource !== "function") {
     /* Already over. Its whole history is on the page, and its status came
      * from the run row -- there is nothing left to stream, and no ending
      * left to hear. */
@@ -679,14 +574,16 @@ function initConsole() {
   }
   unlockSoundOnFirstGesture();
 
-  var autoScroll = startAutoScroll();
+  /* The log scrolls on its own, beside the rail: following the output means
+   * keeping its newest line in view. */
+  var autoScroll = startAutoScroll(console_);
 
   var source = null;
   var closed = false;
 
   /* Rows from the stream wait here and are added once per animation frame.
    * Following the output means scrolling to the bottom, and reading the
-   * page's height forces a layout of the whole console: per row, that was
+   * log's height forces a layout of the whole of it: per row, that was
    * ~20ms at 8,000 rows on a fast laptop, so a chatty run outpaced the
    * browser and froze the tab for tens of seconds. Per frame, the cost is
    * paid once however many rows arrived. A hidden tab gets no frames and
@@ -721,10 +618,10 @@ function initConsole() {
     if (!queued.length) {
       return;
     }
-    /* Each frame says where its row goes: the folds to open first, the
+    /* Each frame says where its row goes: the section to open first, the
      * element to append to, and a finished task's heading to update. All of
      * it was decided by the server; this only finds the ids. */
-    var newest = null;
+    var touched = [];
     for (var i = 0; i < queued.length; i += 1) {
       var frame = queued[i];
       var opens = frame.opens || [];
@@ -737,16 +634,18 @@ function initConsole() {
       }
       var parent = (frame.parent && document.getElementById(frame.parent)) || list;
       parent.appendChild(fragmentFrom(frame.html));
-      newest = parent.lastElementChild;
-      countRow(newest);
       if (frame.outcome) {
         var outcome = document.getElementById(frame.outcome.id);
         if (outcome) {
           outcome.replaceWith(fragmentFrom(frame.outcome.html));
         }
       }
-      if (outline) {
-        outline.update(frame);
+      var section = parent.closest("[data-section]");
+      if (section && touched.indexOf(section) === -1) {
+        touched.push(section);
+      }
+      if (rail) {
+        rail.update(frame);
       }
     }
     queued = [];
@@ -755,19 +654,12 @@ function initConsole() {
       empty.remove();
       empty = null;
     }
-    updateCounters(console_, list);
-    /* Folding while the reader is scrolled up would pull the text they are
-     * reading out from under them. The next batch that arrives while they
-     * are following catches up. */
-    if (autoScroll.following()) {
-      settleFolds(list, newest);
+    for (var t = 0; t < touched.length; t += 1) {
+      refreshSection(touched[t]);
     }
-    segmentConsole(list);
-    if (outline) {
-      outline.refilter();
-    }
-    /* The list has no scroller of its own -- the page scrolls -- so
-     * following the output means keeping the newest row in view. */
+    numberLines(list);
+    updateCounters(list);
+    controls.syncFoldAll();
     autoScroll.keep();
   }
 
@@ -791,7 +683,10 @@ function initConsole() {
     var current = document.getElementById(frame.target);
     if (current) {
       current.replaceWith(fragmentFrom(frame.html));
-      autoScroll.keep();
+      /* The new run bar's controls show this reader's choices. */
+      controls.applyViewOptions();
+      controls.syncFoldAll();
+      updateCounters(list);
     }
   }
 
@@ -801,7 +696,6 @@ function initConsole() {
     var current = document.getElementById("run-status");
     if (current) {
       current.replaceWith(fragmentFrom(frame.html));
-      autoScroll.keep();
     }
     console_.setAttribute("data-status", frame.status);
     if (frame.terminal) {
@@ -810,9 +704,6 @@ function initConsole() {
        * forever. */
       console_.setAttribute("data-terminal", "true");
       closed = true;
-      if (outline) {
-        outline.ended();
-      }
       if (source) {
         source.close();
       }
