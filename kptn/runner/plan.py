@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Iterable, Mapping, TextIO
+from typing import Any, Iterable, Mapping, Protocol, TextIO, cast
 
 from kptn.change_detector.detector import is_stale
 from kptn.exceptions import HashError, TaskError
@@ -204,16 +204,24 @@ def _plan_source(
         return [PlanEntry(node.name, PlanAction.RUN, reason=str(exc))]
 
 
+class HashReader(Protocol):
+    """All a plan needs of a state store: to read a task's hash. A full
+    backend fits, and so does a read-only view of a DuckDB file
+    (:class:`kptn.runner.checkpoint.TaskStateReader`)."""
+
+    def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None: ...
+
+
 def build_plan(
     resolved: ResolvedGraph,
-    state_store: StateStoreBackend,
+    state_store: StateStoreBackend | HashReader,
     *,
     config_values: Mapping[str, Any] | None = None,
     root: Path | None = None,
 ) -> list[PlanEntry]:
-    reader: StateStoreBackend | _PrefetchedHashes = state_store
+    reader: StateStoreBackend | HashReader | _PrefetchedHashes = state_store
     if callable(getattr(state_store, "read_hashes", None)):
-        reader = _PrefetchedHashes(state_store, resolved.storage_key, resolved.pipeline)
+        reader = _PrefetchedHashes(cast(StateStoreBackend, state_store), resolved.storage_key, resolved.pipeline)
     entries: list[PlanEntry] = []
     for node in topo_sort(resolved.graph):
         if isinstance(node, _PLAN_NON_EXEC):
