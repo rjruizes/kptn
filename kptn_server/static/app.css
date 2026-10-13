@@ -89,12 +89,11 @@ pre {
 
 /* -- app bar ------------------------------------------------------------ */
 
-/* The bar itself is full-bleed -- its surface and rule run the width of the
- * window -- while ``__inner`` holds the contents to the same measure as
- * ``.app-main``, so the nav's right edge and the Profile label's left edge
- * sit over the content below them rather than out in the margins. */
+/* The bar runs the full width of the window, its contents with it: History
+ * at the left edge, the settings gear at the right, on the same 24px edges
+ * as the run page's bar beneath it. */
 .app-bar {
-  padding: 12px var(--content-gutter);
+  padding: 12px 24px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
@@ -104,8 +103,6 @@ pre {
   flex-wrap: wrap;
   gap: 12px 24px;
   align-items: center;
-  max-width: calc(var(--content-width) - 2 * var(--content-gutter));
-  margin: 0 auto;
 }
 
 /* Marks a colleague's project, shown from its published files: there is
@@ -318,6 +315,16 @@ a.project-picker__item:focus-visible {
 .app-bar__nav {
   display: flex;
   gap: 4px;
+}
+
+/* When History leads the bar (no project picker before it), its own padding
+ * is pulled back so the word lines up with the edge, as a heading would. */
+.app-bar__inner > .app-bar__nav:first-child a:first-child {
+  margin-left: -10px;
+}
+
+.app-bar__end {
+  display: flex;
   margin-left: auto;
 }
 

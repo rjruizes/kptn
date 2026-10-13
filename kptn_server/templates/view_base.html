@@ -28,8 +28,10 @@
       {% include "_project_picker.html" %}
       <nav class="app-bar__nav" aria-label="Main">
         <a href="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
-        {% include "_settings.html" %}
       </nav>
+      <div class="app-bar__end">
+        {% include "_settings.html" %}
+      </div>
     </div>
   </header>
 

@@ -46,6 +46,39 @@
       #}
       {% include "_project_picker.html" %}
       {#
+        The profile travels with the reader. History leads the bar, at its
+        left, before the controls that act on a profile.
+
+        The links carry ``selected_profile``, which each route that accepts a
+        ``?profile=`` passes after validating it -- the run page's comes from
+        the run row rather than the URL. So choosing a profile and clicking
+        Plan shows the plan for *that* profile, with no JavaScript involved.
+
+        Deliberately the route's value and not the request's query string: a
+        page that *refused* a profile (the unknown-profile 400) must not hand
+        it to the next page, or every link on that error page is another 400.
+        A page that passes nothing gets a clean nav, which is the right answer
+        for the run history and for every error shell.
+
+        ``data-profile-link`` holds each link's bare path, and is the contract
+        app.js rebuilds these hrefs from when the selector changes without a
+        submit -- the one case no server render can know.
+
+        The history link carries it. The history does not filter by profile,
+        but it does carry one to the page after it, so a bare link here would
+        break the chain at the click -- one step before anything server-side
+        could help. Plan is not among them: it is a button in the controls
+        above, and takes the profile in its own hidden input.
+
+        The walkthrough is not linked here. ``/walkthrough`` still serves, and
+        the plan page still links into its per-task pages; it is only off the
+        bar.
+      #}
+      {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
+      <nav class="app-bar__nav" aria-label="Main">
+        <a href="{{ project_base }}/{{ profile_query }}" data-profile-link="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+      </nav>
+      {#
         One selector, every page, always bound to the run form below. It marks
         ``selected_profile``, which each route that accepts a ``?profile=``
         passes after validating it -- so a profile carried here through the nav
@@ -116,39 +149,10 @@
          href="{% if active_run %}{{ project_base }}/runs/{{ active_run.run_id }}{% endif %}"
          {% if not active_run %}hidden{% endif %}>a run is in progress</a>
 
-      {#
-        The profile travels with the reader.
-
-        The links carry ``selected_profile``, which each route that accepts a
-        ``?profile=`` passes after validating it -- the run page's comes from
-        the run row rather than the URL. So choosing a profile and clicking
-        Plan shows the plan for *that* profile, with no JavaScript involved.
-
-        Deliberately the route's value and not the request's query string: a
-        page that *refused* a profile (the unknown-profile 400) must not hand
-        it to the next page, or every link on that error page is another 400.
-        A page that passes nothing gets a clean nav, which is the right answer
-        for the run history and for every error shell.
-
-        ``data-profile-link`` holds each link's bare path, and is the contract
-        app.js rebuilds these hrefs from when the selector changes without a
-        submit -- the one case no server render can know.
-
-        The history link carries it. The history does not filter by profile,
-        but it does carry one to the page after it, so a bare link here would
-        break the chain at the click -- one step before anything server-side
-        could help. Plan is not among them: it is a button in the controls
-        above, and takes the profile in its own hidden input.
-
-        The walkthrough is not linked here. ``/walkthrough`` still serves, and
-        the plan page still links into its per-task pages; it is only off the
-        bar.
-      #}
-      {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
-      <nav class="app-bar__nav" aria-label="Main">
-        <a href="{{ project_base }}/{{ profile_query }}" data-profile-link="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+      {# The settings gear, out at the right-hand end of the bar. #}
+      <div class="app-bar__end">
         {% include "_settings.html" %}
-      </nav>
+      </div>
     </div>
   </header>
 

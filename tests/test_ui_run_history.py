@@ -1438,11 +1438,14 @@ def test_a_live_run_offers_a_sound_toggle_that_is_on_by_default(
     assert 'id="run-sound"' not in console, "Sound is still in the console"
 
 
-def test_the_settings_gear_sits_right_of_history(client) -> None:
-    """The gear that opens the settings modal is the last thing in the nav."""
+def test_history_leads_the_bar_and_the_gear_ends_it(client) -> None:
+    """History is at the left of the bar, before the profile controls; the
+    settings gear is the last thing in it, at the right."""
     for path in ("/", "/plan", "/runs/no-such-run"):
-        nav = re.search(r'<nav class="app-bar__nav"[^>]*>(.*?)</nav>', client.get(path).text, re.S)
-        assert nav, path
-        history_at = nav.group(1).find(">History</a>")
-        gear_at = nav.group(1).find("data-settings-open")
-        assert history_at != -1 and gear_at > history_at, path
+        body = client.get(path).text
+        bar = body[body.index('<header class="app-bar">') : body.index("</header>")]
+        history_at = bar.find(">History</a>")
+        assert history_at != -1, path
+        assert history_at < bar.find('id="profile-select"'), path
+        end = bar.find('<div class="app-bar__end">')
+        assert end > history_at and "data-settings-open" in bar[end:], path
