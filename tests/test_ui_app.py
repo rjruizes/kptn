@@ -593,7 +593,8 @@ def test_base_page_offers_the_shared_navigation(ui_project: Path) -> None:
     nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S).group(0)
     bar = _app_bar(body)
 
-    assert ">History<" in nav
+    # History is a home icon, named for assistive technology.
+    assert 'class="app-bar__home" aria-label="History"' in nav
     assert ">Run<" in bar and ">Plan<" in bar
 
 

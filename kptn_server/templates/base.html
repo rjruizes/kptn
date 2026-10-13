@@ -47,7 +47,9 @@
       {% include "_project_picker.html" %}
       {#
         The profile travels with the reader. History leads the bar, at its
-        left, before the controls that act on a profile.
+        left, before the controls that act on a profile: a home icon, since
+        the run history is the UI's home page, named "History" for assistive
+        technology and on hover.
 
         The links carry ``selected_profile``, which each route that accepts a
         ``?profile=`` passes after validating it -- the run page's comes from
@@ -76,7 +78,7 @@
       #}
       {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
       <nav class="app-bar__nav" aria-label="Main">
-        <a href="{{ project_base }}/{{ profile_query }}" data-profile-link="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+        <a href="{{ project_base }}/{{ profile_query }}" data-profile-link="{{ project_base }}/" class="app-bar__home" aria-label="History" title="History" {% if nav_active == 'runs' %}aria-current="page"{% endif %}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 10.5 12 4l8 6.5"/><path d="M6 9v10a1 1 0 0 0 1 1h3.5v-5.5h3V20H17a1 1 0 0 0 1-1V9"/></svg></a>
       </nav>
       {#
         One selector, every page, always bound to the run form below. It marks

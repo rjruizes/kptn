@@ -1444,7 +1444,7 @@ def test_history_leads_the_bar_and_the_gear_ends_it(client) -> None:
     for path in ("/", "/plan", "/runs/no-such-run"):
         body = client.get(path).text
         bar = body[body.index('<header class="app-bar">') : body.index("</header>")]
-        history_at = bar.find(">History</a>")
+        history_at = bar.find('aria-label="History"')
         assert history_at != -1, path
         assert history_at < bar.find('id="profile-select"'), path
         end = bar.find('<div class="app-bar__end">')
