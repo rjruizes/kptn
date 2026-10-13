@@ -10,12 +10,17 @@
   the rail marks what was clicked, not where the log is scrolled.
   ``data-selected`` on the rail is the task a finished run opens on -- its
   failure, if it had one.
+
+  The filters at its head are the run's tallies too: every task, those that
+  ran, those the cache answered, and those that warned. Pressing one narrows
+  the rail and the log to those tasks (app.js), by each task's
+  ``data-state`` and ``data-warned``; app.js recounts them as a live run
+  moves the rail.
 #}
-{% from "_kind.html" import ingest_icon %}
 {% from "_status.html" import status_icon %}
 
 {% macro rail_unit(unit) -%}
-<button type="button" class="rail-item" data-unit="{{ unit.unit }}">
+<button type="button" class="rail-item" data-unit="{{ unit.unit }}" data-state="{{ unit.state }}"{% if unit.warned %} data-warned{% endif %}>
   <span class="rail-item__name">{{ unit.label }}</span>
   {%- if unit.duration %}<span class="rail-item__dur">{{ unit.duration }}</span>{% endif %}
   {{ status_icon(unit.state, warned=unit.warned) }}
@@ -27,11 +32,12 @@
   {%- if step.unit %}
   {{ rail_unit(step.unit) }}
   {%- else %}
-  <button type="button" class="rail-item rail-item--group" data-units="{{ step.units }}">
-    {%- if step.ingest %}{{ ingest_icon("rail-item__icon") }}
-    {%- else %}<svg class="rail-item__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 3 7.5l9 4.5 9-4.5L12 3z"/><path d="M3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5"/></svg>{% endif %}
+  <button type="button" class="rail-item rail-item--group" data-units="{{ step.units }}" data-state="{{ step.state }}">
+    {#- Layers for every stage, ingest or not: on this page the cylinder
+        means a task the cache answered (_status.html). #}
+    <svg class="rail-item__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4 4 8l8 4 8-4-8-4zM4 12l8 4 8-4M4 16l8 4 8-4"/></svg>
     <span class="rail-item__name">{{ step.name }}</span>
-    {%- if step.count %}<span class="rail-item__count">{{ step.count }}</span>{% endif %}
+    {%- if step.count %}<span class="rail-item__count" data-count="{{ step.count }}">{{ step.count }}</span>{% endif %}
     {{ status_icon(step.state, warned=step.warned) }}
   </button>
   <div class="rail-kids">
@@ -56,13 +62,22 @@
 </div>
 {%- endmacro %}
 
-{% macro outline_nav(steps, selected, count) -%}
+{% macro rail_filters(counts) -%}
+<div class="rail-filters" role="group" aria-label="Filter tasks">
+  {%- for key, label in (("all", "All"), ("ran", "Ran"), ("cached", "Cached"), ("warned", "Warnings")) %}
+  <button type="button" class="rail-filter" data-filter="{{ key }}" aria-pressed="{{ 'true' if key == 'all' else 'false' }}"{% if not counts[key] %} disabled{% endif %}><b data-counter="{{ key }}">{{ counts[key] }}</b>{{ label }}</button>
+  {%- endfor %}
+</div>
+{%- endmacro %}
+
+{% macro outline_nav(steps, selected, counts) -%}
 <nav class="rail" id="outline" aria-label="Tasks in this run" data-selected="{{ selected }}">
-  <div class="rail__head"><span data-rail-count>{{ count }} {{ "task" if count == 1 else "tasks" }}</span></div>
+  {{ rail_filters(counts) }}
   <div id="outline-steps">
     {%- for step in steps %}
     {{ outline_step(step) }}
     {%- endfor %}
   </div>
+  <p class="rail__empty" data-rail-empty hidden>No tasks match this filter.</p>
 </nav>
 {%- endmacro %}

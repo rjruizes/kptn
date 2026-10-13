@@ -52,9 +52,12 @@
 {%- set state = finished.status if finished and finished.status else section.state -%}
 <span class="sec-h__end" id="{{ section.id }}-outcome" data-state="{{ state }}">
   <span class="sec-h__meta">
+    {%- if state == "cached" %}cached{% if section.reason %} · {{ section.reason }}{% endif %}
+    {%- else %}
     {%- if section.runner %}{{ section.runner }} · {% endif -%}
     {%- if finished and finished.duration %}{{ finished.duration }} · {% endif -%}
     <span data-sec-lines="{{ section.lines }}">{{ lines_text(section.lines) }}</span>
+    {%- endif -%}
   </span>
   {{ status_icon(state, count=section.warnings) }}
 </span>
@@ -67,6 +70,7 @@
 #}
 {% macro section_markup(section, open, body) -%}
 {%- set empty = not section.shown -%}
+{%- set cached = section.state == "cached" -%}
 <section class="sec{% if empty %} is-empty{% elif not open %} is-closed{% endif %}" id="{{ section.id }}"
     data-section data-unit="{{ section.key }}"
     data-state="{{ section.state }}" data-warnings="{{ section.warnings }}">
@@ -74,14 +78,20 @@
     A section with nothing to show is its heading alone -- which already says
     "no output" -- and offers no fold: the heading stays a button, so a
     streamed section can grow lines and become foldable, but it is out of
-    the tab order and app.js ignores it until then.
+    the tab order and app.js ignores it until then. A cached section never
+    runs, so never grows any: its heading is not a button at all.
   #}
-  <button type="button" class="sec-h"{% if empty %} tabindex="-1"{% else %} aria-expanded="{{ 'true' if open else 'false' }}"{% endif %} aria-controls="{{ section.body_id }}">
+  {%- set tag = "div" if cached else "button" %}
+  <{{ tag }}{% if not cached %} type="button"{% endif %} class="sec-h"
+    {%- if cached %}{% elif empty %} tabindex="-1"{% else %} aria-expanded="{{ 'true' if open else 'false' }}"{% endif %}
+    {%- if not cached %} aria-controls="{{ section.body_id }}"{% endif %}>
     <svg class="sec-h__chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-    {%- if section.path %}<span class="sec-h__path">{{ section.path | join(" / ") }} /</span>{% endif %}
-    <span class="sec-h__name">{{ section.label }}</span>
+    <span class="sec-h__title">
+      {%- if section.path %}<span class="sec-h__path">{{ section.path | join(" / ") }} /</span> {% endif -%}
+      <span class="sec-h__name">{{ section.label }}</span>
+    </span>
     {{ section_outcome(section, section.outcome) }}
-  </button>
+  </{{ tag }}>
   <div class="sec__lines" id="{{ section.body_id }}">{{ body }}</div>
 </section>
 {%- endmacro %}

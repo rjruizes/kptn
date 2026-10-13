@@ -6,7 +6,7 @@
  */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   --ink: #1c2228;
   --ink-muted: #5b6570;
@@ -14,6 +14,8 @@
   --surface: #ffffff;
   --surface-sunken: #f6f7f8;
   --surface-hover: #eceef0;
+  /* The app bar's own ground. */
+  --chrome: #f6f7f8;
   --line: #e2e5e8;
   --accent: #2b5bd7;
   --accent-bg: #e7edfc;
@@ -21,9 +23,9 @@
   --danger: #b42318;
   --danger-bg: #fbe9e7;
   --warning: #965f06;
-  --warning-bg: #fbf0d8;
+  --warning-bg: rgba(150, 95, 6, 0.13);
   /* A warned line's background: quieter than a pill's. */
-  --warning-line: #fdf8ec;
+  --warning-line: rgba(150, 95, 6, 0.07);
   --ok: #2d7a40;
   --ok-bg: #e5f2e8;
   --radius: 6px;
@@ -37,14 +39,20 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
+/* Dark follows the system unless the reader chose light in Settings, and is
+ * forced when they chose dark: ``data-theme`` on <html>, set before the page
+ * paints (_theme.html). The two blocks hold the same values. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
     --ink: #e6e9ec;
     --ink-muted: #a3acb5;
     --ink-faint: #737d87;
     --surface: #15181b;
     --surface-sunken: #1b1f23;
     --surface-hover: #252a2f;
+    --chrome: #1b1f23;
     --line: #2c3237;
     --accent: #86a7f6;
     --accent-bg: #1f2a45;
@@ -52,11 +60,34 @@
     --danger: #ff7b72;
     --danger-bg: #3a1d1c;
     --warning: #e3ae52;
-    --warning-bg: #352913;
-    --warning-line: #231e14;
+    --warning-bg: rgba(227, 174, 82, 0.16);
+    --warning-line: rgba(227, 174, 82, 0.08);
     --ok: #6cc183;
     --ok-bg: #1a2f21;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ink: #e6e9ec;
+  --ink-muted: #a3acb5;
+  --ink-faint: #737d87;
+  --surface: #15181b;
+  --surface-sunken: #1b1f23;
+  --surface-hover: #252a2f;
+  --chrome: #1b1f23;
+  --line: #2c3237;
+  --accent: #86a7f6;
+  --accent-bg: #1f2a45;
+  --accent-ink: #15181b;
+  --danger: #ff7b72;
+  --danger-bg: #3a1d1c;
+  --warning: #e3ae52;
+  --warning-bg: rgba(227, 174, 82, 0.16);
+  --warning-line: rgba(227, 174, 82, 0.08);
+  --ok: #6cc183;
+  --ok-bg: #1a2f21;
 }
 
 * {
@@ -89,25 +120,87 @@ pre {
 
 /* -- app bar ------------------------------------------------------------ */
 
-/* The bar runs the full width of the window, its contents with it: History
- * at the left edge, the settings gear at the right, on the same 24px edges
- * as the run page's bar beneath it. */
+/* Three parts across the full width of the window: where you are on the
+ * left, the profile and what to do with it in the middle, settings on the
+ * right. The outer columns share what is left equally, so the middle stays
+ * centred whatever the left holds. */
 .app-bar {
-  padding: 12px 24px;
-  background: var(--surface);
+  padding: 8px 16px;
+  background: var(--chrome);
   border-bottom: 1px solid var(--line);
 }
 
 .app-bar__inner {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 24px;
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
+  gap: 10px;
+}
+
+.app-bar__start {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.app-bar__brand {
+  margin-right: 14px;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.app-bar__brand:hover {
+  color: var(--ink);
+}
+
+.app-bar__nav {
+  display: flex;
+  gap: 2px;
+}
+
+.app-bar__nav a {
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  color: var(--ink-muted);
+  font-size: 13.5px;
+  text-decoration: none;
+}
+
+.app-bar__nav a:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.app-bar__nav a[aria-current] {
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.app-bar__end {
+  display: flex;
+  grid-column: 3;
+  justify-self: end;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-bar__brand:focus-visible,
+.app-bar__nav a:focus-visible,
+.iconbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Marks a colleague's project, shown from its published files: there is
    nothing on these pages that can act on a run. */
 .app-bar__readonly {
+  font-family: var(--font-ui);
   font-size: 0.85em;
   padding: 1px 8px;
   border: 1px solid var(--line);
@@ -115,42 +208,67 @@ pre {
   color: var(--ink-muted);
 }
 
+/* An icon alone, borderless: the settings gear, the rail's toggle. */
+.iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.iconbtn:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.iconbtn svg {
+  width: 19px;
+  height: 19px;
+}
+
 /* -- project picker ------------------------------------------------------ */
 
-/* A <details> styled as a dropdown: the summary looks like the profile
- * <select> beside it, and the menu hangs below it over the page. */
-/* ``r1 / <picker>``: the release, then the project within it. */
+/* ``r1 / <picker>``: the release, then the project within it, in the mono
+ * face the names are written in. The picker is a <details> dressed as the
+ * profile's select box, its menu hanging below it over the page. */
 .project-picker-path {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
+  margin-right: 14px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-faint);
 }
 
 .project-picker-path__release {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
   color: var(--ink-muted);
-}
-
-.project-picker-path__separator {
-  color: var(--line);
-  font-size: 1.2em;
 }
 
 .project-picker {
   position: relative;
+  min-width: 0;
 }
 
 .project-picker__summary {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 300px;
-  height: var(--control-height);
-  padding: 0 10px;
+  max-width: 260px;
+  padding: 5px 30px 5px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a939c' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center / 14px;
+  color: var(--ink);
+  line-height: 1.5;
   cursor: pointer;
   list-style: none;
   white-space: nowrap;
@@ -160,46 +278,42 @@ pre {
   display: none;
 }
 
-.project-picker__summary::after {
-  content: "";
-  flex-shrink: 0;
-  margin-left: 2px;
-  border: 4px solid transparent;
-  border-top-color: var(--ink-muted);
-  transform: translateY(2px);
-}
-
-.project-picker[open] > .project-picker__summary::after {
-  transform: translateY(-2px) rotate(180deg);
+.project-picker__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .project-picker__current {
   overflow: hidden;
+  font-size: 1em;
   text-overflow: ellipsis;
 }
 
 .project-picker__prompt {
   color: var(--ink-muted);
+  font-family: var(--font-ui);
 }
 
 .project-picker__menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
   z-index: 20;
   min-width: 300px;
   max-width: min(480px, calc(100vw - 2 * var(--content-gutter)));
   max-height: 70vh;
   overflow-y: auto;
-  padding: 8px;
+  padding: 4px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  font-family: var(--font-ui);
+  font-size: 13px;
 }
 
 .project-picker__divider {
-  margin: 6px 0;
+  margin: 4px 0;
   border: 0;
   border-top: 1px solid var(--line);
 }
@@ -212,20 +326,20 @@ pre {
 
 .project-picker__item {
   display: block;
-  padding: 5px 8px;
-  border-radius: var(--radius);
+  padding: 7px 10px;
+  border-radius: 5px;
   color: var(--ink);
   text-decoration: none;
 }
 
 a.project-picker__item:hover,
 a.project-picker__item:focus-visible {
-  background: var(--surface-sunken);
+  background: var(--surface-hover);
 }
 
 .project-picker__item[aria-current="page"] {
-  background: var(--surface-sunken);
-  font-weight: 600;
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .project-picker__item--broken {
@@ -235,76 +349,123 @@ a.project-picker__item:focus-visible {
 .project-picker__error {
   display: block;
   overflow: hidden;
-  font-size: 0.8em;
+  font-size: 0.85em;
   color: var(--danger);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .project-picker__empty {
-  margin: 4px 8px;
+  margin: 6px 10px;
 }
 
-.app-bar__profile {
-  display: flex;
-  gap: var(--control-gap);
-  align-items: center;
-}
+/* -- the bar's controls --------------------------------------------------- */
 
-.app-bar__profile label {
-  color: var(--ink-muted);
-  white-space: nowrap;
-}
-
-/* Profile, Run, Plan: one group, so they read as three steps on the same
- * subject rather than three unrelated controls. The forms are layout-neutral
- * wrappers -- each exists only to give its button a method and an action. */
+/* Profile, then Run and Plan as one group: two things to do with it. The
+ * forms are layout-neutral wrappers -- each exists only to give its button
+ * a method and an action. */
 .app-bar__controls {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--control-gap);
+  gap: 8px;
 }
 
-.app-bar__run,
-.app-bar__plan {
+.app-bar__controls form {
+  display: flex;
   margin: 0;
 }
 
-/* A <select> and a <button> with identical padding still come out different
- * heights -- the select is sized by the platform's own control metrics, the
- * button by its content box -- which left the buttons overhanging the select
- * by 2px. An explicit height on all three is the only thing that makes them
- * one crisp row, so it is set here rather than on the global control rules:
- * the buttons elsewhere in the UI (Stop, Force-finish, Download raw log) are
- * sized by their content and should stay that way.
- *
- * ``flex-shrink: 0`` on the buttons keeps their labels on one line when the
- * bar gets tight; the select is the element that gives up width instead. */
-.app-bar__controls select,
-.app-bar__controls button {
-  height: var(--control-height);
-  padding-block: 0;
+/* A select in a bordered box with its label inside, the chevron drawn by
+ * the stylesheet so it is the same in every browser. */
+.selbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink-faint);
+  font-size: 13px;
 }
 
-.app-bar__controls button {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-/* Long profile names (``asa24_validate_ingest``) would otherwise let the
- * selector push the nav off the bar. */
-.app-bar__controls select {
+.selbox select {
   min-width: 0;
   max-width: 220px;
+  padding: 5px 30px 5px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a939c' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center / 14px;
+  color: var(--ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
-/* Why the bar's controls are refused, sitting with them rather than beside
- * the nav. No `display` of its own: `hidden` has to keep working, and the
- * poller toggles exactly that. */
+.selbox select:focus {
+  outline: none;
+}
+
+.selbox:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.selbox select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.btngroup {
+  display: inline-flex;
+}
+
+.btngroup .btn {
+  border-radius: 0;
+}
+
+.btngroup > :first-child .btn {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.btngroup > :last-child .btn {
+  margin-left: -1px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.btngroup .btn svg {
+  color: var(--ink-muted);
+}
+
+.btngroup .btn:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+.btn--run,
+.btngroup .btn--run svg {
+  color: var(--accent);
+}
+
+.btn--run {
+  font-weight: 500;
+}
+
+.btn--run:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+/* Why the bar's controls are refused, sitting with them. No `display` of
+ * its own: `hidden` has to keep working, and the poller toggles exactly
+ * that. */
 .app-bar__busy {
   color: var(--ink-muted);
+  font-size: 13px;
   text-decoration: none;
+  white-space: nowrap;
   border-bottom: 1px dotted currentColor;
 }
 
@@ -312,64 +473,31 @@ a.project-picker__item:focus-visible {
   color: var(--ink);
 }
 
-.app-bar__nav {
-  display: flex;
-  gap: 4px;
-}
+@media (max-width: 760px) {
+  .app-bar {
+    padding: 8px 10px;
+  }
 
-/* History, as a home icon: square, and sized like the settings gear at the
- * other end of the bar. */
-.app-bar__nav .app-bar__home {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 6px;
-}
+  .app-bar__inner {
+    grid-template-columns: auto 1fr auto;
+    gap: 6px;
+  }
 
-/* When it leads the bar (no project picker before it), its padding is
- * pulled back so the icon lines up with the edge below it. */
-.app-bar__inner > .app-bar__nav:first-child .app-bar__home {
-  margin-left: -8px;
-}
+  .app-bar__brand,
+  .app-bar__nav,
+  .project-picker-path__release,
+  .project-picker-path__separator,
+  .selbox > span {
+    display: none;
+  }
 
-.app-bar__end {
-  display: flex;
-  margin-left: auto;
-}
+  .project-picker-path {
+    margin-right: 0;
+  }
 
-.app-bar__nav a {
-  padding: 5px 10px;
-  border-radius: var(--radius);
-  color: var(--ink-muted);
-  text-decoration: none;
-}
-
-.app-bar__nav a:hover {
-  background: var(--surface-sunken);
-  color: var(--ink);
-}
-
-.app-bar__nav a[aria-current="page"] {
-  background: var(--surface-sunken);
-  color: var(--ink);
-  font-weight: 600;
-}
-
-/* The gear: an icon button sized and coloured like the nav links beside it,
- * not a bordered control -- it opens a preference, it does not act on a run. */
-.app-bar__settings {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 5px 8px;
-  border: 0;
-  background: transparent;
-  color: var(--ink-muted);
-}
-
-.app-bar__settings:hover {
-  background: var(--surface-sunken);
-  color: var(--ink);
+  .app-bar__controls {
+    justify-self: center;
+  }
 }
 
 /* -- settings modal ----------------------------------------------------- */
@@ -417,6 +545,68 @@ a.project-picker__item:focus-visible {
 
 .settings__close:hover {
   color: var(--ink);
+}
+
+/* Appearance: three choices as one segmented control, the chosen one
+ * raised. Real radios underneath, so the keyboard and a screen reader get
+ * a radio group. */
+.settings__theme {
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.settings__theme legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-sunken);
+}
+
+.segmented label {
+  position: relative;
+  cursor: pointer;
+}
+
+.segmented input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.segmented span {
+  display: block;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.segmented label:hover span {
+  color: var(--ink);
+}
+
+.segmented input:checked + span {
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.segmented input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .settings__option {
@@ -624,7 +814,6 @@ button:disabled {
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   background: var(--surface);
-  border-top: 1px solid var(--line);
 }
 
 /* Inline, because it renders inside the run bar's breadcrumb. On the 409 page
@@ -655,9 +844,21 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px 20px;
-  padding: 14px 24px;
+  gap: 10px 14px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--line);
+}
+
+/* Pulled back so the icon, not its hover square, lines up with the edge. */
+.run-bar__side {
+  margin-left: -6px;
+}
+
+.run-bar__title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
 .run-bar__crumb {
@@ -666,7 +867,7 @@ button:disabled {
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 400;
 }
 
@@ -687,27 +888,16 @@ button:disabled {
   font-weight: 600;
 }
 
-.run-bar__counts {
-  display: flex;
-  gap: 16px;
-  color: var(--ink-muted);
-  font-size: 13px;
-}
-
-.run-bar__counts b {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.run-bar__warned b {
-  color: var(--warning);
+.run-bar__meta {
+  color: var(--ink-faint);
+  font-size: 12.5px;
 }
 
 .run-bar__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-left: auto;
 }
 
@@ -727,17 +917,27 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 5px 11px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--ink);
   font-size: 13px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .btn:hover {
   background: var(--surface-hover);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn:disabled:hover {
+  background: var(--surface);
 }
 
 .btn svg {
@@ -751,16 +951,22 @@ button:disabled {
   color: var(--ink-faint);
 }
 
+.btn--square {
+  padding: 5px 7px;
+}
+
 .btn--danger {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
   color: var(--danger);
 }
 
-.view-menu {
+/* A button's dropdown: View's options, and the "..." menu. app.js opens one
+ * at a time and closes it on Escape or a click elsewhere. */
+.menu-wrap {
   position: relative;
 }
 
-.view-menu__panel {
+.menu {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
@@ -773,24 +979,48 @@ button:disabled {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
-.view-menu__panel[hidden] {
+.menu[hidden] {
   display: none;
 }
 
-.view-opt {
+.menu form {
+  margin: 0;
+}
+
+.view-opt,
+.menu-item {
   position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 7px 10px;
+  border: 0;
   border-radius: 5px;
+  background: none;
+  color: var(--ink);
   font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
   user-select: none;
 }
 
-.view-opt:hover {
+.view-opt:hover,
+.menu-item:hover:not(:disabled) {
   background: var(--surface-hover);
+}
+
+.menu-item svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--ink-muted);
+}
+
+.menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .view-opt input {
@@ -841,6 +1071,15 @@ button:disabled {
   min-height: 0;
 }
 
+/* The rail hidden from the run bar: the log takes the whole width. */
+.run-body.no-side {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.run-body.no-side .rail {
+  display: none;
+}
+
 .rail {
   overflow: auto;
   padding: 12px 10px 24px;
@@ -848,13 +1087,77 @@ button:disabled {
   background: var(--surface-sunken);
 }
 
-.rail__head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 10px 10px;
+/* The filters, which are the run's tallies too: a count over a word. */
+.rail-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.rail-filter {
+  padding: 6px 2px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: center;
+  cursor: pointer;
+}
+
+.rail-filter b {
+  display: block;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.rail-filter[data-filter="warned"]:not(:disabled) b {
+  color: var(--warning);
+}
+
+.rail-filter:hover {
+  background: var(--surface-hover);
+}
+
+.rail-filter[aria-pressed="true"] {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  color: var(--ink);
+}
+
+.rail-filter:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rail-filter:disabled:hover {
+  background: none;
+}
+
+.rail-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* What a filter leaves out. app.js sets ``hidden``; the rail's own display
+ * rules would otherwise win over it. */
+.rail-step[hidden],
+.rail-item[hidden],
+.rail-label[hidden],
+.rail-kids[hidden],
+.rail__empty[hidden] {
+  display: none;
+}
+
+.rail__empty {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--ink-faint);
+  font-size: 13px;
 }
 
 .rail-item {
@@ -897,6 +1200,11 @@ button:disabled {
 
 .rail-item.is-active .rail-item__dur {
   color: var(--accent);
+}
+
+/* A task the cache answered reads as quieter than one that ran. */
+.rail-item[data-state="cached"]:not(.is-active) .rail-item__name {
+  color: var(--ink-faint);
 }
 
 .rail-item--group {
@@ -1089,12 +1397,21 @@ button:disabled {
   color: var(--ok);
 }
 
-.ev--run_finished {
+.sec {
   border-top: 1px solid var(--line);
 }
 
-.sec {
-  border-top: 1px solid var(--line);
+.sec:last-of-type {
+  border-bottom: 1px solid var(--line);
+}
+
+/* The log narrowed by the rail's filters (app.js sets ``data-show``).
+ * Rules on the sections rather than a pass over them, so a section the
+ * stream adds is filtered the moment it lands. */
+.console[data-show="ran"] .sec[data-state="cached"],
+.console[data-show="cached"] .sec:not([data-state="cached"]),
+.console[data-show="warned"] .sec[data-warnings="0"] {
+  display: none;
 }
 
 /* The heading folds its section, and stays at the top of the log while the
@@ -1118,7 +1435,7 @@ button:disabled {
   cursor: pointer;
 }
 
-.sec-h:hover {
+button.sec-h:hover {
   background: var(--surface-sunken);
 }
 
@@ -1138,6 +1455,12 @@ button:disabled {
   display: none;
 }
 
+/* The path and the name wrap together, as one line of text, when the log
+ * is narrow; the outcome at the right never wraps. */
+.sec-h__title {
+  min-width: 0;
+}
+
 .sec-h__path {
   color: var(--ink-faint);
 }
@@ -1152,9 +1475,11 @@ button:disabled {
 
 .sec-h__end {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 10px;
   margin-left: auto;
+  white-space: nowrap;
 }
 
 .sec-h__meta {
@@ -1195,6 +1520,17 @@ button:disabled {
   visibility: hidden;
 }
 
+/* A cached section never ran: its heading is not a button, does not stick,
+ * and its name reads as quieter than a task's that ran. */
+.sec[data-state="cached"] .sec-h {
+  position: static;
+}
+
+.sec[data-state="cached"] .sec-h__name {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
 /* The section a rail click took the log to, lit for a moment. */
 @keyframes sec-selected-head {
   0%,
@@ -1212,10 +1548,12 @@ button:disabled {
 @keyframes sec-selected-lines {
   0%,
   35% {
+    background: var(--accent-bg);
     box-shadow: inset 3px 0 0 var(--accent);
   }
 
   100% {
+    background: transparent;
     box-shadow: inset 3px 0 0 transparent;
   }
 }
@@ -1261,7 +1599,7 @@ button:disabled {
 
 @media (max-width: 760px) {
   .run-bar {
-    padding: 12px 16px;
+    padding: 10px 12px;
   }
 
   .run-bar__actions {
@@ -1274,7 +1612,7 @@ button:disabled {
   }
 
   .rail {
-    max-height: 34vh;
+    max-height: 30vh;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }

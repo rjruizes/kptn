@@ -4,7 +4,7 @@
  * Vendored and dependency-free. htmx does the request plumbing; this file
  * holds only what htmx cannot express declaratively: the run console's live
  * event stream, the nav's profile, the app bar's active-run poll, and the
- * settings modal.
+ * settings modal with the reader's theme.
  *
  * An ES module, loaded by ``_modules.html``. Its imports are bare specifiers
  * ("kptn/...") that the import map in that partial resolves to versioned
@@ -46,6 +46,9 @@ var PROJECT_BASE =
   (document.body && document.body.getAttribute("data-project-base")) || BASE;
 
 var SOUND_STORAGE_KEY = "kptn.runSound";
+/* Read before the page paints by _theme.html, under the same name. */
+var THEME_STORAGE_KEY = "kptn.theme";
+var SIDEBAR_STORAGE_KEY = "kptn.sidebarOpen";
 
 /* The end of a run, heard: two short sine tones, rising for a run that
  * succeeded and falling for any other ending (failed, errored, interrupted,
@@ -112,35 +115,6 @@ function fragmentFrom(html) {
   var holder = document.createElement("template");
   holder.innerHTML = html;
   return holder.content;
-}
-
-function updateCounters(list) {
-  /* The run bar's tallies, counted off the log's sections rather than kept in
-   * a variable, so they survive a reconnect that re-sends nothing and a
-   * reload that re-renders everything -- and agree with the server's count
-   * of the same sections (console_layout.run_counts).
-   *
-   * Searched from the document: the counters sit in the run bar, not in the
-   * log. */
-  var sections = list.querySelectorAll("[data-section]");
-  var counts = { ran: 0, skipped: 0, warned: 0 };
-  for (var i = 0; i < sections.length; i += 1) {
-    if (sections[i].getAttribute("data-state") === "cached") {
-      counts.skipped += 1;
-    } else {
-      counts.ran += 1;
-    }
-    if ((parseInt(sections[i].getAttribute("data-warnings"), 10) || 0) > 0) {
-      counts.warned += 1;
-    }
-  }
-  var counters = document.querySelectorAll("[data-counter]");
-  for (var k = 0; k < counters.length; k += 1) {
-    var key = counters[k].getAttribute("data-counter");
-    if (Object.prototype.hasOwnProperty.call(counts, key)) {
-      counters[k].textContent = String(counts[key]);
-    }
-  }
 }
 
 function numberLines(list) {
@@ -215,7 +189,8 @@ function initLogControls(console_) {
    * or unfolds every section, and View hides the timestamps or the line
    * numbers -- remembered for this reader. All by delegation from the
    * document, because the run bar holding Collapse all and View is replaced
-   * wholesale by the stream's closing frame. */
+   * wholesale by the stream's closing frame. View's menu opens and closes
+   * like every other (initMenus). */
   var list = document.getElementById("console-events");
   var VIEW_KEYS = { timestamps: "kptn.showTimestamps", numbers: "kptn.showLineNumbers" };
   /* Until the reader says otherwise: line numbers on, timestamps off -- the
@@ -227,10 +202,13 @@ function initLogControls(console_) {
   }
 
   function syncFoldAll() {
-    /* The button says what it will do next. */
+    /* The button says what it will do next, and is off while no section
+     * has anything to fold. */
     var buttons = document.querySelectorAll("[data-fold-all]");
     var open = anyOpen();
+    var foldable = list.querySelector("[data-section]:not(.is-empty)") !== null;
     for (var i = 0; i < buttons.length; i += 1) {
+      buttons[i].disabled = !foldable;
       var label = buttons[i].querySelector("span");
       var path = buttons[i].querySelector("path");
       if (label) {
@@ -260,22 +238,6 @@ function initLogControls(console_) {
     }
   }
 
-  function setMenu(open) {
-    var toggle = document.querySelector("[data-view-toggle]");
-    var panel = document.getElementById("view-menu");
-    if (!toggle || !panel) {
-      return;
-    }
-    panel.hidden = !open;
-    toggle.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) {
-      var first = panel.querySelector("input");
-      if (first && first.offsetParent !== null) {
-        first.focus();
-      }
-    }
-  }
-
   console_.addEventListener("click", function (event) {
     var heading = event.target.closest(".sec-h");
     if (heading && console_.contains(heading)) {
@@ -293,16 +255,6 @@ function initLogControls(console_) {
         setSectionOpen(sections[i], !close);
       }
       syncFoldAll();
-      return;
-    }
-    var toggle = event.target.closest("[data-view-toggle]");
-    if (toggle) {
-      var panel = document.getElementById("view-menu");
-      setMenu(!!panel && panel.hidden);
-      return;
-    }
-    if (!event.target.closest("[data-view-menu]")) {
-      setMenu(false);
     }
   });
 
@@ -319,21 +271,31 @@ function initLogControls(console_) {
     applyViewOptions();
   });
 
-  document.addEventListener("keydown", function (event) {
-    var panel = document.getElementById("view-menu");
-    if (event.key === "Escape" && panel && !panel.hidden) {
-      setMenu(false);
-      var toggle = document.querySelector("[data-view-toggle]");
-      if (toggle) {
-        toggle.focus();
-      }
-    }
-  });
-
   applyViewOptions();
   syncFoldAll();
   return { syncFoldAll: syncFoldAll, applyViewOptions: applyViewOptions };
 }
+
+/* States of a task that did not run in this run, which the "Ran" filter
+ * leaves out. kptn_server.run_outline holds the same list. */
+var NOT_RAN = ["cached", "waiting", "not_run", "bypassed"];
+
+/* The rail's filters, by a task's state and whether it warned. The log's
+ * sections are filtered by the same rules, in app.css. */
+var RAIL_FILTERS = {
+  all: function () {
+    return true;
+  },
+  ran: function (state) {
+    return NOT_RAN.indexOf(state) === -1;
+  },
+  cached: function (state) {
+    return state === "cached";
+  },
+  warned: function (state, warned) {
+    return warned;
+  }
+};
 
 /* The rail (_outline.html) beside the log. Clicking a task takes the log to
  * its section, opens it, and lights it for a moment; clicking a step's
@@ -341,14 +303,112 @@ function initLogControls(console_) {
  * marks what was clicked -- not where the log is scrolled -- and clicking it
  * again clears the mark. Its parts are rendered by the server -- the stream
  * sends a step's part again whenever it changes -- so all this file does
- * with them is swap them in and keep the mark. */
+ * with them is swap them in, keep the mark, and keep the filters.
+ *
+ * The filters at its head narrow the rail and the log to the tasks that
+ * ran, the cached ones, or those that warned, and are the run's tallies:
+ * recounted here off the rail's tasks whenever a frame changes it. */
 function initRail(console_, list) {
   var rail = document.getElementById("outline");
   if (!rail) {
     return null;
   }
   var active = null; /* the clicked item's data-unit or data-units */
+  var filter = "all";
   var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function matches(item) {
+    return RAIL_FILTERS[filter](item.getAttribute("data-state"), item.hasAttribute("data-warned"));
+  }
+
+  function visibleUnits(scope) {
+    var units = scope.querySelectorAll(".rail-item[data-unit]");
+    var shown = 0;
+    for (var i = 0; i < units.length; i += 1) {
+      if (!units[i].hidden) {
+        shown += 1;
+      }
+    }
+    return shown;
+  }
+
+  function applyFilter() {
+    /* The log by its own rules (app.css); the rail by hiding what does not
+     * match, then each label and step left with nothing under it. */
+    if (filter === "all") {
+      console_.removeAttribute("data-show");
+    } else {
+      console_.setAttribute("data-show", filter);
+    }
+    var all = filter === "all";
+    var units = rail.querySelectorAll(".rail-item[data-unit]");
+    for (var i = 0; i < units.length; i += 1) {
+      units[i].hidden = !all && !matches(units[i]);
+    }
+    var labels = rail.querySelectorAll(".rail-label");
+    for (var k = 0; k < labels.length; k += 1) {
+      var kids = labels[k].nextElementSibling;
+      var empty = !all && !(kids && visibleUnits(kids));
+      labels[k].hidden = empty;
+      if (kids && kids.classList.contains("rail-kids")) {
+        kids.hidden = empty;
+      }
+    }
+    var steps = rail.querySelectorAll(".rail-step");
+    var anyShown = false;
+    for (var n = 0; n < steps.length; n += 1) {
+      var shown = visibleUnits(steps[n]);
+      steps[n].hidden = !all && !shown;
+      anyShown = anyShown || !steps[n].hidden;
+      var count = steps[n].querySelector(".rail-item__count[data-count]");
+      if (count) {
+        count.textContent = all ? count.getAttribute("data-count") : String(shown);
+      }
+    }
+    var note = rail.querySelector("[data-rail-empty]");
+    if (note) {
+      note.hidden = all || anyShown;
+    }
+    var buttons = rail.querySelectorAll("[data-filter]");
+    for (var b = 0; b < buttons.length; b += 1) {
+      buttons[b].setAttribute("aria-pressed", buttons[b].getAttribute("data-filter") === filter ? "true" : "false");
+    }
+  }
+
+  function recount() {
+    /* The filters' counts, off every task in the rail: the same four the
+     * server rendered (run_outline.filter_counts). */
+    var units = rail.querySelectorAll(".rail-item[data-unit]");
+    var buttons = rail.querySelectorAll("[data-filter]");
+    for (var b = 0; b < buttons.length; b += 1) {
+      var test = RAIL_FILTERS[buttons[b].getAttribute("data-filter")];
+      var count = 0;
+      for (var i = 0; i < units.length; i += 1) {
+        if (test(units[i].getAttribute("data-state"), units[i].hasAttribute("data-warned"))) {
+          count += 1;
+        }
+      }
+      var counter = buttons[b].querySelector("[data-counter]");
+      if (counter) {
+        counter.textContent = String(count);
+      }
+      /* The pressed one stays pressable, so the way back is never disabled. */
+      buttons[b].disabled = count === 0 && buttons[b].getAttribute("data-filter") !== filter;
+    }
+  }
+
+  function setFilter(name) {
+    if (!Object.prototype.hasOwnProperty.call(RAIL_FILTERS, name) || name === filter) {
+      return;
+    }
+    filter = name;
+    active = null;
+    mark();
+    clearLit();
+    applyFilter();
+    recount();
+    console_.scrollTop = 0;
+  }
 
   function sectionFor(unit) {
     var sections = list.querySelectorAll("[data-section]");
@@ -387,7 +447,8 @@ function initRail(console_, list) {
     var sections = [];
     for (var i = 0; i < units.length; i += 1) {
       var section = units[i] ? sectionFor(units[i]) : null;
-      if (section) {
+      /* A section the filter hides has no place to scroll to. */
+      if (section && section.getClientRects().length) {
         sections.push(section);
       }
     }
@@ -411,6 +472,11 @@ function initRail(console_, list) {
   }
 
   rail.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-filter]");
+    if (button && rail.contains(button)) {
+      setFilter(button.getAttribute("data-filter"));
+      return;
+    }
     var item = event.target.closest(".rail-item");
     if (!item || !rail.contains(item)) {
       return;
@@ -446,7 +512,8 @@ function initRail(console_, list) {
   }
 
   return {
-    /* A frame's part of the rail, swapped in, with the mark kept. */
+    /* A frame's part of the rail, swapped in, with the mark and the filter
+     * kept and the counts brought up to date. */
     update: function (frame) {
       if (!frame.outline) {
         return;
@@ -456,13 +523,221 @@ function initRail(console_, list) {
         part.replaceWith(fragmentFrom(frame.outline.html));
       }
       mark();
-      var count = rail.querySelector("[data-rail-count]");
-      if (count) {
-        var n = rail.querySelectorAll(".rail-item[data-unit]").length;
-        count.textContent = n + (n === 1 ? " task" : " tasks");
+      applyFilter();
+      recount();
+    },
+    setFilter: setFilter
+  };
+}
+
+/* The run bar's sidebar button hides the rail and gives the log the whole
+ * width, remembered for this reader. Hiding it also drops its filter: the
+ * filter's buttons live in the rail, and a log narrowed out of sight would
+ * look like a log with output missing. By delegation, because the stream's
+ * closing frame replaces the run bar; ``sync`` puts the replacement button
+ * in step. */
+function initSidebar(rail) {
+  var body = document.querySelector(".run-body");
+  if (!body) {
+    return null;
+  }
+
+  function stored() {
+    try {
+      return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) !== "0";
+    } catch (err) {
+      return true;
+    }
+  }
+
+  function sync() {
+    var open = !body.classList.contains("no-side");
+    var toggles = document.querySelectorAll("[data-side-toggle]");
+    for (var i = 0; i < toggles.length; i += 1) {
+      var label = open ? "Hide sidebar" : "Show sidebar";
+      toggles[i].setAttribute("aria-expanded", open ? "true" : "false");
+      toggles[i].setAttribute("aria-label", label);
+      toggles[i].title = label;
+    }
+  }
+
+  function set(open) {
+    body.classList.toggle("no-side", !open);
+    if (!open && rail) {
+      rail.setFilter("all");
+    }
+    sync();
+  }
+
+  document.addEventListener("click", function (event) {
+    if (!event.target.closest("[data-side-toggle]")) {
+      return;
+    }
+    var open = body.classList.contains("no-side");
+    set(open);
+    try {
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, open ? "1" : "0");
+    } catch (err) {
+      /* Not being able to remember the choice is not a reason to refuse it. */
+    }
+  });
+
+  set(stored());
+  return { sync: sync };
+}
+
+/* Dropdown menus (``[data-menu]``): one open at a time, closed by Escape --
+ * which hands focus back to its button -- by a click outside, and by
+ * choosing one of its items. By delegation, so a run bar the stream
+ * replaced keeps working. */
+function initMenus() {
+  function close(except) {
+    var wraps = document.querySelectorAll("[data-menu]");
+    for (var i = 0; i < wraps.length; i += 1) {
+      if (wraps[i] === except) {
+        continue;
+      }
+      var panel = wraps[i].querySelector(".menu");
+      var toggle = wraps[i].querySelector("[data-menu-toggle]");
+      if (panel) {
+        panel.hidden = true;
+      }
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", "false");
       }
     }
-  };
+  }
+
+  document.addEventListener("click", function (event) {
+    var toggle = event.target.closest("[data-menu-toggle]");
+    if (toggle) {
+      var wrap = toggle.closest("[data-menu]");
+      var panel = wrap && wrap.querySelector(".menu");
+      if (!panel) {
+        return;
+      }
+      var open = panel.hidden;
+      close(wrap);
+      panel.hidden = !open;
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) {
+        var items = panel.querySelectorAll("input, .menu-item");
+        for (var i = 0; i < items.length; i += 1) {
+          if (items[i].offsetParent !== null && !items[i].disabled) {
+            items[i].focus();
+            break;
+          }
+        }
+      }
+      return;
+    }
+    if (event.target.closest(".menu-item") || !event.target.closest("[data-menu]")) {
+      close(null);
+    }
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") {
+      return;
+    }
+    var panels = document.querySelectorAll("[data-menu] .menu:not([hidden])");
+    if (!panels.length) {
+      return;
+    }
+    var toggle = panels[0].closest("[data-menu]").querySelector("[data-menu-toggle]");
+    close(null);
+    if (toggle) {
+      toggle.focus();
+    }
+  });
+}
+
+/* "Copy link to run": the page's own address, without any fragment. The
+ * clipboard API needs a secure context, which loopback is; a page reached
+ * some other way falls back to a hidden field and the copy command. The
+ * item says it worked for a moment. */
+function initCopyLink() {
+  function fallback(text) {
+    var field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+    field.select();
+    var copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch (err) {
+      copied = false;
+    }
+    field.remove();
+    return copied ? Promise.resolve() : Promise.reject(new Error("copy refused"));
+  }
+
+  document.addEventListener("click", function (event) {
+    var item = event.target.closest("[data-copy-link]");
+    if (!item) {
+      return;
+    }
+    var link = window.location.href.split("#")[0];
+    var copying =
+      navigator.clipboard && window.isSecureContext
+        ? navigator.clipboard.writeText(link)
+        : fallback(link);
+    copying.then(
+      function () {
+        var label = item.querySelector("span");
+        if (!label) {
+          return;
+        }
+        label.textContent = "Link copied";
+        window.setTimeout(function () {
+          label.textContent = "Copy link to run";
+        }, 1500);
+      },
+      function () {
+        /* Refused: leave the address bar as the way to the link. */
+      }
+    );
+  });
+}
+
+/* Light, dark, or the system's -- chosen in Settings, kept in this browser,
+ * and applied to <html> as ``data-theme``. _theme.html applies the stored
+ * choice before a page paints; this applies a new one at once. */
+function initTheme() {
+  var options = document.querySelectorAll("[data-theme-option]");
+  var current = "system";
+  try {
+    var stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "light" || stored === "dark") {
+      current = stored;
+    }
+  } catch (err) {
+    /* Private browsing, or storage disabled. The system's choice stands. */
+  }
+  for (var i = 0; i < options.length; i += 1) {
+    options[i].checked = options[i].value === current;
+    options[i].addEventListener("change", function (event) {
+      var choice = event.currentTarget.value;
+      var root = document.documentElement;
+      if (choice === "light" || choice === "dark") {
+        root.setAttribute("data-theme", choice);
+      } else {
+        root.removeAttribute("data-theme");
+      }
+      try {
+        if (choice === "light" || choice === "dark") {
+          window.localStorage.setItem(THEME_STORAGE_KEY, choice);
+        } else {
+          window.localStorage.removeItem(THEME_STORAGE_KEY);
+        }
+      } catch (err) {
+        /* Not being able to remember the choice is not a reason to refuse it. */
+      }
+    });
+  }
 }
 
 function setUpRememberedToggle(toggle, storageKey) {
@@ -582,6 +857,7 @@ function initConsole() {
   var empty = document.getElementById("console-empty");
   var controls = initLogControls(console_);
   var rail = initRail(console_, list);
+  var sidebar = initSidebar(rail);
   if (console_.getAttribute("data-terminal") === "true" || typeof window.EventSource !== "function") {
     /* Already over. Its whole history is on the page, and its status came
      * from the run row -- there is nothing left to stream, and no ending
@@ -674,7 +950,6 @@ function initConsole() {
       refreshSection(touched[t]);
     }
     numberLines(list);
-    updateCounters(list);
     controls.syncFoldAll();
     autoScroll.keep();
   }
@@ -702,7 +977,9 @@ function initConsole() {
       /* The new run bar's controls show this reader's choices. */
       controls.applyViewOptions();
       controls.syncFoldAll();
-      updateCounters(list);
+      if (sidebar) {
+        sidebar.sync();
+      }
     }
   }
 
@@ -954,7 +1231,10 @@ function initSettings() {
   });
 }
 
+initTheme();
 initSettings();
+initMenus();
+initCopyLink();
 initConsole();
 initProfileNav();
 initRunLock();

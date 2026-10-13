@@ -43,7 +43,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
-from kptn_server.console_layout import ConsoleLayout, run_counts
+from kptn_server.console_layout import ConsoleLayout
 from kptn_server.log_render import render_events
 from kptn_server.registry import ProjectEntry
 from kptn_server.routes.runs import (
@@ -52,7 +52,6 @@ from kptn_server.routes.runs import (
     _event_frame,
     _status_frame,
     build_console,
-    console_sections,
     render_event,
 )
 from kptn_server.routes.support import error_response
@@ -229,15 +228,11 @@ def view_run(request: Request, run_id: str) -> HTMLResponse:
             "project_base": current.project_base,
             "nav_active": "run",
             "run": run,
-            "items": (items := build_console(stored, path)),
-            # From the file rather than the index: the file is never behind
-            # the index, and the counts are recounted from the sections the
-            # stream appends.
-            "counts": run_counts(console_sections(items)),
+            "items": build_console(stored, path),
             # From the run's events alone: this page never loads the owner's
             # pipeline, so steps that have not run are not listed.
             "outline": (outline := build_outline((), stored, terminal=is_terminal)).views(),
-            "outline_units": outline.unit_count(),
+            "outline_counts": outline.filter_counts(),
             "outline_selected": outline.selected(),
             "is_terminal": is_terminal,
             "not_reporting": not_reporting(run),

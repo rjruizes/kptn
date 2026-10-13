@@ -1,0 +1,7 @@
+{#
+  The reader's light or dark choice from Settings, applied before the page
+  paints. Inline and blocking on purpose: from app.js, a dark-mode reader
+  would see every page flash white first. With nothing stored -- or no
+  storage -- the page follows the system, through the stylesheet alone.
+#}
+<script>try{var kptnTheme=localStorage.getItem("kptn.theme");if(kptnTheme==="light"||kptnTheme==="dark")document.documentElement.setAttribute("data-theme",kptnTheme)}catch(e){}</script>

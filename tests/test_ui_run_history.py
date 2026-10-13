@@ -1178,6 +1178,7 @@ def test_warning_payloads_with_a_status_are_still_counted(
     undercounts. The console header is where that would show.
     """
     record = _seed_run(store, app.state.project.root)
+    store.append_event(record.run_id, "task_started", task_name="alpha")
     store.append_event(
         record.run_id,
         "warning",
@@ -1191,8 +1192,8 @@ def test_warning_payloads_with_a_status_are_still_counted(
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     body = client.get(f"/runs/{record.run_id}").text
-    # The run bar counts tasks that warned; both warnings landed in alpha's
-    # section, and its heading counts them.
+    # The rail's Warnings filter counts tasks that warned; both warnings
+    # landed in alpha's section, and its heading counts them.
     assert '<b data-counter="warned">1</b>' in body
     assert re.search(r'data-unit="alpha"\s+data-state="\w+" data-warnings="2"', body)
 
@@ -1247,11 +1248,12 @@ def test_history_carrying_a_profile_still_lists_every_run(
 def test_log_download_sits_in_the_header_after_retry(
     client, completed_run: RunRecord
 ) -> None:
-    """The download is a control on the run, so it sits with the controls.
+    """The download is a control on the run, so it sits with the controls,
+    and Retry -- done less often than reading -- after it, in the "..." menu.
 
     It used to live in the console bar, beside "Follow output". They are not
     the same kind of thing: one decided where output goes on screen, the
-    other takes the run away with you, next to Retry.
+    other takes the run away with you.
     """
     body = client.get(f"/runs/{completed_run.run_id}").text
 
@@ -1261,9 +1263,9 @@ def test_log_download_sits_in_the_header_after_retry(
 
     assert retry_at != -1, "Retry left the run header"
     assert download_at != -1, "the log download is not in the run header"
-    assert retry_at < download_at, (
-        "the log download renders before Retry, not to its right"
-    )
+    assert download_at < retry_at, "Retry renders before the log download"
+    menu = header[header.index('id="more-menu"') :]
+    assert 'class="run-header__retry"' in menu, "Retry is not in the more menu"
 
     # Where the console bar used to be: above the event list.
     console = body[body.index('id="console"') : body.index('id="console-events"')]
@@ -1439,12 +1441,12 @@ def test_a_live_run_offers_a_sound_toggle_that_is_on_by_default(
 
 
 def test_history_leads_the_bar_and_the_gear_ends_it(client) -> None:
-    """History is at the left of the bar, before the profile controls; the
+    """Runs is at the left of the bar, before the profile controls; the
     settings gear is the last thing in it, at the right."""
     for path in ("/", "/plan", "/runs/no-such-run"):
         body = client.get(path).text
         bar = body[body.index('<header class="app-bar">') : body.index("</header>")]
-        history_at = bar.find('aria-label="History"')
+        history_at = bar.find(">Runs</a>")
         assert history_at != -1, path
         assert history_at < bar.find('id="profile-select"'), path
         end = bar.find('<div class="app-bar__end">')

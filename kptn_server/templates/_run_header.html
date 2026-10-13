@@ -15,10 +15,9 @@
   page offering Stop for a process that is gone; the closing frame swaps this
   whole section for the one the server would render now.
 
-  The timestamps and the log path are deliberately not here. The status line
-  above already says where the run stands, the history lists when each run
-  happened, and the raw log is a download in the console bar rather than a
-  path to copy.
+  The log path is deliberately not here: the raw log is a download rather
+  than a path to copy. The run's tallies are not here either -- they are the
+  rail's filters.
 
   Two controls, and the difference between them is the point:
 
@@ -31,35 +30,33 @@
                     behind a disclosure *and* a typed confirmation -- never
                     one click away from Stop.
 #}
+{% from "_run_bar.html" import side_toggle, log_controls, download_log, more_menu %}
 <div id="run-header" class="run-bar">
+  {{ side_toggle() }}
+
   {#
     A breadcrumb rather than a title: the way back to the history, then which
     run this is -- its profile, or "No profile", a real and documented way to
     run a pipeline -- and the run's state beside it, still the replaceable
-    ``#run-status`` fragment the stream swaps by id.
+    ``#run-status`` fragment the stream swaps by id. Under it, when the run
+    started and how long it took.
 
     The link carries the profile the same way the app bar's nav does, so
     stepping back to the history and on to Plan keeps it. Built from the run
     row, not the request: this partial is rendered straight from Python for
     the stream's closing frame, which has no request to read.
   #}
-  <h2 class="run-bar__crumb">
-    <a href="{{ project_base }}/{% if run.profile %}?profile={{ run.profile | urlencode }}{% endif %}">Runs</a>
-    <span class="run-bar__sep" aria-hidden="true">/</span>
-    <strong>{% if run.profile %}{{ run.profile }}{% else %}No profile{% endif %}</strong>
-    {% include "_run_status.html" %}
-  </h2>
-
-  {#
-    The run's tallies, counted over the log's sections: tasks that ran, tasks
-    skipped as cached, and tasks that warned. app.js recounts them off the
-    sections by ``data-counter`` as a live run adds to them, which is why the
-    stream's closing frame for this region carries ``counts`` too.
-  #}
-  <div class="run-bar__counts">
-    <span><b data-counter="ran">{{ counts.ran }}</b> ran</span>
-    <span><b data-counter="skipped">{{ counts.skipped }}</b> skipped</span>
-    <span class="run-bar__warned"><b data-counter="warned">{{ counts.warned }}</b> with warnings</span>
+  <div class="run-bar__title">
+    <h2 class="run-bar__crumb">
+      <a href="{{ project_base }}/{% if run.profile %}?profile={{ run.profile | urlencode }}{% endif %}">Runs</a>
+      <span class="run-bar__sep" aria-hidden="true">/</span>
+      <strong>{% if run.profile %}{{ run.profile }}{% else %}No profile{% endif %}</strong>
+      {% include "_run_status.html" %}
+    </h2>
+    {%- set timing = run | run_timing %}
+    {%- if timing %}
+    <span class="run-bar__meta">{{ timing }}</span>
+    {%- endif %}
   </div>
 
   <div class="run-bar__actions">
@@ -69,26 +66,8 @@
     </form>
     {% endif %}
 
-    {#
-      Collapse all and View act on the log in this browser only, so they are
-      plain buttons app.js listens for. The view options are remembered per
-      reader.
-    #}
-    <button type="button" class="btn" data-fold-all>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l5 5 5-5M7 20l5-5 5 5"/></svg>
-      <span>Collapse all</span>
-    </button>
-    <div class="view-menu" data-view-menu>
-      <button type="button" class="btn" data-view-toggle aria-haspopup="true" aria-expanded="false" aria-controls="view-menu">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
-        View
-        <svg class="btn__caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-      </button>
-      <div class="view-menu__panel" id="view-menu" role="group" aria-label="View options" hidden>
-        <label class="view-opt view-opt--timestamps"><input type="checkbox" data-view-option="timestamps"><span class="view-opt__box" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>Show timestamps</label>
-        <label class="view-opt"><input type="checkbox" data-view-option="numbers" checked><span class="view-opt__box" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>Show line numbers</label>
-      </div>
-    </div>
+    {{ log_controls() }}
+    {{ download_log(project_base ~ "/runs/" ~ run.run_id ~ "/log") }}
 
     {#
       Run this again, with *this run's* profile -- not the app bar's
@@ -100,21 +79,15 @@
       form, which the bar's selector binds to by name. ``data-run-control``
       puts it in the group the active-run poll governs.
     #}
+    {% call more_menu() %}
     <form class="run-header__retry" method="post" action="{{ project_base }}/runs">
       <input type="hidden" name="profile" value="{{ run.profile or '' }}">
-      <button type="submit" class="btn" data-run-control {% if active_run %}disabled{% endif %}>
+      <button type="submit" class="menu-item" role="menuitem" data-run-control {% if active_run %}disabled{% endif %}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
         Retry run
       </button>
     </form>
-
-    {# A GET form, so the control is a real button that works with JavaScript off. #}
-    <form class="run-header__log" method="get" action="{{ project_base }}/runs/{{ run.run_id }}/log">
-      <button type="submit" class="btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5 5-5M12 4v12"/></svg>
-        Download log
-      </button>
-    </form>
+    {% endcall %}
   </div>
 
   {#

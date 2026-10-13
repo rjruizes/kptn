@@ -2,7 +2,8 @@
   How a task went, as one small icon -- shared by the rail and the log's
   section headings so the two always agree.
 
-  Colour and shape both carry the state (a check, a triangle, a cross...), and
+  Colour and shape both carry the state (a check, a triangle, a cross, a
+  database for a task the cache answered...), and
   the label says it in words for assistive technology and on hover.
 
   ``count`` turns a warned success into the heading's pill: the triangle and
@@ -25,8 +26,10 @@
   </span>
 {%- else -%}
   <span class="status-icon status-icon--{{ state }}" role="img" aria-label="{{ word }}" title="{{ word }}">
-    {%- if state in ("succeeded", "cached") -%}
+    {%- if state == "succeeded" -%}
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+    {%- elif state == "cached" -%}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
     {%- elif state == "failed" -%}
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>
     {%- elif state == "running" -%}

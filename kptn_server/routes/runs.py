@@ -91,11 +91,17 @@ from fastapi.templating import Jinja2Templates
 
 from kptn.inspection import OutlineEntry, pipeline_outline
 from kptn.runner.events import EventKind
-from kptn_server.console_layout import ConsoleLayout, Placement, Section, run_counts
+from kptn_server.console_layout import ConsoleLayout, Placement
 from kptn_server.context import ui
 from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
-from kptn_server.run_outline import RunOutline, build_outline, outline_frame, prime_outline
+from kptn_server.run_outline import (
+    RunOutline,
+    build_outline,
+    format_duration,
+    outline_frame,
+    prime_outline,
+)
 from kptn_server.run_files import RUN_FILE_SUFFIX, counters, read_span_text
 from kptn_server.routes.support import (
     error_response,
@@ -406,16 +412,7 @@ def _duration(event: StoredEvent) -> str:
     """A finished task's run time, in the units a reader thinks in."""
     if event.kind != EventKind.TASK_FINISHED.value:
         return ""
-    seconds = event.payload.get("duration_seconds")
-    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
-        return ""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    minutes, secs = divmod(int(seconds), 60)
-    if minutes < 60:
-        return f"{minutes}m {secs:02d}s"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}h {minutes:02d}m"
+    return format_duration(event.payload.get("duration_seconds"))
 
 
 def _line_count(text: str) -> int:
@@ -458,20 +455,6 @@ def build_console(
         if placement.finishes is not None:
             placement.finishes.outcome = row
     return top
-
-
-def console_sections(items: Sequence[Any]) -> list[Section]:
-    """The sections among *items*, as :func:`build_console` returns them."""
-    return [item for item in items if isinstance(item, Section)]
-
-
-def event_counts(stored: Iterable[StoredEvent]) -> dict[str, int]:
-    """The run bar's tallies, from a run's events: placed, never read."""
-    layout = ConsoleLayout()
-    sections: list[Section] = []
-    for event in stored:
-        sections.extend(layout.place(event).opens)
-    return run_counts(sections)
 
 
 def _isoformat(value: datetime) -> str:
@@ -604,11 +587,6 @@ def render_region(
             "is_terminal": record.status in TERMINAL_STATUSES,
             "force_finish_offered": looks_wedged(record),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
-            # The counters live in this region, and this frame replaces it
-            # whole. Without them the numbers would blank the instant a run
-            # went terminal under an open stream -- invisible on a reload,
-            # which is where a reader would go looking for the bug.
-            "counts": event_counts(store.events_after(record.run_id, 0)),
             "project_base": project_base,
         }
     else:
@@ -931,11 +909,10 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             "selected_profile": record.profile,
             "items": items,
             "outline": outline.views(),
-            "outline_units": outline.unit_count(),
+            # The rail's filters, which are the run's tallies too. app.js
+            # recounts them off the rail as a live run moves it.
+            "outline_counts": outline.filter_counts(),
             "outline_selected": outline.selected(),
-            # The run bar's tallies, from the sections the log shows. app.js
-            # recounts them off the page as a live run adds to them.
-            "counts": run_counts(console_sections(items)),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
             "force_finish_offered": looks_wedged(record),
             "is_terminal": record.status in TERMINAL_STATUSES,

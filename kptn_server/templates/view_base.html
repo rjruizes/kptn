@@ -19,16 +19,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ project.display_name }} - kptn{% endblock %}</title>
+  {% include "_theme.html" %}
   <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version('app.css') }}">
   {% include "_modules.html" %}
 </head>
 <body class="{% block body_class %}{% endblock %}" data-base="{{ base }}" data-project-base="{{ project_base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
-      {% include "_project_picker.html" %}
-      <nav class="app-bar__nav" aria-label="Main">
-        <a href="{{ project_base }}/" class="app-bar__home" aria-label="History" title="History" {% if nav_active == 'runs' %}aria-current="page"{% endif %}><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.5 11 12 3.8l8.5 7.2"/><path d="M6 9.3V20h12V9.3"/></svg></a>
-      </nav>
+      <div class="app-bar__start">
+        <a class="app-bar__brand" href="{{ base }}/" aria-label="kptn home">kptn</a>
+        {% include "_project_picker.html" %}
+        <nav class="app-bar__nav" aria-label="Main">
+          <a href="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% elif nav_active == 'run' %}aria-current="true"{% endif %}>Runs</a>
+        </nav>
+      </div>
       <div class="app-bar__end">
         {% include "_settings.html" %}
       </div>

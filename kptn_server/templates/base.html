@@ -12,7 +12,7 @@
     scripts         - extra page-local script tags
 
   The app bar holds the three controls that act on "the selected profile":
-  the selector, Run, and Plan. There is no separate run console page for
+  the selector, Run, and Plan, in the middle of the bar. There is no separate run console page for
   them to live on -- "/" is the run history -- so they are here, on every
   page, and a run can be started from wherever you are.
 
@@ -31,6 +31,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ project.display_name }} - kptn{% endblock %}</title>
+  {% include "_theme.html" %}
   <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version('app.css') }}">
   <script src="{{ base }}/static/htmx.min.js?v={{ asset_version('htmx.min.js') }}" defer></script>
   {% include "_modules.html" %}
@@ -39,17 +40,15 @@
   <header class="app-bar">
     <div class="app-bar__inner">
       {#
-        Which project, before anything that acts on it. Renders nothing on a
-        single-project server. Outside ``app-bar__controls`` on purpose: those
-        are disabled while a run holds the lock, and moving to another
-        project is never something a run should block.
-      #}
-      {% include "_project_picker.html" %}
-      {#
-        The profile travels with the reader. History leads the bar, at its
-        left, before the controls that act on a profile: a home icon, since
-        the run history is the UI's home page, named "History" for assistive
-        technology and on hover.
+        Three parts: where you are on the left, what acts on the selected
+        profile in the middle, and the reader's own settings on the right.
+
+        On the left, kptn itself -- home, the project chooser on a server
+        with several -- then which project, then the nav. The project
+        picker renders nothing on a single-project server, and sits outside
+        ``app-bar__controls`` on purpose: those are disabled while a run
+        holds the lock, and moving to another project is never something a
+        run should block.
 
         The links carry ``selected_profile``, which each route that accepts a
         ``?profile=`` passes after validating it -- the run page's comes from
@@ -66,31 +65,33 @@
         app.js rebuilds these hrefs from when the selector changes without a
         submit -- the one case no server render can know.
 
-        The history link carries it. The history does not filter by profile,
-        but it does carry one to the page after it, so a bare link here would
-        break the chain at the click -- one step before anything server-side
-        could help. Plan is not among them: it is a button in the controls
-        above, and takes the profile in its own hidden input.
-
-        The walkthrough is not linked here. ``/walkthrough`` still serves, and
-        the plan page still links into its per-task pages; it is only off the
-        bar.
+        Runs carries it. The history does not filter by profile, but it does
+        carry one to the page after it, so a bare link here would break the
+        chain at the click -- one step before anything server-side could
+        help. A run's own page counts as Runs. The walkthrough is not linked
+        here; ``/walkthrough`` still serves, and the plan page still links
+        into its per-task pages.
       #}
       {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
-      <nav class="app-bar__nav" aria-label="Main">
-        <a href="{{ project_base }}/{{ profile_query }}" data-profile-link="{{ project_base }}/" class="app-bar__home" aria-label="History" title="History" {% if nav_active == 'runs' %}aria-current="page"{% endif %}><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.5 11 12 3.8l8.5 7.2"/><path d="M6 9.3V20h12V9.3"/></svg></a>
-      </nav>
+      <div class="app-bar__start">
+        <a class="app-bar__brand" href="{{ base }}/" aria-label="kptn home">kptn</a>
+        {% include "_project_picker.html" %}
+        <nav class="app-bar__nav" aria-label="Main">
+          <a href="{{ project_base }}/{{ profile_query }}" data-profile-link="{{ project_base }}/"
+             {% if nav_active == 'runs' %}aria-current="page"{% elif nav_active == 'run' %}aria-current="true"{% endif %}>Runs</a>
+        </nav>
+      </div>
+
       {#
-        One selector, every page, always bound to the run form below. It marks
-        ``selected_profile``, which each route that accepts a ``?profile=``
-        passes after validating it -- so a profile carried here through the nav
-        arrives visible, and is the one Run and Plan will use.
-      #}
-      {#
+        One selector, every page, always bound to the run form beside it. It
+        marks ``selected_profile``, which each route that accepts a
+        ``?profile=`` passes after validating it -- so a profile carried here
+        through the nav arrives visible, and is the one Run and Plan will use.
+
         One run per project is the store's rule -- ``POST /runs`` answers 409
         to a second one -- so while a run holds the lock the three controls
-        that would start or re-aim one are disabled, and the notice below
-        says why and links to the run that is holding it.
+        that would start or re-aim one are disabled, and the notice beside
+        them says why and links to the run that is holding it.
 
         This is an affordance, not the guard: the route keeps its own check,
         because a lock can be taken between this render and the submit.
@@ -101,9 +102,9 @@
         choice out from under the reader every few seconds.
       #}
       <div class="app-bar__controls">
-        <div class="app-bar__profile">
-          <label for="profile-select">Profile</label>
-          <select id="profile-select" name="profile" form="run-form"
+        <label class="selbox app-bar__profile">
+          <span>Profile</span>
+          <select id="profile-select" name="profile" form="run-form" aria-label="Profile"
                   data-run-control {% if active_run %}disabled{% endif %}>
             {% block profile_options %}
             <option value="" {% if not selected_profile %}selected{% endif %}>(no profile)</option>
@@ -112,44 +113,47 @@
             {% endfor %}
             {% endblock %}
           </select>
-        </div>
-
-        {# The form the selector above belongs to. POST, because it starts work. #}
-        <form id="run-form" class="app-bar__run" method="post" action="{{ project_base }}/runs">
-          <button type="submit" class="button button--primary"
-                data-run-control {% if active_run %}disabled{% endif %}>Run</button>
-        </form>
+        </label>
 
         {#
-          Plan reads rather than starts, so it is a plain GET -- and a real
-          ``<form>`` with a real ``<button>``, not a link wearing a class, so
-          it inherits the same rules as every other button here.
+          Run and Plan, one group: two things to do with the profile beside
+          them. Run is the form the selector belongs to -- POST, because it
+          starts work. Plan reads rather than starts, so it is a plain GET,
+          and a real ``<form>`` with a real ``<button>``, not a link wearing a
+          class.
 
-          The select cannot drive two forms, so the profile rides in a hidden
-          input. Disabled when there is none, because a disabled control is not
-          submitted and the URL stays a clean ``/plan``; app.js keeps both the
-          value and the disabled flag in step with an unsubmitted selection.
+          The select cannot drive two forms, so Plan's profile rides in a
+          hidden input. Disabled when there is none, because a disabled
+          control is not submitted and the URL stays a clean ``/plan``;
+          app.js keeps both the value and the disabled flag in step with an
+          unsubmitted selection.
         #}
-        <form class="app-bar__plan" method="get" action="{{ project_base }}/plan">
-          <input type="hidden" name="profile" data-profile-input
-                 value="{{ selected_profile or '' }}"
-                 {% if not selected_profile %}disabled{% endif %}>
-          <button type="submit"
-                data-run-control {% if active_run %}disabled{% endif %}>Plan</button>
-        </form>
+        <div class="btngroup" role="group" aria-label="Run actions">
+          <form id="run-form" class="app-bar__run" method="post" action="{{ project_base }}/runs">
+            <button type="submit" class="btn btn--run"
+                  data-run-control {% if active_run %}disabled{% endif %}><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"/></svg>Run</button>
+          </form>
+          <form class="app-bar__plan" method="get" action="{{ project_base }}/plan">
+            <input type="hidden" name="profile" data-profile-input
+                   value="{{ selected_profile or '' }}"
+                   {% if not selected_profile %}disabled{% endif %}>
+            <button type="submit" class="btn"
+                  data-run-control {% if active_run %}disabled{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1.5"/><path d="M9 12h6M9 16h4"/></svg>Plan</button>
+          </form>
+        </div>
+
+        {#
+          Why the controls are refused, and the way out: the active run's page
+          is where Stop is.
+
+          Rendered on every page and hidden when there is none, rather than
+          built by app.js when it sees one -- the poller sets ``hidden`` and
+          the href and nothing else, so this markup has exactly one home.
+        #}
+        <a class="app-bar__busy" data-run-busy
+           href="{% if active_run %}{{ project_base }}/runs/{{ active_run.run_id }}{% endif %}"
+           {% if not active_run %}hidden{% endif %}>a run is in progress</a>
       </div>
-
-      {#
-        Why the controls are refused, and the way out: the active run's page
-        is where Stop is.
-
-        Rendered on every page and hidden when there is none, rather than
-        built by app.js when it sees one -- the poller sets ``hidden`` and
-        the href and nothing else, so this markup has exactly one home.
-      #}
-      <a class="app-bar__busy" data-run-busy
-         href="{% if active_run %}{{ project_base }}/runs/{{ active_run.run_id }}{% endif %}"
-         {% if not active_run %}hidden{% endif %}>a run is in progress</a>
 
       {# The settings gear, out at the right-hand end of the bar. #}
       <div class="app-bar__end">

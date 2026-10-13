@@ -593,9 +593,10 @@ def test_base_page_offers_the_shared_navigation(ui_project: Path) -> None:
     nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S).group(0)
     bar = _app_bar(body)
 
-    # History is a home icon, named for assistive technology.
-    assert 'class="app-bar__home" aria-label="History"' in nav
-    assert ">Run<" in bar and ">Plan<" in bar
+    # The run history is "Runs", and kptn itself leads the bar as home.
+    assert ">Runs</a>" in nav
+    assert 'class="app-bar__brand"' in bar
+    assert "Run</button>" in bar and "Plan</button>" in bar
 
 
 def test_base_page_shows_the_project_and_a_profile_selector(ui_project: Path) -> None:
@@ -798,7 +799,7 @@ def test_app_bar_run_button_posts_the_selected_profile(ui_project: Path) -> None
     assert '<form id="run-form"' in bar
     assert 'method="post"' in bar and 'action="/runs"' in bar
     assert 'form="run-form"' in bar, "the selector is not bound to the run form"
-    assert "button--primary" in bar, "Run is not the primary action"
+    assert "btn--run" in bar, "Run is not the primary action"
 
 
 def test_app_bar_plan_button_carries_the_selected_profile(ui_project: Path) -> None:
@@ -896,8 +897,9 @@ def _bar_controls(bar: str) -> dict[str, str]:
     """The three controls that act on the selected profile."""
     return {
         "select": _control_tag(bar, r"<select[^>]*id=\"profile-select\"[^>]*>"),
-        "run": _control_tag(bar, r"<button[^>]*>\s*Run\s*</button>"),
-        "plan": _control_tag(bar, r"<button[^>]*>\s*Plan\s*</button>"),
+        # The whole button, its icon included, and never across another one.
+        "run": _control_tag(bar, r"<button(?:(?!<button).)*?>\s*Run\s*</button>"),
+        "plan": _control_tag(bar, r"<button(?:(?!<button).)*?>\s*Plan\s*</button>"),
     }
 
 

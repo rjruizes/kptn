@@ -7,13 +7,14 @@
 
   The header is this page's own: the owner's ``_run_header.html`` is mostly
   controls (Retry, Stop, force-finish), and none of them apply here. What is
-  kept is what describes the run -- its profile, its status, its counts, and
-  the download. The counts carry ``data-counter`` so app.js recounts them as
-  events stream in, exactly as on the owner's page. The rail is built from
-  the run's own events: this page never loads the owner's pipeline.
+  kept is what describes the run -- its profile, its status, when it ran --
+  and what acts on this page alone: the rail, the log's view, the download
+  and the link. The rail is built from the run's own events: this page never
+  loads the owner's pipeline.
 #}
 {% extends "view_base.html" %}
 {% from "_outline.html" import outline_nav %}
+{% from "_run_bar.html" import side_toggle, log_controls, download_log, more_menu %}
 
 {% block title %}{{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
 
@@ -22,30 +23,24 @@
 {% block content %}
 <section class="run-page">
   <div id="run-header" class="run-bar">
-    <h2 class="run-bar__crumb">
-      <a href="{{ project_base }}/">Runs</a>
-      <span class="run-bar__sep" aria-hidden="true">/</span>
-      <strong>{% if run.profile %}{{ run.profile }}{% else %}No profile{% endif %}</strong>
-      {% include "_run_status.html" %}
-    </h2>
-
-    <div class="run-bar__counts">
-      <span><b data-counter="ran">{{ counts.ran }}</b> ran</span>
-      <span><b data-counter="skipped">{{ counts.skipped }}</b> skipped</span>
-      <span class="run-bar__warned"><b data-counter="warned">{{ counts.warned }}</b> with warnings</span>
+    {{ side_toggle() }}
+    <div class="run-bar__title">
+      <h2 class="run-bar__crumb">
+        <a href="{{ project_base }}/">Runs</a>
+        <span class="run-bar__sep" aria-hidden="true">/</span>
+        <strong>{% if run.profile %}{{ run.profile }}{% else %}No profile{% endif %}</strong>
+        {% include "_run_status.html" %}
+      </h2>
+      {%- set timing = run | run_timing %}
+      {%- if timing %}
+      <span class="run-bar__meta">{{ timing }}</span>
+      {%- endif %}
     </div>
 
     <div class="run-bar__actions">
-      <button type="button" class="btn" data-fold-all>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l5 5 5-5M7 20l5-5 5 5"/></svg>
-        <span>Collapse all</span>
-      </button>
-      <form class="run-header__log" method="get" action="{{ project_base }}/runs/{{ run.run_id }}/log">
-        <button type="submit" class="btn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5 5-5M12 4v12"/></svg>
-          Download log
-        </button>
-      </form>
+      {{ log_controls() }}
+      {{ download_log(project_base ~ "/runs/" ~ run.run_id ~ "/log") }}
+      {{ more_menu() }}
     </div>
 
     {% if not_reporting %}
@@ -64,7 +59,7 @@
     {% endif %}
   </div>
   <div class="run-body">
-    {{ outline_nav(outline, outline_selected, outline_units) }}
+    {{ outline_nav(outline, outline_selected, outline_counts) }}
     {% include "_console.html" %}
   </div>
 </section>

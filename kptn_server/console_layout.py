@@ -94,6 +94,8 @@ class Section:
     shown: int = 0
     warnings: int = 0
     open: bool = True
+    #: Why a cached section was skipped, for its heading.
+    reason: str = ""
 
     @property
     def body_id(self) -> str:
@@ -202,6 +204,9 @@ class ConsoleLayout:
         )
         if event.kind == EventKind.TASK_SKIPPED.value:
             section.status = "cached"
+            # A table is skipped when its files are as they were; a task,
+            # when nothing it reads or runs has changed.
+            section.reason = "source unchanged" if mode == "source_table" else "inputs unchanged"
         else:
             self._current = section
         return Placement(container=section, opens=(section,), hidden=True)
@@ -240,22 +245,10 @@ def _group_path(event: StoredEvent) -> tuple[str, ...]:
     return tuple(str(name) for name in groups if isinstance(name, str) and name)
 
 
-def run_counts(sections: list[Section]) -> dict[str, int]:
-    """The run bar's tallies, from its sections: what ran, what was skipped,
-    and how many sections warned. ``app.js`` recounts the same three from the
-    sections on the page as a live run adds to them."""
-    return {
-        "ran": sum(1 for section in sections if section.status != "cached"),
-        "skipped": sum(1 for section in sections if section.status == "cached"),
-        "warned": sum(1 for section in sections if section.warnings),
-    }
-
-
 __all__ = [
     "ROOT_ID",
     "STATE_WORDS",
     "ConsoleLayout",
     "Placement",
     "Section",
-    "run_counts",
 ]

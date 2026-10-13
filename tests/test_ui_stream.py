@@ -837,64 +837,50 @@ def test_a_succeeded_finish_is_said_by_the_heading_not_a_row(
 # -- counts and the log download in the run bar ----------------------------
 
 
-def test_counts_and_log_download_sit_in_the_run_bar(
+def test_the_log_download_sits_in_the_run_bar_and_the_counts_in_the_rail(
     app, store: RunStore, client
 ) -> None:
+    """The run's tallies are the rail's filters, outside the run bar -- so
+    the bar's closing frame, which replaces it whole, cannot blank them."""
     record = _start_run(store, app.state.project.root)
     store.append_event(record.run_id, "task_started", task_name="alpha")
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     body = client.get(f"/runs/{record.run_id}").text
-    header = body[body.index('id="run-header"') : body.index('id="console"')]
+    header = body[body.index('id="run-header"') : body.index('<nav class="rail"')]
+    rail = body[body.index('<nav class="rail"') : body.index('id="console"')]
 
-    assert 'data-counter="ran"' in header
     assert f'action="/runs/{record.run_id}/log"' in header
+    assert "data-counter" not in header
+    assert 'data-counter="ran"' in rail
 
 
-def test_the_closing_frame_still_carries_the_counts(
+def test_the_closing_frame_says_how_long_the_run_took(
     app, store: RunStore, client
 ) -> None:
-    """The header frame replaces ``#run-header`` whole.
-
-    The counts live in that region, so a context without them would blank
-    the numbers the moment a run went terminal under an open stream -- a
-    break that never shows on a reload, only mid-run.
-    """
+    """The header frame replaces ``#run-header`` whole, with the run row as
+    it is at the end: a run that finishes under an open page says how long
+    it took without a reload."""
     record = _start_run(store, app.state.project.root)
     store.append_event(record.run_id, "task_started", task_name="alpha")
-    store.append_event(record.run_id, "task_skipped", task_name="beta")
     store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     payloads = _data_payloads(client.get(f"/runs/{record.run_id}/events").text)
     frame = next(p for p in payloads if p.get("target") == "run-header")
 
-    assert 'data-counter="ran">1<' in frame["html"]
-    assert 'data-counter="skipped">1<' in frame["html"]
+    assert re.search(r'class="run-bar__meta">started [^<]* · took [^<]+<', frame["html"])
 
 
-def test_the_live_recount_reaches_counters_outside_the_console() -> None:
-    """``app.js`` recounts off the DOM; the counters are not inside the log.
-
-    Scoping the lookup to the log would leave them frozen at their
-    server-rendered values for the life of the connection.
-    """
-    source = (STATIC_DIR / "app.js").read_text()
-
-    assert 'console_.querySelectorAll("[data-counter]")' not in source
-    assert 'document.querySelectorAll("[data-counter]")' in source
-
-
-def test_the_counts_read_ran_skipped_and_warned(app, store: RunStore, client) -> None:
+def test_the_counts_read_all_ran_cached_and_warnings(app, store: RunStore, client) -> None:
     record = _start_run(store, app.state.project.root)
     store.append_event(record.run_id, "task_started", task_name="alpha")
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     run_page = client.get(f"/runs/{record.run_id}").text
 
-    assert "</b> ran<" in run_page
-    assert "</b> skipped<" in run_page
-    assert "</b> with warnings<" in run_page
+    for word in ("All", "Ran", "Cached", "Warnings"):
+        assert f"</b>{word}</button>" in run_page, word
 
 
 def test_timestamps_are_off_until_the_reader_turns_them_on(

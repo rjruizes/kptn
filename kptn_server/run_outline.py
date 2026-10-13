@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 
 from kptn.runner.events import EventKind
@@ -57,8 +58,13 @@ class _Entry(Protocol):
     bypassed: bool
 
 
-def _duration(seconds: object) -> str:
-    """A finished task's run time, in the units a reader thinks in."""
+#: States of a task that did not run in this run, which the rail's "Ran"
+#: filter leaves out. ``app.js`` holds the same list.
+_NOT_RAN = frozenset({"cached", "waiting", "not_run", "bypassed"})
+
+
+def format_duration(seconds: object) -> str:
+    """A run time, in the units a reader thinks in."""
     if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
         return ""
     if seconds < 60:
@@ -87,7 +93,7 @@ class _Progress:
         elif event.kind == EventKind.TASK_FINISHED.value:
             status = str(event.payload.get("status") or "succeeded")
             self.state = "cached" if status == "succeeded" and event.payload.get("cached") else status
-            self.duration = _duration(event.payload.get("duration_seconds"))
+            self.duration = format_duration(event.payload.get("duration_seconds"))
 
 
 @dataclass
@@ -297,9 +303,17 @@ class RunOutline:
     def views(self) -> list[dict[str, Any]]:
         return [self.view(step) for step in self.steps]
 
-    def unit_count(self) -> int:
-        """How many tasks the rail lists, for its heading."""
-        return sum(len(self._units(task)) for step in self.steps for task in step.tasks())
+    def filter_counts(self) -> dict[str, int]:
+        """The rail's filters, which double as the run's tallies: every task
+        it lists, those that ran, those cached, and those that warned.
+        ``app.js`` recounts the same four off the rail as a live run moves."""
+        units = [unit for step in self.steps for task in step.tasks() for unit in self._units(task)]
+        return {
+            "all": len(units),
+            "ran": sum(1 for unit in units if unit["state"] not in _NOT_RAN),
+            "cached": sum(1 for unit in units if unit["state"] == "cached"),
+            "warned": sum(1 for unit in units if unit["warned"]),
+        }
 
     def selected(self) -> str:
         """The task a finished run opens on: its first failure, if it had one."""
@@ -330,6 +344,24 @@ def _combine(states: list[str]) -> str:
         # Some done, some still to come.
         return "not_run" if "not_run" in unique else "running"
     return "not_run" if "not_run" in unique else "waiting"
+
+
+def run_timing(run: Any) -> str:
+    """The line under the run bar's title: when the run started, and how long
+    it took once it is over. In the server's own time zone, as the log's
+    clock is -- the UI is served from the developer's own machine."""
+    started: datetime | None = getattr(run, "started_at", None)
+    if started is None:
+        return ""
+    local = started.astimezone()
+    clock = local.strftime("%I:%M:%S %p").lstrip("0")
+    if local.date() != datetime.now().astimezone().date():
+        clock = f"{local:%b} {local.day}, {clock}"
+    parts = [f"started {clock}"]
+    finished: datetime | None = getattr(run, "finished_at", None)
+    if finished is not None:
+        parts.append(f"took {format_duration((finished - started).total_seconds())}")
+    return " · ".join(parts)
 
 
 def build_outline(
@@ -371,6 +403,8 @@ __all__ = [
     "OutlineStep",
     "RunOutline",
     "build_outline",
+    "format_duration",
     "outline_frame",
     "prime_outline",
+    "run_timing",
 ]

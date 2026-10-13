@@ -13,14 +13,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>kptn</title>
+  {% include "_theme.html" %}
   <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version('app.css') }}">
   {% include "_modules.html" %}
 </head>
 <body data-base="{{ base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
-      {% include "_project_picker.html" %}
-      <div class="app-bar__nav">
+      <div class="app-bar__start">
+        <a class="app-bar__brand" href="{{ base }}/" aria-label="kptn home">kptn</a>
+        {% include "_project_picker.html" %}
+      </div>
+      <div class="app-bar__end">
         {% include "_settings.html" %}
       </div>
     </div>

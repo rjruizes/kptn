@@ -67,6 +67,7 @@ from kptn_server.registry import ProjectEntry, ProjectRegistry
 from kptn_server.routes import register_routers, router as health_router
 from kptn_server.routes.support import error_response
 from kptn_server.routes.view import RequestView, router as view_router
+from kptn_server.run_outline import run_timing
 from kptn_server.run_store import RunStore
 from kptn_server.slot import ProjectSlot
 
@@ -247,6 +248,7 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     # typeshed narrows Jinja's globals to the default namespace's value types.
     templates.env.globals["kptn_version"] = kptn.__version__  # ty: ignore[invalid-assignment]
     templates.env.globals["asset_version"] = asset_version  # ty: ignore[invalid-assignment]
+    templates.env.filters["run_timing"] = run_timing
     return templates
 
 

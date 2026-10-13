@@ -158,7 +158,7 @@ def test_a_mapped_task_lists_its_items() -> None:
     [view] = outline.views()
     assert view["state"] == "succeeded"
     assert _units(view) == [("per_state[ny]", "succeeded"), ("per_state[ca]", "cached")]
-    assert outline.unit_count() == 2
+    assert outline.filter_counts() == {"all": 2, "ran": 1, "cached": 1, "warned": 0}
 
 
 def test_a_source_that_fails_before_any_table_is_listed_itself() -> None:
@@ -249,7 +249,9 @@ def test_the_run_page_has_the_rail_beside_the_log(app, client) -> None:
     assert 'data-units="s[t]"' in rail
     assert re.search(r'<div class="rail-label">s\s*</div>', rail)
     assert 'data-unit="s[t]"' in rail and ">1.0s<" in rail
-    assert "3 tasks" in rail  # setup_task, noisy_task, and the table
+    # setup_task, noisy_task, and the table; only the table ran.
+    assert '<b data-counter="all">3</b>' in rail
+    assert '<b data-counter="ran">1</b>' in rail
     # The log's section for the table, under its path.
     assert 'data-unit="s[t]"' in html[html.index('id="console"') :]
     assert '<span class="sec-h__path">bronze / s /</span>' in html

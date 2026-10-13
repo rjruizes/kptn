@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kptn_server.app import STATIC_DIR, create_app
-from kptn_server.console_layout import ROOT_ID, ConsoleLayout, Section, run_counts
+from kptn_server.console_layout import ROOT_ID, ConsoleLayout
 from kptn_server.run_store import STATUS_SUCCEEDED, RunRequest, RunStore, StoredEvent
 
 pytestmark = pytest.mark.ui_hygiene
@@ -112,11 +112,13 @@ def test_warnings_are_counted_on_their_section() -> None:
     assert section.warnings == 2
 
 
-def test_run_counts_tally_ran_skipped_and_warned() -> None:
-    ran = Section(id="a", key="a", status="succeeded", warnings=2)
-    running = Section(id="b", key="b")
-    cached = Section(id="c", key="c", status="cached")
-    assert run_counts([ran, running, cached]) == {"ran": 2, "skipped": 1, "warned": 1}
+def test_a_cached_section_says_why_it_was_skipped() -> None:
+    layout = ConsoleLayout()
+    layout.place(_event(1, "task_started", "asa24", mode="source"))
+    [table] = layout.place(_event(2, "task_skipped", "asa24[items]", mode="source_table")).opens
+    [task] = layout.place(_event(3, "task_skipped", "curate", mode="python")).opens
+    assert (table.state, table.reason) == ("cached", "source unchanged")
+    assert (task.state, task.reason) == ("cached", "inputs unchanged")
 
 
 def test_run_events_sit_at_the_top() -> None:
@@ -259,13 +261,16 @@ def test_a_section_with_nothing_to_show_offers_no_fold(app, store, client) -> No
         start = log.rindex("<section", 0, start)
         return log[start : log.index('class="sec__lines"', start)]
 
-    # The cached table and the quiet task print nothing: their headings say
-    # so, and are not folds.
-    for unit in ("s[a]", "after"):
-        quiet = heading(unit)
-        assert 'class="sec is-empty"' in quiet
-        assert 'tabindex="-1"' in quiet and "aria-expanded" not in quiet
-        assert ">no output<" in quiet
+    # The quiet task printed nothing: its heading says so, and is not a fold.
+    quiet = heading("after")
+    assert 'class="sec is-empty"' in quiet
+    assert 'tabindex="-1"' in quiet and "aria-expanded" not in quiet
+    assert ">no output<" in quiet
+    # The cached table never ran: its heading says why, and is no button.
+    cached = heading("s[a]")
+    assert 'class="sec is-empty"' in cached
+    assert "<button" not in cached and "aria-expanded" not in cached
+    assert "cached · source unchanged" in cached
     # The table that printed is a fold.
     loud = heading("s[b]")
     assert 'class="sec"' in loud and 'aria-expanded="true"' in loud
