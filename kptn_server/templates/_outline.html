@@ -32,15 +32,23 @@
   {%- if step.unit %}
   {{ rail_unit(step.unit) }}
   {%- else %}
-  <button type="button" class="rail-item rail-item--group" data-units="{{ step.units }}" data-state="{{ step.state }}">
-    {#- Layers for every stage, ingest or not: on this page the cylinder
-        means a task the cache answered (_status.html). #}
-    <svg class="rail-item__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4 4 8l8 4 8-4-8-4zM4 12l8 4 8-4M4 16l8 4 8-4"/></svg>
-    <span class="rail-item__name">{{ step.name }}</span>
-    {%- if step.count %}<span class="rail-item__count" data-count="{{ step.count }}">{{ step.count }}</span>{% endif %}
-    {{ status_icon(step.state, warned=step.warned) }}
-  </button>
-  <div class="rail-kids">
+  {#-
+    A group's heading is two buttons on one row: the caret folds the tasks
+    beneath it in the rail (app.js), and the rest takes the log to them.
+    Rendered open; app.js keeps a group the reader folded folded when the
+    stream redraws it.
+  #}
+  <div class="rail-group">
+    <button type="button" class="rail-caret" data-rail-fold aria-expanded="true" aria-controls="outline-{{ step.key }}-kids" aria-label="Tasks in {{ step.name }}" title="Collapse">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <button type="button" class="rail-item rail-item--group" data-units="{{ step.units }}" data-state="{{ step.state }}">
+      <span class="rail-item__name">{{ step.name }}</span>
+      {%- if step.count %}<span class="rail-item__count" data-count="{{ step.count }}">{{ step.count }}</span>{% endif %}
+      {{ status_icon(step.state, warned=step.warned) }}
+    </button>
+  </div>
+  <div class="rail-kids" id="outline-{{ step.key }}-kids">
     {%- for branch in step.branches %}
     {%- if branch.label %}
     <div class="rail-label">{{ branch.label }}

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from kptn_server.app import create_app
+from kptn_server.app import STATIC_DIR, create_app
 from kptn_server.run_outline import RunOutline, build_outline
 from kptn_server.run_store import STATUS_FAILED, STATUS_SUCCEEDED, RunRequest, StoredEvent
 
@@ -276,3 +276,23 @@ def test_the_stream_redraws_a_steps_part_of_the_rail(app, client) -> None:
     assert f'id="{last["id"]}"' in html
     assert 'data-unit="s[t]"' in last["html"] and ">1.0s<" in last["html"]
     assert all("outline" not in f for f in frames if f.get("kind") in ("run_started", "run_finished"))
+
+
+def test_a_group_folds_from_its_caret(app, client) -> None:
+    """A group's heading leads with a caret that folds its tasks in the
+    rail, beside -- not inside -- the button that takes the log to them."""
+    run_id = _run(app.state.store, app.state.project.root)
+    html = client.get(f"/runs/{run_id}").text
+    start = html.index('<nav class="rail"')
+    rail = html[start : html.index("</nav>", start)]
+
+    group = re.search(r'<div class="rail-group">(.*?)</div>', rail, re.S).group(1)
+    caret = re.search(r"<button[^>]*data-rail-fold[^>]*>", group).group(0)
+    assert 'aria-expanded="true"' in caret
+    key = re.search(r'aria-controls="(outline-\w+-kids)"', caret).group(1)
+    assert f'<div class="rail-kids" id="{key}">' in rail
+    assert group.index("data-rail-fold") < group.index("rail-item--group")
+    assert "rail-item__icon" not in rail
+
+    script = (STATIC_DIR / "app.js").read_text()
+    assert '[data-rail-fold]' in script and "folded[frame.outline.id]" in script

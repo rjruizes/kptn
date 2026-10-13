@@ -335,7 +335,11 @@ var RAIL_FILTERS = {
  *
  * The filters at its head narrow the rail and the log to the tasks that
  * ran, the cached ones, or those that warned, and are the run's tallies:
- * recounted here off the rail's tasks whenever a frame changes it. */
+ * recounted here off the rail's tasks whenever a frame changes it.
+ *
+ * A group's caret folds its tasks in the rail alone. The server renders
+ * every group open, so the groups this reader folded are kept here and
+ * folded again when the stream redraws them. */
 function initRail(console_, list) {
   var rail = document.getElementById("outline");
   if (!rail) {
@@ -343,6 +347,7 @@ function initRail(console_, list) {
   }
   var active = null; /* the clicked item's data-unit or data-units */
   var filter = "all";
+  var folded = {}; /* ids of the rail-steps this reader folded */
   var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function matches(item) {
@@ -422,6 +427,20 @@ function initRail(console_, list) {
       }
       /* The pressed one stays pressable, so the way back is never disabled. */
       buttons[b].disabled = count === 0 && buttons[b].getAttribute("data-filter") !== filter;
+    }
+  }
+
+  function setFolded(step, fold) {
+    step.classList.toggle("is-folded", fold);
+    var caret = step.querySelector("[data-rail-fold]");
+    if (caret) {
+      caret.setAttribute("aria-expanded", fold ? "false" : "true");
+      caret.title = fold ? "Expand" : "Collapse";
+    }
+    if (fold) {
+      folded[step.id] = true;
+    } else {
+      delete folded[step.id];
     }
   }
 
@@ -505,6 +524,12 @@ function initRail(console_, list) {
       setFilter(button.getAttribute("data-filter"));
       return;
     }
+    var caret = event.target.closest("[data-rail-fold]");
+    if (caret && rail.contains(caret)) {
+      var step = caret.closest(".rail-step");
+      setFolded(step, !step.classList.contains("is-folded"));
+      return;
+    }
     var item = event.target.closest(".rail-item");
     if (!item || !rail.contains(item)) {
       return;
@@ -549,6 +574,10 @@ function initRail(console_, list) {
       var part = document.getElementById(frame.outline.id);
       if (part) {
         part.replaceWith(fragmentFrom(frame.outline.html));
+        var redrawn = document.getElementById(frame.outline.id);
+        if (redrawn && folded[frame.outline.id]) {
+          setFolded(redrawn, true);
+        }
       }
       mark();
       applyFilter();

@@ -1207,15 +1207,58 @@ button:disabled {
   color: var(--ink-faint);
 }
 
+/* A group's heading: the caret sits where an icon would, over the row's
+ * own button, and folds the tasks beneath it. */
+.rail-group {
+  position: relative;
+}
+
 .rail-item--group {
+  padding-left: 34px;
   font-weight: 500;
 }
 
-.rail-item .rail-item__icon {
-  flex: none;
-  width: 15px;
-  height: 15px;
-  color: var(--ink-muted);
+.rail-caret {
+  position: absolute;
+  top: 50%;
+  left: 7px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-faint);
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.rail-caret:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.rail-caret:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.rail-caret svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.15s ease;
+}
+
+.rail-step.is-folded .rail-caret svg {
+  transform: rotate(-90deg);
+}
+
+.rail-step.is-folded > .rail-kids {
+  display: none;
 }
 
 .rail-item__count {
@@ -1593,7 +1636,8 @@ button.sec-h:hover {
     animation-timing-function: step-end;
   }
 
-  .sec-h__chev {
+  .sec-h__chev,
+  .rail-caret svg {
     transition: none;
   }
 
