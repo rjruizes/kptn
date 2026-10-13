@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kptn_server.app import STATIC_DIR, create_app
-from kptn_server.console_layout import ROOT_ID, ConsoleLayout
+from kptn_server.console_layout import ROOT_ID, ConsoleLayout, Section
 from kptn_server.run_store import STATUS_SUCCEEDED, RunRequest, RunStore, StoredEvent
 
 pytestmark = pytest.mark.ui_hygiene
@@ -274,3 +274,20 @@ def test_a_section_with_nothing_to_show_offers_no_fold(app, store, client) -> No
     # The table that printed is a fold.
     loud = heading("s[b]")
     assert 'class="sec"' in loud and 'aria-expanded="true"' in loud
+
+
+def test_a_folded_section_stays_findable(app) -> None:
+    """Folding hides a section's lines with ``hidden="until-found"``, not
+    ``display: none``, so the browser's find still searches them; app.js
+    opens the section when find reveals a match."""
+    module = app.state.templates.get_template("_event.html").module
+    folded = str(module.section_markup(Section(id="sec-1", key="a", label="a", shown=1), False, ""))
+    opened = str(module.section_markup(Section(id="sec-2", key="b", label="b", shown=1), True, ""))
+    assert 'class="sec__lines" id="sec-1-lines" hidden="until-found"' in folded
+    assert "hidden" not in opened[opened.index('class="sec__lines"') :]
+
+    script = (STATIC_DIR / "app.js").read_text()
+    assert 'body.setAttribute("hidden", "until-found")' in script
+    assert '"beforematch"' in script
+    css = (STATIC_DIR / "app.css").read_text()
+    assert ".sec.is-closed .sec__lines {\n  display: none;" not in css

@@ -92,7 +92,9 @@
     </span>
     {{ section_outcome(section, section.outcome) }}
   </{{ tag }}>
-  <div class="sec__lines" id="{{ section.body_id }}">{{ body }}</div>
+  {#- Folded with ``hidden="until-found"``, so the browser's find still
+      searches the lines and opens the section on a match. #}
+  <div class="sec__lines" id="{{ section.body_id }}"{% if not empty and not open %} hidden="until-found"{% endif %}>{{ body }}</div>
 </section>
 {%- endmacro %}
 

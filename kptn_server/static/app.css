@@ -1451,8 +1451,11 @@ button.sec-h:hover {
   transform: rotate(-90deg);
 }
 
-.sec.is-closed .sec__lines {
-  display: none;
+/* A folded section's lines are ``hidden="until-found"`` rather than
+ * ``display: none``: the browser's find still searches them, and opens the
+ * section on a match (app.js). The box stays, so drop its padding. */
+.sec__lines[hidden] {
+  padding: 0;
 }
 
 /* The path and the name wrap together, as one line of text, when the log

@@ -182,6 +182,18 @@ function setSectionOpen(section, open) {
   if (heading) {
     heading.setAttribute("aria-expanded", open ? "true" : "false");
   }
+  /* Folded lines stay searchable: the browser's find looks inside
+   * ``hidden="until-found"`` and, on a match, removes it and fires
+   * ``beforematch`` (initLogControls). A browser without it treats the
+   * value as plain ``hidden``, which is how folding worked before. */
+  var body = section.querySelector(".sec__lines");
+  if (body) {
+    if (open) {
+      body.removeAttribute("hidden");
+    } else {
+      body.setAttribute("hidden", "until-found");
+    }
+  }
 }
 
 function initLogControls(console_) {
@@ -246,6 +258,22 @@ function initLogControls(console_) {
       syncFoldAll();
     }
   });
+
+  /* The browser's find matched text in a folded section and is about to
+   * reveal it: open the section properly, so its heading and Collapse all
+   * agree with what is on screen. Captured, because the event is fired on
+   * the lines themselves. */
+  list.addEventListener(
+    "beforematch",
+    function (event) {
+      var section = event.target.closest && event.target.closest("[data-section]");
+      if (section) {
+        setSectionOpen(section, true);
+        syncFoldAll();
+      }
+    },
+    true
+  );
 
   document.addEventListener("click", function (event) {
     if (event.target.closest("[data-fold-all]")) {
