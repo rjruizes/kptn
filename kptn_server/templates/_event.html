@@ -66,10 +66,17 @@
   sticks to the top of the log while its lines scroll under it.
 #}
 {% macro section_markup(section, open, body) -%}
-<section class="sec{% if not open %} is-closed{% endif %}" id="{{ section.id }}"
+{%- set empty = not section.shown -%}
+<section class="sec{% if empty %} is-empty{% elif not open %} is-closed{% endif %}" id="{{ section.id }}"
     data-section data-unit="{{ section.key }}"
     data-state="{{ section.state }}" data-warnings="{{ section.warnings }}">
-  <button type="button" class="sec-h" aria-expanded="{{ 'true' if open else 'false' }}" aria-controls="{{ section.body_id }}">
+  {#-
+    A section with nothing to show is its heading alone -- which already says
+    "no output" -- and offers no fold: the heading stays a button, so a
+    streamed section can grow lines and become foldable, but it is out of
+    the tab order and app.js ignores it until then.
+  #}
+  <button type="button" class="sec-h"{% if empty %} tabindex="-1"{% else %} aria-expanded="{{ 'true' if open else 'false' }}"{% endif %} aria-controls="{{ section.body_id }}">
     <svg class="sec-h__chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
     {%- if section.path %}<span class="sec-h__path">{{ section.path | join(" / ") }} /</span>{% endif %}
     <span class="sec-h__name">{{ section.label }}</span>

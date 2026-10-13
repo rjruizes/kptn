@@ -451,8 +451,10 @@ def build_console(
             number += len(row["shown"])
         container = placement.container
         (container.children if container is not None else top).append(row)
-        if container is not None and event.kind == EventKind.LOG.value:
-            container.lines += row["lines"]
+        if container is not None:
+            container.shown += len(row["shown"])
+            if event.kind == EventKind.LOG.value:
+                container.lines += row["lines"]
         if placement.finishes is not None:
             placement.finishes.outcome = row
     return top

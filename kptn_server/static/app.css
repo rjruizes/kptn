@@ -1161,13 +1161,22 @@ button:disabled {
   padding: 4px 0 8px;
 }
 
-/* A finished section that printed nothing says so, rather than leaving a gap. */
-.sec:not([data-state="running"]) .sec__lines:not(:has(.ln))::before {
-  content: "No output";
-  display: block;
-  padding: 1px 24px 1px 42px;
-  color: var(--ink-faint);
-  font-family: var(--font-ui);
+/* A section with nothing to show is its heading alone, which says "no
+   output": no fold to offer, and no empty body under it. */
+.sec.is-empty .sec__lines {
+  display: none;
+}
+
+.sec.is-empty .sec-h {
+  cursor: default;
+}
+
+.sec.is-empty .sec-h:hover {
+  background: var(--surface);
+}
+
+.sec.is-empty .sec-h__chev {
+  visibility: hidden;
 }
 
 /* The section a rail click took the log to, lit for a moment. */

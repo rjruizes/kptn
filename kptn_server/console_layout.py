@@ -89,6 +89,9 @@ class Section:
     #: built for the page.
     children: list[Any] = field(default_factory=list)
     lines: int = 0
+    #: Lines the section shows, its output's and any failure's: none, and
+    #: there is nothing to fold.
+    shown: int = 0
     warnings: int = 0
     open: bool = True
 

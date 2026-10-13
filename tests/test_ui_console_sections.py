@@ -247,3 +247,25 @@ def test_app_js_follows_the_frames_placement() -> None:
 
     for field in ("frame.opens", "frame.parent", "frame.outcome", "frame.outline"):
         assert field in script, field
+
+
+def test_a_section_with_nothing_to_show_offers_no_fold(app, store, client) -> None:
+    run_id = _source_run(store, app.state.project.root)
+    log = client.get(f"/runs/{run_id}").text
+    log = log[log.index('id="console"') :]
+
+    def heading(unit: str) -> str:
+        start = log.index(f'data-unit="{unit}"')
+        start = log.rindex("<section", 0, start)
+        return log[start : log.index('class="sec__lines"', start)]
+
+    # The cached table and the quiet task print nothing: their headings say
+    # so, and are not folds.
+    for unit in ("s[a]", "after"):
+        quiet = heading(unit)
+        assert 'class="sec is-empty"' in quiet
+        assert 'tabindex="-1"' in quiet and "aria-expanded" not in quiet
+        assert ">no output<" in quiet
+    # The table that printed is a fold.
+    loud = heading("s[b]")
+    assert 'class="sec"' in loud and 'aria-expanded="true"' in loud

@@ -187,9 +187,22 @@ function refreshSection(section) {
   if (outcome) {
     section.setAttribute("data-state", outcome.getAttribute("data-state"));
   }
+  /* Its first line makes a section foldable, as the page renders it. */
+  var empty = !body || !body.querySelector(".ev:not([hidden]) .ln");
+  var heading = section.querySelector(".sec-h");
+  if (!empty && section.classList.contains("is-empty")) {
+    section.classList.remove("is-empty");
+    if (heading) {
+      heading.removeAttribute("tabindex");
+      heading.setAttribute("aria-expanded", section.classList.contains("is-closed") ? "false" : "true");
+    }
+  }
 }
 
 function setSectionOpen(section, open) {
+  if (section.classList.contains("is-empty")) {
+    return; /* nothing to fold */
+  }
   section.classList.toggle("is-closed", !open);
   var heading = section.querySelector(".sec-h");
   if (heading) {
@@ -207,7 +220,7 @@ function initLogControls(console_) {
   var VIEW_KEYS = { timestamps: "kptn.showTimestamps", numbers: "kptn.showLineNumbers" };
 
   function anyOpen() {
-    return list.querySelector("[data-section]:not(.is-closed)") !== null;
+    return list.querySelector("[data-section]:not(.is-closed):not(.is-empty)") !== null;
   }
 
   function syncFoldAll() {
