@@ -27,6 +27,9 @@
 
   <p class="muted">
     What <code>kptn run</code> would do next. Nothing on this page runs anything.
+    {#- A pipeline with a DuckDB database keeps its task state there; this
+        says which file -- or checkpoint -- the plan was read from. #}
+    {%- if state_note %} <span id="plan-state">{{ state_note }}</span>{% endif %}
   </p>
 
   {% if rows %}

@@ -201,3 +201,49 @@ def test_the_trash_takes_two_clicks() -> None:
     script = (STATIC_DIR / "app.js").read_text()
     assert "var ARM_MS = 3000;" in script
     assert 'slot.addEventListener("focusout", disarm)' in script
+
+
+# -- the plan page reads the same file ---------------------------------------
+
+
+def _actions(html: str) -> dict[str, str]:
+    return dict(re.findall(r'<tr data-task="([^"]+)" data-action="([^"]+)">', html))
+
+
+def test_the_plan_reads_task_state_from_the_pipelines_database(app, store, client, project) -> None:
+    _report(store, project)
+
+    html = client.get("/plan").text
+
+    assert _actions(html) == {"init_database": "SKIP", "report": "SKIP"}
+    assert "Task state read from pipeline.db." in html
+    assert not (project / ".kptn" / "kptn.db").exists(), "the plan made a state file"
+
+
+def test_without_the_database_the_plan_reads_the_checkpoint_it_restores(
+    app, store, client, project
+) -> None:
+    _report(store, project)
+    (project / "pipeline.db").unlink()
+
+    html = client.get("/plan").text
+
+    # The checkpoint was saved after init_database, before report ran.
+    assert _actions(html) == {"init_database": "SKIP", "report": "RUN"}
+    assert "the init_database checkpoint, which the next run restores" in html
+
+
+def test_before_any_run_reports_the_plan_says_why_nothing_is_cached(client) -> None:
+    html = client.get("/plan").text
+
+    assert set(_actions(html).values()) == {"RUN"}
+    assert "No run has reported where this pipeline&#39;s database is yet" in html
+
+
+def test_the_plan_waits_for_a_run_in_progress(app, store, client, project) -> None:
+    _report(store, project, finish=False)
+
+    response = client.get("/plan")
+
+    assert response.status_code == 409
+    assert "A run is in progress" in response.text

@@ -126,6 +126,42 @@ def next_start(
     )
 
 
+@dataclass(frozen=True)
+class StateSource:
+    """Where the next run reads its task state from, for the plan page."""
+
+    #: The file to read; ``None`` when there is none and nothing is cached.
+    path: Path | None
+    #: What the plan page tells the reader about it.
+    note: str
+
+
+def state_source(project: ProjectContext, store: RunStore, profile: str | None) -> StateSource:
+    """The file a pipeline with a DuckDB factory keeps its task state in --
+    the runner always uses the factory's database when there is one -- as
+    the next run would find it: the database, or the checkpoint it would
+    restore. Opened by the caller ``read_only``; raises :class:`duckdb.Error`
+    when the database cannot be read (another process has it open).
+    """
+    database = reported_database(store, project.root)
+    if database is None:
+        return StateSource(
+            None,
+            "No run has reported where this pipeline's database is yet, so nothing shows "
+            "as cached. Run the pipeline once and the plan reads its task state.",
+        )
+    resolved = resolve_graph(project, profile)
+    start = starting_point(topo_sort(resolved.graph), resolved.storage_key, resolved.pipeline, database)
+    if start.kind == "database":
+        return StateSource(database, f"Task state read from {database.name}.")
+    if start.kind == "checkpoint":
+        return StateSource(
+            start.path,
+            f"Task state read from the {start.task} checkpoint, which the next run restores.",
+        )
+    return StateSource(None, f"No {database.name} and no usable checkpoint: every task runs.")
+
+
 def delete_start(project: ProjectContext, store: RunStore, profile: str | None, name: str) -> bool:
     """Delete the file the next run starts from, if it is still *name*.
 
@@ -142,4 +178,12 @@ def delete_start(project: ProjectContext, store: RunStore, profile: str | None, 
     return True
 
 
-__all__ = ["NextStart", "delete_start", "next_start", "reported_database", "uses_duckdb"]
+__all__ = [
+    "NextStart",
+    "StateSource",
+    "delete_start",
+    "next_start",
+    "reported_database",
+    "state_source",
+    "uses_duckdb",
+]
