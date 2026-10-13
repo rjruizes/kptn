@@ -15,6 +15,8 @@ from kptn.change_detector.hasher import hash_task_source
 from kptn.graph.decorators import TaskSpec, _KptnCallable
 from kptn.graph.nodes import TaskNode
 from kptn.runner.checkpoint import checkpoint_path, find_restore_candidate
+from kptn.graph.nodes import AnyNode
+from kptn.runner.events import EventEmitter, EventKind, RunEvent
 from kptn.runner.executor import _try_restore
 
 
@@ -388,3 +390,44 @@ def test_try_restore_restores_when_db_was_deleted(tmp_path: Path) -> None:
     # The database should now be the restored backup.
     assert db_path.exists()
     assert db_path.stat().st_size == backup_size
+
+
+class _Collect:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def emit(self, event: RunEvent) -> None:
+        self.events.append(event)
+
+
+def test_try_restore_reports_the_database_it_opened(tmp_path: Path) -> None:
+    """A run says which database it starts from, so the UI can show it."""
+    db_path = tmp_path / "pipeline.ddb"
+    sink = _Collect()
+
+    _try_restore([], _make_resolved(), lambda: duckdb.connect(str(db_path)),
+                 EventEmitter("run", "default", None, sink))
+
+    [event] = sink.events
+    assert event.kind is EventKind.DATABASE
+    assert event.payload == {"path": str(db_path.resolve()), "checkpoint": None}
+
+
+def test_try_restore_reports_the_checkpoint_it_restored(tmp_path: Path) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    tasks_py = pkg / "tasks.py"
+    tasks_py.write_text("def big_task():\n    pass\n")
+    big_task_fn = _load_fn(tasks_py, "big_task")
+    ordered: list[AnyNode] = [_node("big_task", big_task_fn, duckdb_checkpoint=True)]
+    db_path = tmp_path / "pipeline.ddb"
+    cp = checkpoint_path(db_path, "big_task")
+    _make_backup_db(cp, {"big_task": hash_task_source(big_task_fn)}, "kptn", "default")
+    sink = _Collect()
+
+    _try_restore(ordered, _make_resolved(), lambda: duckdb.connect(str(db_path)),
+                 EventEmitter("run", "default", None, sink))
+
+    [event] = sink.events
+    assert event.payload == {"path": str(db_path.resolve()), "checkpoint": str(cp.resolve())}

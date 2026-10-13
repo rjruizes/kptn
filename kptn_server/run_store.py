@@ -1274,6 +1274,24 @@ class RunStore:
             self._release(conn)
         return [self._row_to_event(row) for row in rows]
 
+    def database_reported(self, run_id: str) -> str | None:
+        """The database file *run_id* reported opening, if it reported one.
+
+        A run reports it once, before its first task, so the scan in sequence
+        order stops a few rows in; ``json_extract`` reads the path without
+        parsing the payload here.
+        """
+        conn = self._acquire()
+        try:
+            row = conn.execute(
+                "SELECT json_extract(payload_json, '$.path') FROM run_events "
+                "WHERE run_id = ? AND kind = ? ORDER BY sequence LIMIT 1",
+                (run_id, EventKind.DATABASE.value),
+            ).fetchone()
+        finally:
+            self._release(conn)
+        return row[0] if row and isinstance(row[0], str) and row[0] else None
+
     def event_counts(self, run_id: str) -> dict[tuple[str, str | None], int]:
         """Per-(kind, task status) event tallies for *run_id*, aggregated in SQL.
 

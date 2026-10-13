@@ -300,11 +300,36 @@ def _try_restore(
     ordered: "list[AnyNode]",
     resolved: "ResolvedGraph",
     duckdb_factory: "Callable[[], Any]",
+    emitter: "EventEmitter | None" = None,
 ) -> None:
+    """Restore the pipeline database from a checkpoint if it was deleted.
+
+    Reports what the run starts from as a ``database`` event: the file, and
+    the checkpoint it was restored from when it was. That is how the UI
+    learns where a project's database and its checkpoints live -- it cannot
+    open the factory itself without taking the database's lock.
+    """
     conn = duckdb_factory()
     db_path = get_db_path(conn)
     if db_path is None:
         return
+    restored = _restore_into(conn, ordered, resolved, db_path)
+    if emitter is not None:
+        emitter.emit(
+            EventKind.DATABASE,
+            path=str(db_path.resolve()),
+            checkpoint=str(restored.resolve()) if restored is not None else None,
+        )
+
+
+def _restore_into(
+    conn: Any,
+    ordered: "list[AnyNode]",
+    resolved: "ResolvedGraph",
+    db_path: Path,
+) -> Path | None:
+    """Restore *db_path* from its furthest valid checkpoint, if it holds no
+    state for this pipeline; return the checkpoint restored, if any."""
     # Only restore if the database file was deleted (and recreated fresh by the factory).
     # A pre-existing database will have rows in _kptn.task_state for this pipeline;
     # a freshly created one will have an empty table (CREATE TABLE IF NOT EXISTS preserves
@@ -315,14 +340,15 @@ def _try_restore(
             (resolved.storage_key, resolved.pipeline),
         ).fetchone()[0]
         if row_count > 0:
-            return
+            return None
     except Exception:
         pass  # _kptn.task_state absent (separate state store); fall through to candidate check
     candidate = find_restore_candidate(ordered, resolved.storage_key, resolved.pipeline, db_path)
     if candidate is None:
-        return
+        return None
     restore_checkpoint(conn, candidate, db_path)
     logger.info("Restored checkpoint from %s — pipeline DB rewound", candidate)
+    return candidate
 
 
 def _execute_source(
@@ -463,7 +489,7 @@ def execute(
     dirty_names: set[str] = set()
 
     if duckdb_factory is not None and not no_cache and not force:
-        _try_restore(ordered, resolved, duckdb_factory)
+        _try_restore(ordered, resolved, duckdb_factory, emitter)
 
     for node in ordered:
         upstream_dirty = any(p.name in dirty_names for p in predecessors[node.name])

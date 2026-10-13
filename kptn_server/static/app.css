@@ -458,6 +458,110 @@ a.project-picker__item:focus-visible {
   background: var(--accent-bg);
 }
 
+/* What the next run starts from: the database and its checkpoints, a chip
+ * each, with a menu saying what the file does and offering Delete. */
+.dbfiles {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dbchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.dbchip:hover {
+  background: var(--surface-hover);
+}
+
+.dbchip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.dbchip svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--ink-muted);
+}
+
+.dbchip .btn__caret {
+  width: 13px;
+  height: 13px;
+  color: var(--ink-faint);
+}
+
+.dbchip__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A checkpoint is the quieter of the two: it matters only once the
+ * database is gone. */
+.dbchip--checkpoint {
+  color: var(--ink-muted);
+}
+
+.dbmenu {
+  left: 0;
+  right: auto;
+  width: 300px;
+  padding: 10px 6px 4px;
+  font-size: 13px;
+}
+
+.dbmenu__what,
+.dbmenu__meta {
+  margin: 0 6px 6px;
+}
+
+.dbmenu__meta {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.dbmenu__path {
+  display: block;
+  margin: 0 6px 8px;
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.dbmenu form {
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.menu-item--danger,
+.menu-item--danger svg {
+  color: var(--danger);
+}
+
+.menu-item--danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+
+.menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* Why the bar's controls are refused, sitting with them. No `display` of
  * its own: `hidden` has to keep working, and the poller toggles exactly
  * that. */
@@ -487,7 +591,9 @@ a.project-picker__item:focus-visible {
   .app-bar__nav,
   .project-picker-path__release,
   .project-picker-path__separator,
-  .selbox > span {
+  .selbox > span,
+  .dbchip__name,
+  .dbchip .btn__caret {
     display: none;
   }
 

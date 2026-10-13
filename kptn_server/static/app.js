@@ -75,7 +75,8 @@ var EVENT_KINDS = [
   "log",
   "warning",
   "task_finished",
-  "run_finished"
+  "run_finished",
+  "database"
 ];
 var STATUS_EVENT = "run_status";
 
@@ -709,6 +710,19 @@ function initMenus() {
   });
 }
 
+/* A form with ``data-confirm`` asks before it submits: deleting a database
+ * cannot be undone. Without JavaScript it submits unasked, which is the
+ * no-JS behaviour of every other control here. */
+function initConfirm() {
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    var question = form.getAttribute && form.getAttribute("data-confirm");
+    if (question && !window.confirm(question)) {
+      event.preventDefault();
+    }
+  });
+}
+
 /* "Copy link to run": the page's own address, without any fragment. The
  * clipboard API needs a secure context, which loopback is; a page reached
  * some other way falls back to a hidden field and the copy command. The
@@ -1291,6 +1305,7 @@ function initSettings() {
 initTheme();
 initSettings();
 initMenus();
+initConfirm();
 initCopyLink();
 initConsole();
 initProfileNav();

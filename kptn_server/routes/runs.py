@@ -93,6 +93,7 @@ from kptn.inspection import OutlineEntry, pipeline_outline
 from kptn.runner.events import EventKind
 from kptn_server.console_layout import ConsoleLayout, Placement
 from kptn_server.context import ui
+from kptn_server.database_files import delete_database_file
 from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
 from kptn_server.run_outline import (
@@ -401,6 +402,14 @@ def _display_lines(event: StoredEvent, text: str) -> list[str]:
         status = str(event.payload.get("status") or "finished")
         detail = str(event.payload.get("detail") or "")
         return [f"run {status}"] + (detail.splitlines() if detail else [])
+    if event.kind == EventKind.DATABASE.value:
+        # What the run started from: the file it continued, or the checkpoint
+        # it rewound the file to.
+        database = Path(str(event.payload.get("path") or "database")).name
+        checkpoint = event.payload.get("checkpoint")
+        if isinstance(checkpoint, str) and checkpoint:
+            return [f"restored {database} from checkpoint {Path(checkpoint).name}"]
+        return [f"database {database}"]
     if event.kind == EventKind.TASK_FINISHED.value:
         error = str(event.payload.get("error") or "")
         status = str(event.payload.get("status") or "finished")
@@ -1225,6 +1234,74 @@ def stop_run(request: Request, run_id: str):
     # ``..`` from ``<base>/runs/<id>/stop`` is ``<base>/runs/``; see the
     # comment on the create redirect for why this is relative.
     return RedirectResponse(url=f"../{run_id}", status_code=303)
+
+
+# -- POST /database/delete ------------------------------------------------
+
+
+@router.post("/database/delete")
+async def delete_database(request: Request):
+    """Delete the project's database or one of its checkpoints.
+
+    The app bar lists them (``kptn_server.database_files``), and this takes
+    a file's *name* only: it deletes the listed file of that name, so no
+    path the request names can reach anything else. Refused while a run is
+    in progress -- that run has the database open, and may be about to
+    restore or save a checkpoint -- the same rule the bar's controls follow.
+    """
+    current = ui(request)
+    if not _is_form_encoded(request):
+        return _error_response(
+            request,
+            status_code=415,
+            title="Unsupported request body",
+            detail="This takes an application/x-www-form-urlencoded body with a 'name' field.",
+        )
+    name = await _submitted_field(request, "name")
+    active = current.store.active_run(current.entry.root)
+    if active is not None:
+        return _error_response(
+            request,
+            status_code=409,
+            title="A run is in progress",
+            detail=(
+                "Its database cannot be deleted while a run has it open. Wait for "
+                "the run to finish, or stop it, and try again."
+            ),
+            run=active,
+            run_id=active.run_id,
+        )
+    try:
+        deleted = delete_database_file(current.store, current.entry.root, name or "")
+    except OSError as exc:
+        return _error_response(
+            request,
+            status_code=500,
+            title=f"{name} could not be deleted",
+            detail=str(exc),
+        )
+    if deleted is None:
+        return _error_response(
+            request,
+            status_code=404,
+            title="No such file",
+            detail=f"{name!r} is not this project's database or one of its checkpoints.",
+        )
+    return RedirectResponse(url=_back(request), status_code=303)
+
+
+def _back(request: Request) -> str:
+    """The page the reader deleted from, by the path its Referer names.
+
+    Only the path and query: the request is known to come from this
+    application's own pages (``kptn_server.origin``), and a path cannot
+    leave its origin. Without one, the run history.
+    """
+    parts = urllib.parse.urlsplit(request.headers.get("referer", ""))
+    if parts.path.startswith("/") and not parts.path.startswith("//"):
+        return parts.path + (f"?{parts.query}" if parts.query else "")
+    # ``..`` from ``<base>/database/delete`` is ``<base>/``.
+    return "../"
 
 
 # -- POST /runs/{run_id}/force-finish -------------------------------------

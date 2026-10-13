@@ -27,6 +27,9 @@ class EventKind(StrEnum):
     WARNING = "warning"
     TASK_FINISHED = "task_finished"
     RUN_FINISHED = "run_finished"
+    #: The pipeline's DuckDB file the run opened, and the checkpoint it was
+    #: restored from, if it was: what the run started from.
+    DATABASE = "database"
 
 
 @dataclass(frozen=True)
