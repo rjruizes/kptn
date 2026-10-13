@@ -1459,9 +1459,11 @@ button.sec-h:hover {
 }
 
 /* The path and the name wrap together, as one line of text, when the log
- * is narrow; the outcome at the right never wraps. */
+ * is narrow -- inside a long snake_case name too, which has no space to
+ * break at -- and the outcome at the right never wraps. */
 .sec-h__title {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .sec-h__path {
