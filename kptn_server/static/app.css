@@ -120,10 +120,9 @@ pre {
 
 /* -- app bar ------------------------------------------------------------ */
 
-/* Three parts across the full width of the window: where you are on the
- * left, the profile and what to do with it in the middle, settings on the
- * right. The outer columns share what is left equally, so the middle stays
- * centred whatever the left holds. */
+/* Across the full width of the window: where you are on the left -- kptn,
+ * the project, the profile, a path -- and the reader's settings at the
+ * right. */
 .app-bar {
   padding: 8px 16px;
   background: var(--chrome);
@@ -131,20 +130,24 @@ pre {
 }
 
 .app-bar__inner {
-  display: grid;
-  grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
+  display: flex;
   align-items: center;
   gap: 10px;
 }
 
 .app-bar__start {
   display: flex;
+  flex: 1;
   align-items: center;
+  gap: 6px;
   min-width: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
 
 .app-bar__brand {
-  margin-right: 14px;
+  margin-right: 8px;
   color: var(--ink-muted);
   font-family: var(--font-mono);
   font-size: 15px;
@@ -157,41 +160,24 @@ pre {
   color: var(--ink);
 }
 
-.app-bar__nav {
-  display: flex;
-  gap: 2px;
-}
-
-.app-bar__nav a {
-  padding: 5px 10px;
-  border-radius: var(--radius);
+.app-bar__project {
+  overflow: hidden;
   color: var(--ink-muted);
-  font-size: 13.5px;
-  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.app-bar__nav a:hover {
-  background: var(--surface-hover);
-  color: var(--ink);
-}
-
-.app-bar__nav a[aria-current] {
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-  color: var(--ink);
-  font-weight: 500;
+.app-bar__sep {
+  color: var(--ink-faint);
 }
 
 .app-bar__end {
   display: flex;
-  grid-column: 3;
-  justify-self: end;
   align-items: center;
   gap: 2px;
 }
 
 .app-bar__brand:focus-visible,
-.app-bar__nav a:focus-visible,
 .iconbtn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -243,7 +229,6 @@ pre {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  margin-right: 14px;
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--ink-faint);
@@ -359,21 +344,7 @@ a.project-picker__item:focus-visible {
   margin: 6px 10px;
 }
 
-/* -- the bar's controls --------------------------------------------------- */
-
-/* Profile, then Run and Plan as one group: two things to do with it. The
- * forms are layout-neutral wrappers -- each exists only to give its button
- * a method and an action. */
-.app-bar__controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.app-bar__controls form {
-  display: flex;
-  margin: 0;
-}
+/* -- controls in the app bar and the sidebar ------------------------------ */
 
 /* A select in a bordered box with its label inside, the chevron drawn by
  * the stylesheet so it is the same in every browser. */
@@ -419,6 +390,15 @@ a.project-picker__item:focus-visible {
   opacity: 0.55;
 }
 
+/* The profile, as the last segment of the app bar's path. */
+.selbox--path {
+  padding-left: 8px;
+}
+
+.selbox--path select {
+  font-family: var(--font-mono);
+}
+
 .btngroup {
   display: inline-flex;
 }
@@ -427,11 +407,11 @@ a.project-picker__item:focus-visible {
   border-radius: 0;
 }
 
-.btngroup > :first-child .btn {
+.btngroup > .btn:first-child {
   border-radius: var(--radius) 0 0 var(--radius);
 }
 
-.btngroup > :last-child .btn {
+.btngroup > .btn:last-child {
   margin-left: -1px;
   border-radius: 0 var(--radius) var(--radius) 0;
 }
@@ -458,45 +438,15 @@ a.project-picker__item:focus-visible {
   background: var(--accent-bg);
 }
 
-/* Why the bar's controls are refused, sitting with them. No `display` of
- * its own: `hidden` has to keep working, and the poller toggles exactly
- * that. */
-.app-bar__busy {
-  color: var(--ink-muted);
-  font-size: 13px;
-  text-decoration: none;
-  white-space: nowrap;
-  border-bottom: 1px dotted currentColor;
-}
-
-.app-bar__busy:hover {
-  color: var(--ink);
-}
-
 @media (max-width: 760px) {
   .app-bar {
     padding: 8px 10px;
   }
 
-  .app-bar__inner {
-    grid-template-columns: auto 1fr auto;
-    gap: 6px;
-  }
-
   .app-bar__brand,
-  .app-bar__nav,
   .project-picker-path__release,
-  .project-picker-path__separator,
-  .selbox > span {
+  .project-picker-path__separator {
     display: none;
-  }
-
-  .project-picker-path {
-    margin-right: 0;
-  }
-
-  .app-bar__controls {
-    justify-self: center;
   }
 }
 
@@ -808,15 +758,16 @@ button:disabled {
   padding: 0;
 }
 
+/* The main area beside the sidebar: a bar, then the log or the page. */
 .run-page {
   display: grid;
-  flex: 1;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
+  min-height: 0;
   background: var(--surface);
 }
 
-/* Inline, because it renders inside the run bar's breadcrumb. On the 409 page
+/* Inline, because it sits beside the run's id in the Run pane. On the 409 page
  * it is the whole body and stands on its own line, which an inline-flex box
  * does just as well. */
 .run-status {
@@ -852,6 +803,38 @@ button:disabled {
 /* Pulled back so the icon, not its hover square, lines up with the edge. */
 .run-bar__side {
   margin-left: -6px;
+}
+
+/* Which run, beside the sidebar's button -- shown only when the sidebar,
+ * whose Run pane says it otherwise, is hidden. */
+.run-bar__ctx {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.run-bar__ctx strong {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.no-side .run-bar__ctx {
+  display: flex;
+}
+
+/* The main area of a page with no log: the plan, or no run yet. */
+.page-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--content-gutter);
+}
+
+.page-empty {
+  margin: 40px 12px;
+  color: var(--ink-faint);
+  font-size: 13px;
+  text-align: center;
 }
 
 .run-bar__title {
@@ -1063,15 +1046,17 @@ button:disabled {
   outline-offset: 2px;
 }
 
-/* -- the rail and the log -- */
+/* -- the workspace: the sidebar and the main area -- */
 
 .run-body {
   display: grid;
+  flex: 1;
   grid-template-columns: 300px minmax(0, 1fr);
+  min-width: 0;
   min-height: 0;
 }
 
-/* The rail hidden from the run bar: the log takes the whole width. */
+/* The sidebar hidden from the bar: the main area takes the whole width. */
 .run-body.no-side {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -1080,7 +1065,8 @@ button:disabled {
   display: none;
 }
 
-/* The sidebar: the rail scrolls, and the state card stays at its foot. */
+/* Three panes down the sidebar -- Next run, Runs, Run -- each folding by
+ * its header, the open ones sharing the height and scrolling on their own. */
 .side {
   display: flex;
   flex-direction: column;
@@ -1089,36 +1075,96 @@ button:disabled {
   background: var(--surface-sunken);
 }
 
-.rail {
-  flex: 1;
+.pane {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  overflow: auto;
-  padding: 12px 10px 24px;
+  border-bottom: 1px solid var(--line);
 }
 
-/* -- the state card: what the next run starts from (_next_start.html) -- */
-
-.state {
-  padding: 10px;
-  border-top: 1px solid var(--line);
+.pane--runs {
+  flex: 1;
 }
 
-.state[hidden] {
+.pane--run {
+  flex: 1.6;
+}
+
+.pane.is-closed {
+  flex: none;
+}
+
+.pane.is-closed > .pane-b {
   display: none;
 }
 
-.statecard {
+.pane-h {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 8px 10px 12px;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pane-h:hover {
+  background: var(--surface-hover);
+}
+
+.pane-h:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pane-h__chev {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--ink-faint);
+  transition: transform 0.15s ease;
+}
+
+.pane.is-closed .pane-h__chev {
+  transform: rotate(-90deg);
+}
+
+.pane-h__n {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.pane-b {
+  min-height: 0;
+  overflow: auto;
+}
+
+.pane-empty {
+  margin: 12px;
+  color: var(--ink-faint);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* -- Next run: what it starts from (_next_start.html), then Run and Plan -- */
+
+.next {
+  margin: 2px 10px 12px;
+  padding: 10px 10px 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
 }
 
 /* Lit for a moment when a delete hands the card to what comes next. */
-.statecard.swap {
+.next.swap {
   animation: st-swap 1.6s ease-out;
 }
 
@@ -1131,6 +1177,63 @@ button:disabled {
   100% {
     background: var(--surface);
   }
+}
+
+.state[hidden] {
+  display: none;
+}
+
+.state + .next__go {
+  margin-top: 10px;
+}
+
+.state[hidden] + .next__go {
+  margin-top: 0;
+}
+
+.next__go {
+  display: flex;
+  margin: 0;
+}
+
+.next__go .btn {
+  flex: 1;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  gap: 5px;
+  font-size: 12.5px;
+  line-height: 1;
+}
+
+.next__go .btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Why Run and Plan are refused, and the way to the run that holds the
+ * lock. No `display` of its own: the poller toggles `hidden`. */
+.next__busy {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+
+.next__busy[hidden] {
+  display: none;
+}
+
+.next__busy:hover {
+  color: var(--ink);
+}
+
+.statecard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .st-text {
@@ -1241,12 +1344,119 @@ button:disabled {
   display: inline;
 }
 
+/* -- Runs: the profile's runs, by day (_run_list.html) -- */
+
+.runlist__day {
+  margin: 8px 14px 2px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.runlist__runs {
+  margin: 0;
+  padding: 0 6px;
+  list-style: none;
+}
+
+.runlist__runs:last-child {
+  padding-bottom: 16px;
+}
+
+.runrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--ink);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.runrow:hover {
+  background: var(--surface-hover);
+}
+
+.runrow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.runrow[aria-current="page"] {
+  background: var(--accent-bg);
+}
+
+.runrow[aria-current="page"] .runrow__id {
+  color: var(--accent);
+}
+
+.runrow__id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runrow__profile,
+.runrow__stale {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runrow__stale {
+  color: var(--warning);
+  font-family: var(--font-ui);
+}
+
+.runrow__t {
+  color: var(--ink-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* -- Run: the run on the page (_run_info.html), its filters and tasks -- */
+
+.rinfo {
+  padding: 2px 12px 10px;
+}
+
+.rinfo__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.rinfo__id {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.rinfo__meta {
+  color: var(--ink-faint);
+  font-size: 12.5px;
+}
+
+.rail {
+  padding: 0 8px 20px;
+}
+
 /* The filters, which are the run's tallies too: a count over a word. */
 .rail-filters {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
-  margin-bottom: 12px;
+  gap: 3px;
+  margin-bottom: 8px;
 }
 
 .rail-filter {
@@ -1268,8 +1478,12 @@ button:disabled {
   font-weight: 600;
 }
 
-.rail-filter[data-filter="warned"]:not(:disabled) b {
+.rail-filter--warn b {
   color: var(--warning);
+}
+
+.rail-filter--err b {
+  color: var(--danger);
 }
 
 .rail-filter:hover {
@@ -1613,7 +1827,7 @@ button:disabled {
  * stream adds is filtered the moment it lands. */
 .console[data-show="ran"] .sec[data-state="cached"],
 .console[data-show="cached"] .sec:not([data-state="cached"]),
-.console[data-show="warned"] .sec[data-warnings="0"] {
+.console[data-show="issues"] .sec[data-warnings="0"]:not([data-state="failed"]):not([data-state="interrupted"]) {
   display: none;
 }
 
@@ -1797,7 +2011,8 @@ button.sec-h:hover {
   }
 
   .sec-h__chev,
-  .rail-caret svg {
+  .rail-caret svg,
+  .pane-h__chev {
     transition: none;
   }
 
@@ -1805,7 +2020,7 @@ button.sec-h:hover {
     animation: none;
   }
 
-  .statecard.swap {
+  .next.swap {
     animation-timing-function: step-end;
   }
 }
@@ -1824,13 +2039,27 @@ button.sec-h:hover {
     grid-template-rows: auto minmax(0, 1fr);
   }
 
+  /* Above the log, the sidebar scrolls as one column rather than sharing
+   * its little height out between the panes; the Runs list keeps a few
+   * rows' height of its own. */
   .side {
+    max-height: 45vh;
+    overflow: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
 
-  .rail {
-    max-height: 30vh;
+  .pane {
+    flex: none;
+  }
+
+  .pane-b {
+    overflow: visible;
+  }
+
+  .pane--runs .pane-b {
+    max-height: 170px;
+    overflow: auto;
   }
 
   .ln {

@@ -36,10 +36,10 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from kptn.runner.events import EventKind
@@ -55,6 +55,7 @@ from kptn_server.routes.runs import (
     render_event,
 )
 from kptn_server.routes.support import error_response
+from kptn_server.run_list import run_days
 from kptn_server.run_outline import RunOutline, build_outline, outline_frame
 from kptn_server.run_files import (
     RUN_FILE_SUFFIX,
@@ -190,23 +191,51 @@ def _no_such_run(request: Request, run_id: str) -> HTMLResponse:
 
 
 @router.get("/", response_class=HTMLResponse)
-def view_history(request: Request) -> HTMLResponse:
-    """The owner's run history, as their last publish described it."""
+def view_landing(request: Request) -> HTMLResponse:
+    """The owner's newest run -- whose page lists the rest in its sidebar --
+    or, with none published, the page that says so. Redirected to
+    relatively, as the owner's own landing page is."""
     current = view(request)
     runs, problem = _load_index(current.entry)
+    if runs:
+        return RedirectResponse(url=f"runs/{runs[0].run_id}", status_code=303)
     return current.templates.TemplateResponse(
         request,
-        "view_runs.html",
+        "landing.html",
         {
             "project": current.entry,
             "project_base": current.project_base,
-            "nav_active": "runs",
-            "runs": [
-                {"run": run, "counters": run.counters, "not_reporting": not_reporting(run)}
-                for run in runs
-            ],
+            "read_only": True,
+            "runs_pane": _runs_pane(current, runs),
             "problem": problem,
         },
+    )
+
+
+def _runs_pane(current: RequestView, runs: list[IndexedRun], run_id: str | None = None) -> dict[str, Any]:
+    """The sidebar's Runs pane: every run the owner published, of every
+    profile -- this page has no profile selector -- each row naming its own."""
+    query = f"?current={run_id}" if run_id else ""
+    return {
+        "days": run_days(
+            runs, lambda run: run.counters.get("warnings", 0), not_reporting=not_reporting
+        ),
+        "count": len(runs),
+        "current": run_id,
+        "url": f"{current.project_base}/run-list{query}",
+        "empty": "No runs published yet.",
+        "profiles": True,
+    }
+
+
+@router.get("/run-list", response_class=HTMLResponse)
+def view_run_list(request: Request, current: str | None = None) -> HTMLResponse:
+    """The Runs pane's list, as a fragment, read from the index again."""
+    shown = view(request)
+    runs, _ = _load_index(shown.entry)
+    run_id = current if current and RUN_ID_RE.fullmatch(current) else None
+    return shown.templates.TemplateResponse(
+        request, "_run_list.html", {"runs_pane": _runs_pane(shown, runs, run_id)}
     )
 
 
@@ -227,7 +256,9 @@ def view_run(request: Request, run_id: str) -> HTMLResponse:
             "project": current.entry,
             "project_base": current.project_base,
             "nav_active": "run",
+            "read_only": True,
             "run": run,
+            "runs_pane": _runs_pane(current, _load_index(current.entry)[0], run.run_id),
             "items": build_console(stored, path),
             # From the run's events alone: this page never loads the owner's
             # pipeline, so steps that have not run are not listed.

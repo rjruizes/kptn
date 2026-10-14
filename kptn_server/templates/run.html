@@ -1,41 +1,32 @@
 {#
-  One run's page: the run bar, then the rail and the log side by side, the
-  page as tall as the window and each pane scrolling on its own.
+  One run's page: the workspace (workspace.html) with the run in its Run
+  pane and its log in the main area.
 
-  ``_run_header``   the run row's own state -- status, counts, Stop,
-                    force-finish -- and the log's controls.
-  ``_outline``      the rail: the pipeline as a tree of tasks, with the run
-                    on it; clicking a task takes the log to it.
+  ``_run_info``     the run's id, status and timing, at the head of the pane.
+  ``_outline``      its tallies as filters, and the pipeline as a tree of
+                    tasks with the run on it; clicking a task takes the log
+                    to it.
+  ``_run_header``   the bar over the log: Stop, the log's controls, and
+                    force-finish.
   ``_console``      the log, which ``app.js`` appends to live.
 
-  The header is rendered from the run row, so a run that ends under an open
-  stream leaves it showing what was true when the page was rendered. It is a
-  partial rather than markup inlined here precisely so the stream's closing
-  frame can re-render it: one definition, two surfaces, and no way for the
-  fragment to drift from the page.
+  The run info and the bar are rendered from the run row, so a run that
+  ends under an open stream leaves them showing what was true when the page
+  was rendered. They are partials rather than markup inlined here precisely
+  so the stream's closing frame can re-render them: one definition, two
+  surfaces, and no way for the fragment to drift from the page.
 #}
-{% extends "base.html" %}
+{% extends "workspace.html" %}
 {% from "_outline.html" import outline_nav %}
 
 {% block title %}{{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
 
-{% block body_class %}page--run{% endblock %}
+{% block run_pane %}
+{% include "_run_info.html" %}
+{{ outline_nav(outline, outline_selected, outline_counts) }}
+{% endblock %}
 
-{% block content %}
-<section class="run-page">
-  {% include "_run_header.html" %}
-  <div class="run-body">
-    {#
-      The sidebar: the rail, and under it the state card -- what the next
-      run starts from (_next_start.html). app.js fetches the card once the
-      page is up, so reading the project's files never holds up the page;
-      the slot stays hidden until there is a card to show.
-    #}
-    <aside class="side" id="side">
-      {{ outline_nav(outline, outline_selected, outline_counts) }}
-      <div class="state" id="next-start" data-url="{{ project_base }}/next-start" aria-live="polite" hidden></div>
-    </aside>
-    {% include "_console.html" %}
-  </div>
-</section>
+{% block main %}
+{% include "_run_header.html" %}
+{% include "_console.html" %}
 {% endblock %}

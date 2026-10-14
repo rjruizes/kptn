@@ -270,7 +270,7 @@ def test_static_assets_use_the_proxy_prefix_not_the_project_prefix(
 
 
 def test_the_busy_link_carries_the_prefix(prefixed_client: TestClient) -> None:
-    """`app-bar__busy` was emitted root-absolute and escaped the proxy.
+    """The busy link was emitted root-absolute and escaped the proxy.
 
     The link only has an ``href`` while a run is in progress -- with no
     active run it renders ``href=""``, and an assertion about the *absence*
@@ -288,7 +288,7 @@ def test_the_busy_link_carries_the_prefix(prefixed_client: TestClient) -> None:
     finally:
         prefixed_client.post(f"/runs/{run_id}/stop", follow_redirects=False)
 
-    assert 'class="app-bar__busy"' in body
+    assert 'class="next__busy"' in body
     assert f'href="{PREFIX}/runs/{run_id}"' in body
     assert f'href="/runs/{run_id}"' not in body
 

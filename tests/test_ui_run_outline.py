@@ -158,7 +158,7 @@ def test_a_mapped_task_lists_its_items() -> None:
     [view] = outline.views()
     assert view["state"] == "succeeded"
     assert _units(view) == [("per_state[ny]", "succeeded"), ("per_state[ca]", "cached")]
-    assert outline.filter_counts() == {"all": 2, "ran": 1, "cached": 1, "warned": 0}
+    assert outline.filter_counts() == {"all": 2, "ran": 1, "cached": 1, "issues": 0, "failed": 0}
 
 
 def test_a_source_that_fails_before_any_table_is_listed_itself() -> None:

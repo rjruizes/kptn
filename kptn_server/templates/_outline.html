@@ -12,7 +12,8 @@
   failure, if it had one.
 
   The filters at its head are the run's tallies too: every task, those that
-  ran, those the cache answered, and those that warned. Pressing one narrows
+  ran, those the cache answered, and those with an issue -- failed, cut
+  short, never run, or warned. Pressing one narrows
   the rail and the log to those tasks (app.js), by each task's
   ``data-state`` and ``data-warned``; app.js recounts them as a live run
   moves the rail.
@@ -70,10 +71,13 @@
 </div>
 {%- endmacro %}
 
+{#- Issues are red when a task failed or was cut short, amber when they are
+    only warnings and tasks left unrun; app.js keeps the class in step. #}
 {% macro rail_filters(counts) -%}
 <div class="rail-filters" role="group" aria-label="Filter tasks">
-  {%- for key, label in (("all", "All"), ("ran", "Ran"), ("cached", "Cached"), ("warned", "Warnings")) %}
-  <button type="button" class="rail-filter" data-filter="{{ key }}" aria-pressed="{{ 'true' if key == 'all' else 'false' }}"{% if not counts[key] %} disabled{% endif %}><b data-counter="{{ key }}">{{ counts[key] }}</b>{{ label }}</button>
+  {%- for key, label in (("all", "All"), ("ran", "Ran"), ("cached", "Cached"), ("issues", "Issues")) %}
+  <button type="button" class="rail-filter
+    {%- if key == 'issues' and counts.issues %} rail-filter--{{ 'err' if counts.failed else 'warn' }}{% endif %}" data-filter="{{ key }}" aria-pressed="{{ 'true' if key == 'all' else 'false' }}"{% if not counts[key] %} disabled{% endif %}><b data-counter="{{ key }}">{{ counts[key] }}</b>{{ label }}</button>
   {%- endfor %}
 </div>
 {%- endmacro %}

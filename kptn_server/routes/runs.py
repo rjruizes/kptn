@@ -47,8 +47,9 @@ pipeline output is untrusted text and must never reach the DOM as live markup.
 
 Four more endpoints complete the surface.
 
-``GET /runs``
-    The project's run history, newest first, straight out of the store.
+``GET /`` and ``GET /runs``
+    The newest run of the chosen profile -- the run page is where a project's
+    runs are listed, in its sidebar -- or, with none, the page to start one.
 
 ``GET /runs/{run_id}/log``
     The run's log, rendered from its file the way the CLI printed it. **The path comes from the run row and from nowhere
@@ -104,6 +105,7 @@ from kptn_server.run_outline import (
     prime_outline,
 )
 from kptn_server.run_files import RUN_FILE_SUFFIX, counters, read_span_text
+from kptn_server.run_list import run_days
 from kptn_server.routes.support import (
     error_response,
     is_fragment_request,
@@ -123,7 +125,6 @@ from kptn_server.run_store import (
     RunStore,
     RunStoreError,
     StoredEvent,
-    WarningGroup,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -163,7 +164,7 @@ STATUS_EVENT_NAME = "run_status"
 #: Adding a region here without teaching app.js about it is caught by a test,
 #: because the failure has no symptom of its own.
 REGION_EVENT_TARGETS: Mapping[str, str] = MappingProxyType(
-    {"run_header": "run-header"}
+    {"run_header": "run-header", "run_info": "run-info"}
 )
 
 #: How many runs ``GET /runs`` renders. The history is unbounded on disk and
@@ -598,6 +599,8 @@ def render_region(
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
             "project_base": project_base,
         }
+    elif name == "run_info":
+        context = {"run": record, "is_terminal": record.status in TERMINAL_STATUSES}
     else:
         raise ValueError(f"no such run-page region: {name!r}")
     return templates.get_template(f"_{name}.html").render(**context)
@@ -916,6 +919,7 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             # Not from the URL: a run knows its own profile, and "show me the
             # plan for this run" is the obvious move from a finished one.
             "selected_profile": record.profile,
+            "runs_pane": runs_pane(request, record.profile, current=record.run_id),
             "items": items,
             "outline": outline.views(),
             # The rail's filters, which are the run's tallies too. app.js
@@ -979,140 +983,79 @@ def looks_wedged(record: RunRecord, *, now: datetime | None = None) -> bool:
     return elapsed > STALE_WORKER_GRACE_SECONDS
 
 
-# -- counts and the warning summary ---------------------------------------
-
-
-def warning_summary(groups: Sequence[WarningGroup]) -> dict[str, Any]:
-    """A run's warnings, grouped for display and linked to every occurrence.
-
-    Grouping is *presentation only*: the store keeps every warning event, and
-    every one of their sequences is turned into an anchor here. A summary that
-    linked only the first occurrence would hide the repeat its own count is
-    advertising.
-
-    ``task_count`` counts the distinct tasks that warned. Warnings raised
-    outside any task (at pipeline import time, say, before any task exists)
-    have no task to attribute, so they are counted in ``total`` and in
-    ``unattributed`` but not against any task -- and the headline says so
-    rather than folding them into a count of warnings "in" tasks they were
-    never in.
-
-    Wording is decided here rather than in the template so that pluralization
-    lives in one testable place, and so the run page and the history row read
-    identically.
-    """
-    total = sum(group.count for group in groups)
-    attributed = sum(group.count for group in groups if group.task_name)
-    tasks = {group.task_name for group in groups if group.task_name}
-    return {
-        "total": total,
-        "task_count": len(tasks),
-        "attributed": attributed,
-        "unattributed": total - attributed,
-        "headline": _warning_headline(attributed, len(tasks), total - attributed),
-        "groups": [_warning_group(group) for group in groups],
-    }
-
-
-def _warning_headline(attributed: int, task_count: int, unattributed: int) -> str:
-    """The headline for a run's warnings.
-
-    Three shapes, because a run can warn from inside tasks, from outside them,
-    or both, and the mixed case is the one that goes quietly wrong: counting
-    every warning as being "in" the tasks that warned reports a total against
-    a task list that does not account for all of it.
-    """
-    if not attributed and not unattributed:
-        return "No warnings"
-    outside = f"{unattributed} outside any task"
-    if not unattributed:
-        return f"{_plural(attributed, 'warning')} in {_plural(task_count, 'task')}"
-    if not attributed:
-        return f"{_plural(unattributed, 'warning')} outside any task"
-    return (
-        f"{_plural(attributed, 'warning')} in {_plural(task_count, 'task')}, {outside}"
-    )
-
-
-def _warning_group(group: WarningGroup) -> dict[str, Any]:
-    # ``occurrence_sequences`` is the authoritative list. The fallback covers
-    # a group whose sequences were not recorded: one anchor to the occurrence
-    # the group does know about beats no way back to the console at all, and
-    # nothing here invents a sequence that was never stored.
-    sequences = group.occurrence_sequences or (group.first_sequence,)
-    return {
-        "task": group.task_name,
-        "category": group.category,
-        "sample_message": group.sample_message,
-        "count": group.count,
-        "occurrence_label": _plural(group.count, "occurrence"),
-        "occurrences": [
-            {"sequence": sequence, "anchor": f"#event-{sequence}"}
-            for sequence in sequences
-        ],
-    }
-
-
-def _plural(count: int, noun: str) -> str:
-    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
-
-
-# -- GET /runs -------------------------------------------------------------
+# -- GET / -- the landing page, and the Runs pane --------------------------
 
 
 @router.get("/", response_class=HTMLResponse)
 @router.get("/runs", response_class=HTMLResponse)
-def run_history(request: Request, profile: str | None = None) -> HTMLResponse:
-    """This project's run history, newest first -- and the UI's landing page.
+def landing(request: Request, profile: str | None = None) -> HTMLResponse:
+    """The UI's landing page: the newest run of the chosen profile.
 
-    Served at ``/`` as well as ``/runs``: there is no separate run console
-    page any more. Starting a run is a control in the app bar rather than a
-    destination, so the page you land on is the one that tells you what has
-    been run. ``/runs`` stays a route because links and bookmarks point at
-    it.
+    There is no run history page: the run page lists the profile's runs in
+    its sidebar, so landing on the newest one is landing on the history too.
+    Without a ``?profile=`` it is the newest run of any profile, and the
+    selector then shows that run's; ``?profile=`` (blank) is the runs made
+    with no profile, as the selector names them. ``/runs`` stays a route
+    because links and bookmarks point at it.
 
-    It accepts ``?profile=`` but does not filter by it. The profile is
-    carried so the *next* page keeps it -- without this the history was
-    where a profile went to die, and Run -> Runs -> Plan arrived with none.
-    The list stays every run of every profile, which is why each row shows
-    its own, and the app bar says so in text rather than offering a control
-    this page could not honour.
+    With no such run, the page to start one: the sidebar's Run and Plan and
+    an empty Runs pane.
 
-    Read out of the store on every request, which is what makes the page
-    durable rather than remembered: a run recorded by a server that has since
-    restarted, or by a detached worker while no server was up at all, is
-    still here.
-
-    The order is the store's (``created_at DESC, run_id DESC``) and is passed
-    straight through -- neither this function nor the template re-sorts, so
-    there is exactly one place the ordering can be wrong.
-
-    Two aggregate queries per listed run, bounded by :data:`HISTORY_LIMIT`.
-    Neither hydrates the run's events: ``log`` events are one row per captured
-    output span, so counting them in Python would make this page -- the one a
-    developer lands on -- do a dataclass construction and a JSON parse per
-    line of pipeline output the project has ever produced.
+    The redirect is relative and unprefixed, as ``POST /runs``'s is:
+    resolved against ``<base>/`` or ``<base>/runs`` alike it lands on
+    ``<base>/runs/<id>``, with or without a proxy in front.
     """
     project = ui(request).entry
     if profile and profile not in project.profiles:
         return unknown_profile(request, profile, nav_active="runs")
-    store: RunStore = ui(request).store
-    runs = [
-        {
-            "run": record,
-            "counters": counters(store.event_counts(record.run_id)),
-            "warnings": warning_summary(store.warning_groups(record.run_id)),
-        }
-        for record in store.list_runs(project.root, limit=HISTORY_LIMIT)
-    ]
+    newest = ui(request).store.list_runs(project.root, limit=1, profile=profile)
+    if newest:
+        return RedirectResponse(url=f"runs/{newest[0].run_id}", status_code=303)
+    selected = requested_profile(profile)
     return ui(request).templates.TemplateResponse(
         request,
-        "runs.html",
+        "landing.html",
         {
             "nav_active": "runs",
-            "runs": runs,
-            "selected_profile": requested_profile(profile),
+            "selected_profile": selected,
+            "runs_pane": runs_pane(request, selected),
         },
+    )
+
+
+def runs_pane(request: Request, profile: str | None, *, current: str | None = None) -> dict[str, Any]:
+    """The sidebar's Runs pane for *profile* -- ``None`` being the runs made
+    with no profile -- with *current* the run the page shows.
+
+    One aggregate query per succeeded run, for its warnings: the one fact
+    the pane shows that the run row does not hold.
+    """
+    current_ui = ui(request)
+    store: RunStore = current_ui.store
+    runs = store.list_runs(current_ui.entry.root, limit=HISTORY_LIMIT, profile=profile or "")
+    query = {"profile": profile or ""}
+    if current:
+        query["current"] = current
+    return {
+        "days": run_days(runs, lambda run: counters(store.event_counts(run.run_id))["warnings"]),
+        "count": len(runs),
+        "current": current,
+        "url": f"{current_ui.project_base}/run-list?{urllib.parse.urlencode(query)}",
+        "empty": "No runs with this profile yet. Run or Plan to start one.",
+    }
+
+
+@router.get("/run-list", response_class=HTMLResponse)
+def run_list(request: Request, profile: str | None = None, current: str | None = None) -> HTMLResponse:
+    """The Runs pane's list, as a fragment: fetched again by app.js when a
+    run starts or ends, so the pane shows it without a reload."""
+    project = ui(request).entry
+    if profile and profile not in project.profiles:
+        return unknown_profile(request, profile, nav_active="runs")
+    return ui(request).templates.TemplateResponse(
+        request,
+        "_run_list.html",
+        {"runs_pane": runs_pane(request, requested_profile(profile), current=current)},
     )
 
 

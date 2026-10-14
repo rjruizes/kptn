@@ -1217,15 +1217,27 @@ class RunStore:
         project_root: Path | str | None = None,
         *,
         limit: int | None = None,
+        profile: str | None = None,
     ) -> list[RunRecord]:
+        """Runs newest first. *profile* narrows them to one profile's, in
+        the profile selector's terms: ``""`` is the runs made with no
+        profile, and ``None`` -- the default -- is every run."""
         conn = self._acquire()
         try:
             query = "SELECT * FROM runs"
+            where: list[str] = []
             params: list[object] = []
             if project_root is not None:
                 canonical_root = Path(project_root).resolve()
-                query += " WHERE project_root = ?"
+                where.append("project_root = ?")
                 params.append(str(canonical_root))
+            if profile == "":
+                where.append("profile IS NULL")
+            elif profile is not None:
+                where.append("profile = ?")
+                params.append(profile)
+            if where:
+                query += " WHERE " + " AND ".join(where)
             query += " ORDER BY created_at DESC, run_id DESC"
             if limit is not None:
                 query += " LIMIT ?"
@@ -1301,7 +1313,7 @@ class RunStore:
         "task", how many tasks never finished) is the caller's, so that the
         derivation stays in one place above this layer.
 
-        This exists because the run-history page needs counts for every listed
+        This exists because the sidebar's Runs pane needs counts for every listed
         run, and hydrating them was quadratic in the wrong thing: a ``log``
         event is one row per captured output span, so a project with fifty
         real runs of a few thousand output lines each turned one page load

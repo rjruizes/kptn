@@ -3,8 +3,8 @@
  *
  * Vendored and dependency-free. htmx does the request plumbing; this file
  * holds only what htmx cannot express declaratively: the run console's live
- * event stream, the nav's profile, the app bar's active-run poll, and the
- * settings modal with the reader's theme.
+ * event stream, the sidebar's panes, the profile selector, the active-run
+ * poll, and the settings modal with the reader's theme.
  *
  * An ES module, loaded by ``_modules.html``. Its imports are bare specifiers
  * ("kptn/...") that the import map in that partial resolves to versioned
@@ -49,6 +49,15 @@ var SOUND_STORAGE_KEY = "kptn.runSound";
 /* Read before the page paints by _theme.html, under the same name. */
 var THEME_STORAGE_KEY = "kptn.theme";
 var SIDEBAR_STORAGE_KEY = "kptn.sidebarOpen";
+var PANES_STORAGE_KEY = "kptn.closedPanes";
+
+/* Fired on the document when a run may have started or ended: the Runs
+ * pane and the Next run card fetch themselves again. */
+var RUNS_CHANGED = "kptn:runs-changed";
+
+/* The workspace's rail (the Run pane's tasks) and sidebar, once set up. */
+var RAIL = null;
+var SIDEBAR = null;
 
 /* The end of a run, heard: two short sine tones, rising for a run that
  * succeeded and falling for any other ending (failed, errored, interrupted,
@@ -87,7 +96,7 @@ var STATUS_EVENT = "run_status";
  * is gone. Must stay in step with
  * kptn_server.routes.runs.REGION_EVENT_TARGETS; a test enforces it,
  * because a region nobody listens for is dropped in silence. */
-var REGION_EVENTS = { run_header: "run-header" };
+var REGION_EVENTS = { run_header: "run-header", run_info: "run-info" };
 
 function highestSequence(list) {
   var rows = list.querySelectorAll("[data-sequence]");
@@ -309,6 +318,11 @@ function initLogControls(console_) {
  * leaves out. kptn_server.run_outline holds the same list. */
 var NOT_RAN = ["cached", "waiting", "not_run", "bypassed"];
 
+/* What the "Issues" filter shows besides a task that warned; the first two
+ * turn it red. kptn_server.run_outline holds the same lists. */
+var FAILED = ["failed", "interrupted"];
+var ISSUES = FAILED.concat(["not_run"]);
+
 /* The rail's filters, by a task's state and whether it warned. The log's
  * sections are filtered by the same rules, in app.css. */
 var RAIL_FILTERS = {
@@ -321,8 +335,8 @@ var RAIL_FILTERS = {
   cached: function (state) {
     return state === "cached";
   },
-  warned: function (state, warned) {
-    return warned;
+  issues: function (state, warned) {
+    return warned || ISSUES.indexOf(state) !== -1;
   }
 };
 
@@ -411,9 +425,13 @@ function initRail(console_, list) {
 
   function recount() {
     /* The filters' counts, off every task in the rail: the same four the
-     * server rendered (run_outline.filter_counts). */
+     * server rendered (run_outline.filter_counts), and the issues' colour. */
     var units = rail.querySelectorAll(".rail-item[data-unit]");
     var buttons = rail.querySelectorAll("[data-filter]");
+    var failed = false;
+    for (var f = 0; f < units.length; f += 1) {
+      failed = failed || FAILED.indexOf(units[f].getAttribute("data-state")) !== -1;
+    }
     for (var b = 0; b < buttons.length; b += 1) {
       var test = RAIL_FILTERS[buttons[b].getAttribute("data-filter")];
       var count = 0;
@@ -428,6 +446,10 @@ function initRail(console_, list) {
       }
       /* The pressed one stays pressable, so the way back is never disabled. */
       buttons[b].disabled = count === 0 && buttons[b].getAttribute("data-filter") !== filter;
+      if (buttons[b].getAttribute("data-filter") === "issues") {
+        buttons[b].classList.toggle("rail-filter--err", count > 0 && failed);
+        buttons[b].classList.toggle("rail-filter--warn", count > 0 && !failed);
+      }
     }
   }
 
@@ -588,13 +610,13 @@ function initRail(console_, list) {
   };
 }
 
-/* The run bar's sidebar button hides the rail and gives the log the whole
- * width, remembered for this reader. Hiding it also drops its filter: the
- * filter's buttons live in the rail, and a log narrowed out of sight would
- * look like a log with output missing. By delegation, because the stream's
- * closing frame replaces the run bar; ``sync`` puts the replacement button
- * in step. */
-function initSidebar(rail) {
+/* The bar's sidebar button hides the sidebar and gives the main area the
+ * whole width, remembered for this reader. Hiding it also drops the rail's
+ * filter: the filter's buttons live in the sidebar, and a log narrowed out
+ * of sight would look like a log with output missing. By delegation,
+ * because the stream's closing frame replaces the run bar; ``sync`` puts
+ * the replacement button in step. */
+function initSidebar() {
   var body = document.querySelector(".run-body");
   if (!body) {
     return null;
@@ -621,8 +643,8 @@ function initSidebar(rail) {
 
   function set(open) {
     body.classList.toggle("no-side", !open);
-    if (!open && rail) {
-      rail.setFilter("all");
+    if (!open && RAIL) {
+      RAIL.setFilter("all");
     }
     sync();
   }
@@ -642,6 +664,107 @@ function initSidebar(rail) {
 
   set(stored());
   return { sync: sync };
+}
+
+/* The sidebar's panes -- Next run, Runs, Run -- fold by their headers, like
+ * VS Code's sections. The server renders them open; the ones this reader
+ * folded are remembered here, by name, and folded again on every page. */
+function initPanes() {
+  var panes = document.querySelectorAll("[data-pane]");
+  if (!panes.length) {
+    return;
+  }
+  var closed = [];
+  try {
+    closed = JSON.parse(window.localStorage.getItem(PANES_STORAGE_KEY) || "[]");
+  } catch (err) {
+    closed = [];
+  }
+  if (!Array.isArray(closed)) {
+    closed = [];
+  }
+
+  function set(pane, close) {
+    pane.classList.toggle("is-closed", close);
+    var toggle = pane.querySelector("[data-pane-toggle]");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", close ? "false" : "true");
+    }
+  }
+
+  for (var i = 0; i < panes.length; i += 1) {
+    set(panes[i], closed.indexOf(panes[i].getAttribute("data-pane")) !== -1);
+  }
+
+  document.addEventListener("click", function (event) {
+    var toggle = event.target.closest("[data-pane-toggle]");
+    if (!toggle) {
+      return;
+    }
+    var pane = toggle.closest("[data-pane]");
+    var name = pane.getAttribute("data-pane");
+    var close = !pane.classList.contains("is-closed");
+    set(pane, close);
+    closed = closed.filter(function (other) {
+      return other !== name;
+    });
+    if (close) {
+      closed.push(name);
+    }
+    try {
+      window.localStorage.setItem(PANES_STORAGE_KEY, JSON.stringify(closed));
+    } catch (err) {
+      /* Not being able to remember the choice is not a reason to refuse it. */
+    }
+  });
+}
+
+/* The Runs pane's list (_run_list.html), fetched again whole when a run
+ * starts or ends -- so a run started in another tab, or this page's run
+ * finishing, shows up without a reload -- with the pane header's count. */
+function initRunList() {
+  var list = document.getElementById("run-list");
+  if (!list) {
+    return;
+  }
+  /* The page's own run, in view however far down the list it is. */
+  var shown = list.querySelector('[aria-current="page"]');
+  if (shown) {
+    shown.scrollIntoView({ block: "nearest" });
+  }
+  if (typeof window.fetch !== "function") {
+    return;
+  }
+  var url = list.getAttribute("data-url");
+
+  function load() {
+    window
+      .fetch(url, { headers: { "HX-Request": "true" } })
+      .then(function (response) {
+        return response.ok ? response.text() : null;
+      })
+      .then(function (html) {
+        if (html === null) {
+          return;
+        }
+        var current = document.getElementById("run-list");
+        var fresh = fragmentFrom(html).querySelector("#run-list");
+        if (!current || !fresh) {
+          return;
+        }
+        current.replaceWith(fresh);
+        var count = fresh.closest("[data-pane]").querySelector("[data-pane-count]");
+        if (count) {
+          var n = fresh.getAttribute("data-count");
+          count.textContent = n === "0" ? "" : n;
+        }
+      })
+      .catch(function () {
+        /* A server restarting under the page: keep the list it has. */
+      });
+  }
+
+  document.addEventListener(RUNS_CHANGED, load);
 }
 
 /* Dropdown menus (``[data-menu]``): one open at a time, closed by Escape --
@@ -798,9 +921,9 @@ function initTheme() {
   }
 }
 
-/* The sidebar's state card (_next_start.html): what the next run starts
- * from. Server-rendered and fetched whole -- once the page is up, again when
- * a run ends or another profile is chosen, and as the answer to a delete --
+/* The Next run pane's state card (_next_start.html): what the next run
+ * starts from. Server-rendered and fetched whole -- once the page is up,
+ * again when a run starts or ends, and as the answer to a delete --
  * so the card always says what kptn says, never what this file assumes.
  *
  * Its trash takes two clicks: the first arms it ("Delete?"), a second
@@ -821,12 +944,17 @@ function initNextStart() {
     return select ? select.value : "";
   }
 
+  /* The pane's card, lit for a moment when a delete hands it on. */
+  var lit = slot.closest(".next") || slot;
+
   function paint(html, swapped) {
     slot.replaceChildren(fragmentFrom(html));
     var card = slot.querySelector(".statecard");
     slot.hidden = !card;
     if (card && swapped) {
-      card.classList.add("swap");
+      lit.classList.remove("swap");
+      void lit.offsetWidth;
+      lit.classList.add("swap");
     }
   }
 
@@ -912,17 +1040,14 @@ function initNextStart() {
     remove(button);
   });
   slot.addEventListener("focusout", disarm);
-  slot.addEventListener("animationend", function (event) {
+  lit.addEventListener("animationend", function (event) {
     event.target.classList.remove("swap");
   });
 
-  var select = document.getElementById("profile-select");
-  if (select) {
-    select.addEventListener("change", load);
-  }
+  /* A run may have made the database, or a checkpoint. */
+  document.addEventListener(RUNS_CHANGED, load);
 
   load();
-  return { reload: load };
 }
 
 function setUpRememberedToggle(toggle, storageKey) {
@@ -1042,8 +1167,7 @@ function initConsole() {
   var empty = document.getElementById("console-empty");
   var controls = initLogControls(console_);
   var rail = initRail(console_, list);
-  var sidebar = initSidebar(rail);
-  var nextStart = initNextStart();
+  RAIL = rail;
   if (console_.getAttribute("data-terminal") === "true" || typeof window.EventSource !== "function") {
     /* Already over. Its whole history is on the page, and its status came
      * from the run row -- there is nothing left to stream, and no ending
@@ -1163,8 +1287,8 @@ function initConsole() {
       /* The new run bar's controls show this reader's choices. */
       controls.applyViewOptions();
       controls.syncFoldAll();
-      if (sidebar) {
-        sidebar.sync();
+      if (SIDEBAR) {
+        SIDEBAR.sync();
       }
     }
   }
@@ -1187,10 +1311,7 @@ function initConsole() {
         source.close();
       }
       announceRunEnd(frame.status);
-      /* The run may have made the database, or a checkpoint. */
-      if (nextStart) {
-        nextStart.reload();
-      }
+      document.dispatchEvent(new CustomEvent(RUNS_CHANGED));
     }
   }
 
@@ -1230,45 +1351,39 @@ function initConsole() {
 }
 
 function initProfileNav() {
-  /* The app bar's nav links already carry the profile the server rendered
-   * the page with. On the run console the selector is an input for
-   * `run-form`, so a fresh choice reaches the server only on submit --
-   * nothing server-rendered can know it, and clicking Plan would navigate
-   * to the profile the page loaded with rather than the one on screen.
-   * Keeping the hrefs in step is the whole job.
+  /* Choosing a profile in the app bar shows that profile: its newest run,
+   * with its runs in the sidebar -- or, on a page about a profile (the
+   * plan, the walkthrough), the same page for the new one.
+   * ``data-profile-nav`` is where, rendered by the page. Blank is "(no
+   * profile)", sent as such: the landing page reads no ``profile`` at all
+   * as "the newest run of any".
    *
-   * With JavaScript off the links keep their rendered profile, which is
-   * the no-JS behaviour the nav is built for; this only ever improves on
-   * it. */
+   * With JavaScript off the selector still chooses what Run and Plan
+   * submit; this only adds the navigation. */
   var select = document.getElementById("profile-select");
-  var links = document.querySelectorAll("[data-profile-link]");
   if (!select) {
     return;
   }
 
-  var planInputs = document.querySelectorAll("[data-profile-input]");
-
-  function sync() {
-    for (var i = 0; i < links.length; i += 1) {
-      var base = links[i].getAttribute("data-profile-link");
-      links[i].setAttribute(
-        "href",
-        select.value
-          ? base + "?profile=" + encodeURIComponent(select.value)
-          : base
-      );
+  select.addEventListener("change", function () {
+    var target = select.getAttribute("data-profile-nav");
+    if (target) {
+      window.location.assign(target + "?profile=" + encodeURIComponent(select.value));
     }
-    /* The Plan button submits a form rather than following a link, so its
-     * profile rides in a hidden input. Disabled when there is none: a
-     * disabled control is not submitted, which keeps the URL a clean
-     * "/plan" instead of "/plan?profile=". */
-    for (var k = 0; k < planInputs.length; k += 1) {
-      planInputs[k].value = select.value;
-      planInputs[k].disabled = !select.value;
-    }
-  }
+  });
 
-  select.addEventListener("change", sync);
+  /* Back to a page the browser kept: it shows the profile it was rendered
+   * with, not the one chosen on the way out. */
+  window.addEventListener("pageshow", function (event) {
+    if (!event.persisted) {
+      return;
+    }
+    for (var i = 0; i < select.options.length; i += 1) {
+      if (select.options[i].defaultSelected) {
+        select.value = select.options[i].value;
+      }
+    }
+  });
 }
 
 function initRunLock() {
@@ -1293,8 +1408,16 @@ function initRunLock() {
   }
 
   var timer = null;
+  /* The run holding the lock when the page was rendered; another one --
+   * or none -- means a run started or ended. */
+  var seen = busy ? busy.getAttribute("data-active-run") || "" : "";
 
   function apply(state) {
+    var holder = state.run_id || "";
+    if (holder !== seen) {
+      seen = holder;
+      document.dispatchEvent(new CustomEvent(RUNS_CHANGED));
+    }
     for (var i = 0; i < controls.length; i += 1) {
       controls[i].disabled = state.active;
     }
@@ -1425,6 +1548,10 @@ initTheme();
 initSettings();
 initMenus();
 initCopyLink();
+SIDEBAR = initSidebar();
+initPanes();
+initRunList();
+initNextStart();
 initConsole();
 initProfileNav();
 initRunLock();

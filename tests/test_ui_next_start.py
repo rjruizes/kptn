@@ -112,7 +112,7 @@ def test_the_card_names_the_database_the_next_run_continues(app, store, client, 
     _report(store, project)
 
     assert _card(client.get("/next-start").text) == (
-        "Next run continues from",
+        "Continues from",
         "pipeline.db",
         "pipeline.db",
     )
@@ -126,7 +126,7 @@ def test_deleting_the_database_hands_the_card_to_its_checkpoint(app, store, clie
     assert response.status_code == 200
     assert not (project / "pipeline.db").exists()
     assert _card(response.text) == (
-        "Next run restores",
+        "Restores",
         "init_database checkpoint",
         "pipeline.init_database.backup.db",
     )
@@ -139,7 +139,7 @@ def test_with_nothing_left_the_next_run_starts_fresh(app, store, client, project
     response = _delete(client, "pipeline.init_database.backup.db")
 
     assert not (project / "pipeline.init_database.backup.db").exists()
-    assert _card(response.text) == ("Next run starts fresh", "No database", None)
+    assert _card(response.text) == ("Starts fresh", "No database", None)
 
 
 def test_a_stale_card_cannot_delete_what_took_its_place(app, store, client, project) -> None:
@@ -150,7 +150,7 @@ def test_a_stale_card_cannot_delete_what_took_its_place(app, store, client, proj
 
     assert response.status_code == 409
     assert (project / "pipeline.init_database.backup.db").exists()
-    assert _card(response.text)[0] == "Next run restores"
+    assert _card(response.text)[0] == "Restores"
 
 
 def test_nothing_is_deleted_while_a_run_is_in_progress(app, store, client, project) -> None:
@@ -186,15 +186,18 @@ def test_a_plain_form_post_returns_to_the_page(app, store, client, project) -> N
     assert response.status_code == 303 and response.headers["location"] == "/runs/abc"
 
 
-def test_the_card_sits_at_the_foot_of_the_run_pages_sidebar(app, store, client, project) -> None:
+def test_the_card_heads_the_sidebars_next_run_pane(app, store, client, project) -> None:
+    """Above Run and Plan, in the first of the sidebar's panes."""
     _report(store, project)
     run_id = store.list_runs(project)[0].run_id
 
     html = client.get(f"/runs/{run_id}").text
     side = html[html.index('<aside class="side"') : html.index("</aside>")]
+    pane = side[side.index('<section class="pane pane--next"') : side.index("</section>")]
 
-    assert side.index('<nav class="rail"') < side.index('id="next-start"')
-    assert 'data-url="/next-start"' in side
+    assert side.index("pane--next") < side.index("pane--runs") < side.index("pane--run\"")
+    assert pane.index('id="next-start"') < pane.index('id="run-form"')
+    assert 'data-url="/next-start"' in pane
 
 
 def test_the_trash_takes_two_clicks() -> None:

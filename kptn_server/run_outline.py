@@ -62,6 +62,11 @@ class _Entry(Protocol):
 #: filter leaves out. ``app.js`` holds the same list.
 _NOT_RAN = frozenset({"cached", "waiting", "not_run", "bypassed"})
 
+#: What the Issues filter shows besides a task that warned; the first two
+#: make it red rather than amber.
+_FAILED = frozenset({"failed", "interrupted"})
+_ISSUES = _FAILED | {"not_run"}
+
 
 def format_duration(seconds: object) -> str:
     """A run time, in the units a reader thinks in."""
@@ -305,14 +310,17 @@ class RunOutline:
 
     def filter_counts(self) -> dict[str, int]:
         """The rail's filters, which double as the run's tallies: every task
-        it lists, those that ran, those cached, and those that warned.
-        ``app.js`` recounts the same four off the rail as a live run moves."""
+        it lists, those that ran, those cached, and those with an issue --
+        failed, cut short, never run, or warned. ``failed`` says which colour
+        the issues take. ``app.js`` recounts the same off the rail as a live
+        run moves."""
         units = [unit for step in self.steps for task in step.tasks() for unit in self._units(task)]
         return {
             "all": len(units),
             "ran": sum(1 for unit in units if unit["state"] not in _NOT_RAN),
             "cached": sum(1 for unit in units if unit["state"] == "cached"),
-            "warned": sum(1 for unit in units if unit["warned"]),
+            "issues": sum(1 for unit in units if unit["state"] in _ISSUES or unit["warned"]),
+            "failed": sum(1 for unit in units if unit["state"] in _FAILED),
         }
 
     def selected(self) -> str:
@@ -347,21 +355,21 @@ def _combine(states: list[str]) -> str:
 
 
 def run_timing(run: Any) -> str:
-    """The line under the run bar's title: when the run started, and how long
-    it took once it is over. In the server's own time zone, as the log's
-    clock is -- the UI is served from the developer's own machine."""
+    """The line under the run's id in the sidebar: when the run started, and
+    how long it took once it is over. In the server's own time zone, as the
+    log's clock is -- the UI is served from the developer's own machine."""
     started: datetime | None = getattr(run, "started_at", None)
     if started is None:
         return ""
     local = started.astimezone()
-    clock = local.strftime("%I:%M:%S %p").lstrip("0")
+    clock = local.strftime("%I:%M %p").lstrip("0")
     if local.date() != datetime.now().astimezone().date():
         clock = f"{local:%b} {local.day}, {clock}"
-    parts = [f"started {clock}"]
+    parts = [f"Started {clock}"]
     finished: datetime | None = getattr(run, "finished_at", None)
     if finished is not None:
         parts.append(f"took {format_duration((finished - started).total_seconds())}")
-    return " · ".join(parts)
+    return ", ".join(parts)
 
 
 def build_outline(

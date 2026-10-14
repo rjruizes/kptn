@@ -1,4 +1,4 @@
-"""What the next run starts from: the run page's state card.
+"""What the next run starts from: the state card in the sidebar's Next run pane.
 
 A pipeline with a DuckDB factory keeps its tables -- and, with ``db: duckdb``,
 kptn's own task state -- in one file. A run *continues* from that file,
@@ -85,12 +85,12 @@ def next_start(
     if database is None:
         return NextStart(
             "unknown",
-            "Next run starts from",
+            "Starts from",
             "Not known yet",
             "Run the pipeline once to see its database here.",
         )
     if store.active_run(project.root) is not None:
-        return NextStart("busy", "Next run starts from", database.name, "Known when this run ends.")
+        return NextStart("busy", "Starts from", database.name, "Known when this run ends.")
 
     resolved = resolve_graph(project, profile)
     try:
@@ -100,17 +100,17 @@ def next_start(
     except duckdb.Error:
         return NextStart(
             "unreadable",
-            "Next run starts from",
+            "Starts from",
             database.name,
             "Open in another process, so it cannot be read.",
         )
 
     if start.kind == "fresh":
-        return NextStart("fresh", "Next run starts fresh", "No database")
+        return NextStart("fresh", "Starts fresh", "No database")
     if start.kind == "checkpoint":
         return NextStart(
             "checkpoint",
-            "Next run restores",
+            "Restores",
             f"{start.task} checkpoint",
             file=start.path.name if start.path else "",
             what=f"the {start.task} checkpoint",
@@ -118,7 +118,7 @@ def next_start(
         )
     return NextStart(
         "database",
-        "Next run continues from",
+        "Continues from",
         database.name,
         file=database.name,
         what=database.name,

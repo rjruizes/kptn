@@ -1,8 +1,9 @@
 {#
-  The sidebar's state card: what the next run starts from (see
-  kptn_server.next_start). A fragment, fetched by app.js into the run
-  page's ``#next-start`` slot, and fetched again after a delete -- never
-  assembled in the browser.
+  The Next run pane's state card: what the next run starts from (see
+  kptn_server.next_start). A fragment, fetched by app.js into the pane's
+  ``#next-start`` slot, and fetched again after a delete -- never assembled
+  in the browser. The pane's header says "Next run", so the card's label is
+  the rest of the sentence: "Continues from", "Restores", "Starts fresh".
 
   The trash button posts the file's *name*; the server deletes it only if
   it is still what the next run starts from. app.js makes it a two-click

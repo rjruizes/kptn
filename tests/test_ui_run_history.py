@@ -228,8 +228,15 @@ def _write_column(store: RunStore, run_id: str, column: str, value: object) -> N
 
 
 def _run_ids_in_order(body: str) -> list[str]:
-    """The run ids of the history list, in the order the page renders them."""
-    return re.findall(r'data-run-id="([0-9a-f]{32})"', body)
+    """The run ids of the Runs pane's list, in the order it renders them."""
+    return re.findall(r'class="runrow"[^>]*data-run-id="([0-9a-f]{32})"', body)
+
+
+def _runs(client, profile: str = "success") -> str:
+    """The Runs pane's list for *profile*, as app.js fetches it."""
+    response = client.get(f"/run-list?profile={profile}")
+    assert response.status_code == 200, response.text
+    return response.text
 
 
 def _seed_finished_run(
@@ -273,14 +280,17 @@ def _seed_log_event(store: RunStore, record: RunRecord, text: str) -> None:
     )
 
 
-# -- history ---------------------------------------------------------------
+# -- the Runs pane ---------------------------------------------------------
+#
+# There is no history page: the run page's sidebar lists the profile's runs,
+# and app.js fetches the list again (``/run-list``) when a run starts or ends.
 
 
 def test_history_survives_app_recreation(ui_project, seeded_store) -> None:
     first = TestClient(create_app(ui_project))
     first.close()
     second = TestClient(create_app(ui_project))
-    assert seeded_store.run_id in second.get("/runs").text
+    assert seeded_store.run_id in _run_ids_in_order(_runs(second))
 
 
 def test_the_app_bar_names_the_kptn_version_serving_it(client) -> None:
@@ -292,8 +302,8 @@ def test_the_app_bar_names_the_kptn_version_serving_it(client) -> None:
         assert f"kptn {kptn.__version__}" in client.get(path).text, path
 
 
-def test_history_lists_newest_first(client, store: RunStore, app) -> None:
-    """Newest first, asserted rather than assumed.
+def test_the_runs_pane_lists_a_profiles_runs_newest_first(client, store: RunStore, app) -> None:
+    """Newest first, and the profile's alone, asserted rather than assumed.
 
     Creation times are written explicitly so the order is a property of the
     query and the route, not of how fast three inserts happened to run.
@@ -309,11 +319,21 @@ def test_history_lists_newest_first(client, store: RunStore, app) -> None:
         store, root, created_at="2026-03-01T00:00:00+00:00", profile="success"
     )
 
-    body = client.get("/runs").text
-    assert _run_ids_in_order(body) == [newest.run_id, middle.run_id, oldest.run_id]
+    assert _run_ids_in_order(_runs(client, "success")) == [newest.run_id, oldest.run_id]
+    assert _run_ids_in_order(_runs(client, "failure")) == [middle.run_id]
 
 
-def test_history_shows_each_run_status_and_profile(
+def test_the_runs_pane_groups_runs_by_day(client, store: RunStore, app) -> None:
+    root = app.state.project.root
+    _seed_finished_run(store, root, created_at="2026-01-01T12:00:00+00:00", profile="success")
+    _seed_finished_run(store, root, created_at="2026-03-01T12:00:00+00:00", profile="success")
+
+    days = re.findall(r'<h3 class="runlist__day">([^<]*)</h3>', _runs(client))
+
+    assert days == ["Mar 1", "Jan 1"] or days == ["Mar 1, 2026", "Jan 1, 2026"]
+
+
+def test_a_run_row_links_to_its_page_and_says_how_it_went(
     client, store: RunStore, app
 ) -> None:
     record = _seed_finished_run(
@@ -322,26 +342,33 @@ def test_history_shows_each_run_status_and_profile(
         created_at="2026-01-01T00:00:00+00:00",
         profile="failure",
     )
-    body = client.get("/runs").text
-    row = _history_row(body, record.run_id)
-    assert STATUS_SUCCEEDED in row
-    assert "failure" in row
+    row = _history_row(_runs(client, "failure"), record.run_id)
     assert f'href="/runs/{record.run_id}"' in row
-    assert f'href="/runs/{record.run_id}/log"' in row
+    assert f'<span class="runrow__id">{record.run_id[:7]}</span>' in row
+    assert 'aria-label="Succeeded"' in row
+    assert 'title="Succeeded' in row
 
 
-def test_history_summarizes_each_run_warnings(client, completed_run) -> None:
-    """The history row carries the run's warning count, from its groups."""
-    row = _history_row(client.get("/runs").text, completed_run.run_id)
-    assert "3 warnings in 2 tasks" in row
-    assert "deprecated call" in row
+def test_a_run_that_warned_says_so_in_its_row(client, completed_run) -> None:
+    row = _history_row(_runs(client), completed_run.run_id)
+    assert "status-icon--warned" in row
+    assert 'title="Succeeded with warnings' in row
 
 
-def test_history_is_empty_without_runs(client) -> None:
-    response = client.get("/runs")
-    assert response.status_code == 200
-    assert _run_ids_in_order(response.text) == []
-    assert "No runs recorded yet" in response.text
+def test_the_runs_pane_is_empty_without_runs(client) -> None:
+    body = _runs(client)
+    assert _run_ids_in_order(body) == []
+    assert "No runs with this profile yet" in body
+
+
+def test_the_runs_pane_marks_the_page_s_own_run(client, completed_run) -> None:
+    page = client.get(f"/runs/{completed_run.run_id}").text
+    current = re.search(r'<a class="runrow"[^>]*aria-current="page"', page)
+    assert current and completed_run.run_id in current.group(0)
+
+
+def test_the_runs_pane_refuses_an_unknown_profile(client) -> None:
+    assert client.get("/run-list?profile=nope").status_code == 400
 
 
 def test_history_only_lists_this_project(client, store: RunStore, tmp_path) -> None:
@@ -355,12 +382,11 @@ def test_history_only_lists_this_project(client, store: RunStore, tmp_path) -> N
     other_root.mkdir()
     stranger = _seed_run(store, other_root)
 
-    body = client.get("/runs").text
-    assert stranger.run_id not in _run_ids_in_order(body)
+    assert stranger.run_id not in _run_ids_in_order(_runs(client))
 
 
 def _history_row(body: str, run_id: str) -> str:
-    start = body.index(f'data-run-id="{run_id}"')
+    start = body.rindex('<a class="runrow"', 0, body.index(f'data-run-id="{run_id}"'))
     return body[start : body.index("</li>", start)]
 
 
@@ -828,8 +854,8 @@ def test_history_shows_an_interrupted_run_as_interrupted(
     client, store: RunStore, active_run: RunRecord
 ) -> None:
     store.finish_run(active_run.run_id, STATUS_INTERRUPTED)
-    row = _history_row(client.get("/runs").text, active_run.run_id)
-    assert STATUS_INTERRUPTED in row
+    row = _history_row(_runs(client, "slow"), active_run.run_id)
+    assert 'aria-label="Interrupted"' in row
 
 
 # -- escaping --------------------------------------------------------------
@@ -855,54 +881,19 @@ def _hostile_run(store: RunStore, project_root: Path) -> RunRecord:
     return store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
 
-def test_history_escapes_a_hostile_warning_message(
-    client, store: RunStore, app
-) -> None:
-    record = _hostile_run(store, app.state.project.root)
-    row = _history_row(client.get("/runs").text, record.run_id)
-    assert HOSTILE_MESSAGE not in row
-    assert _escaped(HOSTILE_MESSAGE) in row
-
-
-def test_history_escapes_a_hostile_task_name(client, store: RunStore, app) -> None:
-    record = _hostile_run(store, app.state.project.root)
-    row = _history_row(client.get("/runs").text, record.run_id)
-    assert HOSTILE_TASK not in row
-    assert _escaped(HOSTILE_TASK) in row
-
-
-def test_history_escapes_a_hostile_profile_name(client, store: RunStore, app) -> None:
-    """A profile name comes from the project's own ``kptn.yaml``.
-
-    It is not attacker-controlled in any meaningful sense, but it is text the
-    server did not author, and it reaches the page through the same include.
-    """
-    record = store.create_run(
-        RunRequest(
-            project_root=app.state.project.root,
-            pipeline="fixture",
-            profile=HOSTILE_PROFILE,
-        )
-    )
-    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
-    row = _history_row(client.get("/runs").text, record.run_id)
-    assert HOSTILE_PROFILE not in row
-    assert _escaped(HOSTILE_PROFILE) in row
-
-
 # -- bounded work on the page a developer lands on ------------------------
 
 
 def test_history_does_not_hydrate_a_run_s_events(
     client, store: RunStore, app, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The history page must not read a run's events row by row.
+    """The Runs pane must not read a run's events row by row.
 
     A ``log`` event is one row per captured output span, so hydrating them
     costs a dataclass construction and a ``json.loads`` per line of pipeline
-    output the project has ever produced -- on the page a developer lands on.
-    ``HISTORY_LIMIT`` bounds the run count, not the event count, so the counts
-    have to come from an aggregate.
+    output the project has ever produced -- on every page, and again whenever
+    a run starts or ends. ``HISTORY_LIMIT`` bounds the run count, not the
+    event count, so the warnings have to come from an aggregate.
 
     The guard is structural: ``events_after`` is replaced with a spy that
     fails on sight. It cannot pass against an implementation that hydrates,
@@ -925,50 +916,32 @@ def test_history_does_not_hydrate_a_run_s_events(
 
     def refuse(*args: object, **kwargs: object):
         raise AssertionError(
-            "GET /runs hydrated a run's events; it must use the SQL aggregate"
+            "GET /run-list hydrated a run's events; it must use the SQL aggregate"
         )
 
     monkeypatch.setattr(store, "events_after", refuse)
 
-    row = _history_row(client.get("/runs").text, record.run_id)
-    # And the counts are still right, read out of the aggregate.
-    assert "ran <b>1</b>" in row
-    assert "1 warning in 1 task" in row
+    row = _history_row(_runs(client), record.run_id)
+    # And the warning still shows, read out of the aggregate.
+    assert "status-icon--warned" in row
 
 
-def test_history_counts_ignore_log_events(client, store: RunStore, app) -> None:
-    """Output volume must not move a single count.
+def test_run_page_counts_ignore_log_events(client, store: RunStore, app) -> None:
+    """Output volume must not move a single count on the run page, where
+    the events *are* hydrated for the console."""
+    record = _seed_run(store, app.state.project.root)
+    store.append_event(record.run_id, "task_started", task_name="alpha")
+    for index in range(200):
+        _seed_log_event(store, record, f"line {index}\n")
+    store.append_event(
+        record.run_id,
+        "task_finished",
+        task_name="alpha",
+        payload={"status": "succeeded"},
+    )
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
-    The same run twice over, once with 200 log events and once with none: the
-    rendered counts have to be identical. This is the behavioural half of the
-    guard above -- it stays true even if the aggregate is one day replaced.
-    """
-
-    def seed(*, noisy: bool) -> RunRecord:
-        record = _seed_run(store, app.state.project.root)
-        store.append_event(record.run_id, "task_started", task_name="alpha")
-        if noisy:
-            for index in range(200):
-                _seed_log_event(store, record, f"line {index}\n")
-        store.append_event(
-            record.run_id,
-            "task_finished",
-            task_name="alpha",
-            payload={"status": "succeeded"},
-        )
-        store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
-        return record
-
-    quiet = seed(noisy=False)
-    noisy = seed(noisy=True)
-
-    body = client.get("/runs").text
-    counts = _history_row(body, quiet.run_id)
-    assert "ran <b>1</b>" in counts
-    assert "ran <b>1</b>" in _history_row(body, noisy.run_id)
-
-    # And on the run page, where the events *are* hydrated for the console.
-    console = client.get(f"/runs/{noisy.run_id}").text
+    console = client.get(f"/runs/{record.run_id}").text
     assert '<b data-counter="ran">1</b>' in console
 
 
@@ -993,7 +966,7 @@ def test_history_truncates_to_the_limit_dropping_the_oldest(
         for index in range(HISTORY_LIMIT + 3)
     ]
 
-    rendered = _run_ids_in_order(client.get("/runs").text)
+    rendered = _run_ids_in_order(_runs(client))
     assert len(rendered) == HISTORY_LIMIT
     newest_first = [record.run_id for record in reversed(seeded)]
     assert rendered == newest_first[:HISTORY_LIMIT]
@@ -1063,73 +1036,6 @@ def test_a_foreign_project_s_log_is_never_served(
     assert "content-disposition" not in response.headers
 
 
-# -- warning attribution --------------------------------------------------
-#
-# Read off the history row's badge, which is the one surface left that renders
-# ``runs.warning_summary()``'s headline. On the run page a warning is a console
-# row beside the output that produced it; there is no grouped summary there any
-# more.
-
-
-def test_headline_counts_only_attributed_warnings_against_tasks(
-    client, store: RunStore, app
-) -> None:
-    """A mixed run must not claim outside-task warnings are "in" tasks.
-
-    Two warnings in two tasks plus one raised outside any task is four facts,
-    not "3 warnings in 2 tasks": the total would be counted against a task
-    list that does not account for all of it.
-    """
-    record = _seed_run(store, app.state.project.root)
-    store.append_event(
-        record.run_id, "warning", task_name=None, payload={"message": "at import time"}
-    )
-    store.append_event(record.run_id, "task_started", task_name="alpha")
-    store.append_event(
-        record.run_id, "warning", task_name="alpha", payload={"message": "in alpha"}
-    )
-    store.append_event(record.run_id, "task_started", task_name="beta")
-    store.append_event(
-        record.run_id, "warning", task_name="beta", payload={"message": "in beta"}
-    )
-    store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
-    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
-
-    badge = _history_row(client.get("/runs").text, record.run_id)
-    assert "2 warnings in 2 tasks, 1 outside any task" in badge
-    assert "3 warnings in 2 tasks" not in badge
-    # The total is still all three.
-    assert 'data-warning-total="3"' in badge
-
-
-def test_headline_says_so_when_every_warning_is_outside_a_task(
-    client, store: RunStore, app
-) -> None:
-    record = _seed_run(store, app.state.project.root)
-    for _ in range(2):
-        store.append_event(
-            record.run_id,
-            "warning",
-            task_name=None,
-            payload={"message": "at import time"},
-        )
-    store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
-    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
-
-    badge = _history_row(client.get("/runs").text, record.run_id)
-    assert "2 warnings outside any task" in badge
-    assert "in 0 tasks" not in badge
-
-
-def test_headline_omits_the_outside_clause_when_there_is_nothing_outside(
-    client, completed_run: RunRecord
-) -> None:
-    """The all-attributed wording is the brief's, and stays exact."""
-    badge = _history_row(client.get("/runs").text, completed_run.run_id)
-    assert "3 warnings in 2 tasks" in badge
-    assert "outside any task" not in badge
-
-
 # -- the selector is never orphaned ---------------------------------------
 
 
@@ -1138,10 +1044,9 @@ def test_every_page_pairs_the_selector_with_its_run_form(
 ) -> None:
     """``<select form="run-form">`` must never outlive the form it names.
 
-    A selector with no matching form still renders and still takes input,
-    driving nothing -- worse than not being there. The old answer was to drop
-    the selector on pages that owned no form; now the app bar carries both
-    together, so the pairing holds everywhere, error shells included.
+    A selector bound to a form that is not there still renders and still
+    takes input, driving nothing. The workspace pages carry the form, in
+    their Next run pane; the others leave the selector unbound.
     """
     for path in (
         "/",
@@ -1149,12 +1054,13 @@ def test_every_page_pairs_the_selector_with_its_run_form(
         f"/runs/{completed_run.run_id}",
         "/runs/nope",
         "/runs/nope/log",
+        "/walkthrough",
     ):
         body = client.get(path).text
-        has_select = 'id="profile-select"' in body
+        bound = 'form="run-form"' in body
         has_form = 'id="run-form"' in body
-        assert has_select == has_form, (
-            f"{path} renders one of the selector/run-form pair without the other"
+        assert bound == has_form, (
+            f"{path} binds the selector to a run form it does not have"
         )
 
 
@@ -1163,7 +1069,7 @@ def test_the_error_shell_still_offers_the_bar(client) -> None:
     body = client.get("/runs/nope").text
 
     assert 'id="profile-select"' in body
-    assert 'id="run-form"' in body
+    assert 'class="app-bar__brand"' in body
 
 
 def test_warning_payloads_with_a_status_are_still_counted(
@@ -1192,9 +1098,9 @@ def test_warning_payloads_with_a_status_are_still_counted(
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     body = client.get(f"/runs/{record.run_id}").text
-    # The rail's Warnings filter counts tasks that warned; both warnings
-    # landed in alpha's section, and its heading counts them.
-    assert '<b data-counter="warned">1</b>' in body
+    # The rail marks alpha as a task that warned -- the Issues filter counts
+    # it -- and its section's heading counts both warnings.
+    assert re.search(r'data-unit="alpha" data-state="\w+" data-warned', body)
     assert re.search(r'data-unit="alpha"\s+data-state="\w+" data-warnings="2"', body)
 
 
@@ -1222,27 +1128,6 @@ def test_run_page_and_stream_render_one_run_header(
     )
 
     assert fragment.strip() in page
-
-
-def test_history_carrying_a_profile_still_lists_every_run(
-    client, store: RunStore, ui_project: Path
-) -> None:
-    """Carrying a profile must not quietly filter the list.
-
-    The profile rides through this page so the *next* one keeps it. The
-    history itself is still every run of every profile, which is the whole
-    reason it shows each row's profile individually.
-    """
-    # Finished one at a time: the store allows a project only one active run.
-    mine = _seed_run(store, ui_project, profile="success")
-    store.finish_run(mine.run_id, STATUS_SUCCEEDED, exit_code=0)
-    other = _seed_run(store, ui_project, profile="failure")
-    store.finish_run(other.run_id, STATUS_SUCCEEDED, exit_code=0)
-
-    body = client.get("/runs?profile=success").text
-
-    assert mine.run_id in body
-    assert other.run_id in body, "the history filtered itself by the carried profile"
 
 
 def test_log_download_sits_in_the_header_after_retry(
@@ -1440,14 +1325,14 @@ def test_a_live_run_offers_a_sound_toggle_that_is_on_by_default(
     assert 'id="run-sound"' not in console, "Sound is still in the console"
 
 
-def test_history_leads_the_bar_and_the_gear_ends_it(client) -> None:
-    """Runs is at the left of the bar, before the profile controls; the
+def test_the_profile_leads_the_bar_and_the_gear_ends_it(client) -> None:
+    """kptn, the project and the profile at the left of the bar; the
     settings gear is the last thing in it, at the right."""
     for path in ("/", "/plan", "/runs/no-such-run"):
         body = client.get(path).text
         bar = body[body.index('<header class="app-bar">') : body.index("</header>")]
-        history_at = bar.find(">Runs</a>")
-        assert history_at != -1, path
-        assert history_at < bar.find('id="profile-select"'), path
+        brand_at = bar.find('class="app-bar__brand"')
+        profile_at = bar.find('id="profile-select"')
+        assert -1 < brand_at < profile_at, path
         end = bar.find('<div class="app-bar__end">')
-        assert end > history_at and "data-settings-open" in bar[end:], path
+        assert end > profile_at and "data-settings-open" in bar[end:], path

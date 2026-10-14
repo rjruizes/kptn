@@ -260,8 +260,8 @@ def test_run_history_is_per_project(projects_root: Path) -> None:
     # A run row is a link to that run. The other project has no runs, so it
     # must have none of these -- "the word 'runs' appears" would be true of
     # nearly any page in this UI and would pass against a shared store.
-    assert "run-history__link" not in other
-    assert "run-history__link" in client.get(f"/p/{USER}_main/").text
+    assert 'class="runrow"' not in other
+    assert 'class="runrow"' in client.get(f"/p/{USER}_main/").text
     assert started.headers["location"].startswith("runs/")
 
 

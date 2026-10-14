@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -582,21 +583,19 @@ def test_base_page_loads_only_vendored_assets(ui_project: Path) -> None:
         assert forbidden not in body.lower(), f"base page references {forbidden}"
 
 
-def test_base_page_offers_the_shared_navigation(ui_project: Path) -> None:
-    """One nav destination, and the two actions that live in the bar.
+def test_app_bar_is_a_path_to_the_profile(ui_project: Path) -> None:
+    """kptn, the project, the profile -- and nothing to act on.
 
-    Asserted against the nav and the bar separately, because "Run" and
-    "Plan" appear in both as words: checking the whole document for the
-    string would pass no matter which side they were on.
+    Run and Plan live in the sidebar's Next run pane now, and there is no
+    nav: the run page lists the runs itself.
     """
-    body = TestClient(create_app(ui_project)).get("/").text
-    nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S).group(0)
-    bar = _app_bar(body)
+    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
 
-    # The run history is "Runs", and kptn itself leads the bar as home.
-    assert ">Runs</a>" in nav
     assert 'class="app-bar__brand"' in bar
-    assert "Run</button>" in bar and "Plan</button>" in bar
+    assert 'class="app-bar__project">fixture<' in bar
+    assert bar.index("app-bar__project") < bar.index('id="profile-select"')
+    assert "app-bar__nav" not in bar
+    assert "Run</button>" not in bar and "Plan</button>" not in bar
 
 
 def test_base_page_shows_the_project_and_a_profile_selector(ui_project: Path) -> None:
@@ -608,71 +607,45 @@ def test_base_page_shows_the_project_and_a_profile_selector(ui_project: Path) ->
         assert f'value="{profile}"' in body, f"{profile} is not selectable"
 
 
-# -- the profile follows the reader across pages ---------------------------
+# -- the profile is the one every page shows ---------------------------------
 #
-# The selector is in the app bar of every page, but the nav used to be four
-# bare links: choosing a profile and then clicking Plan landed on a plan for
-# no profile at all. The profile now travels in the nav's own hrefs, which is
-# what makes it survive a navigation with no JavaScript involved.
+# Choosing a profile goes to it: the landing page, which opens the profile's
+# newest run with its runs in the sidebar -- or, on a page about a profile,
+# that page for the new one. The selector says where in
+# ``data-profile-nav``; app.js does the going.
 
 
-def _nav_href(body: str, base: str) -> str:
-    """The nav's href for the link whose base path is *base*."""
-    match = re.search(
-        r'<a href="([^"]*)"[^>]*data-profile-link="' + re.escape(base) + r'"', body
-    )
-    assert match, f"no nav link for {base!r} in the page"
+def _profile_nav(body: str) -> str:
+    match = re.search(r'<select[^>]*id="profile-select"[^>]*data-profile-nav="([^"]*)"', body, re.S)
+    assert match, "the selector says nowhere to go"
     return match.group(1)
 
 
-@pytest.mark.parametrize("base", ["/"])
-def test_nav_carries_the_selected_profile_between_pages(
-    ui_project: Path, base: str
-) -> None:
-    """Reached with a profile, every profile-aware nav link keeps it."""
-    body = TestClient(create_app(ui_project)).get("/plan?profile=slow").text
-
-    assert _nav_href(body, base) == f"{base}?profile=slow"
+def test_choosing_a_profile_goes_to_its_newest_run(ui_project: Path) -> None:
+    assert _profile_nav(TestClient(create_app(ui_project)).get("/").text) == "/"
 
 
-@pytest.mark.parametrize("base", ["/"])
-def test_nav_omits_the_profile_when_none_is_selected(
-    ui_project: Path, base: str
-) -> None:
-    """No profile must mean a clean URL, not ``?profile=``.
-
-    A bare ``?profile=`` is the "(no profile)" selection spelled the long
-    way, and it would turn every link in the app bar into one.
-    """
-    body = TestClient(create_app(ui_project)).get("/").text
-
-    assert _nav_href(body, base) == base
+@pytest.mark.parametrize("page", ["/plan", "/walkthrough"])
+def test_choosing_a_profile_on_a_profile_page_stays_on_it(ui_project: Path, page: str) -> None:
+    assert _profile_nav(TestClient(create_app(ui_project)).get(page).text) == page
 
 
-def test_nav_link_to_the_history_carries_the_profile(ui_project: Path) -> None:
-    """Every nav link carries it, the history's included.
+def test_app_js_navigates_when_a_profile_is_chosen() -> None:
+    """The one piece that needs script: the templates render where to go."""
+    source = (STATIC_DIR / "app.js").read_text()
 
-    The history does not *filter* by profile, but it does carry one through
-    to the next page -- so the link that gets you there has to hand it over.
-    Leaving this one bare is what made "Run -> Runs" drop the profile even
-    after the history learned to pass it on: the chain broke at the click,
-    one step before anything server-side could help.
-    """
-    body = TestClient(create_app(ui_project)).get("/plan?profile=slow").text
-
-    assert _nav_href(body, "/") == "/?profile=slow"
+    assert "data-profile-nav" in source, "app.js does not read where to go"
+    assert "profile-select" in source, "app.js does not read the selector"
+    assert "window.location.assign" in source
 
 
 def test_index_accepts_a_profile_and_marks_it_selected(ui_project: Path) -> None:
-    """The run console has to be able to *show* a profile it is handed.
-
-    Without this the profile could travel to Plan and back and arrive home
-    invisible -- the selector would say "(no profile)" while the URL said
-    otherwise, and the next Run would use the wrong one.
-    """
+    """A profile with no runs yet lands on the page to start one -- showing
+    the profile it was handed, which is the one Run will use."""
     body = TestClient(create_app(ui_project)).get("/?profile=slow").text
 
     assert '<option value="slow" selected>slow</option>' in body
+    assert "No runs with this profile yet" in body
 
 
 def test_index_refuses_an_unknown_profile(ui_project: Path) -> None:
@@ -684,12 +657,9 @@ def test_index_refuses_an_unknown_profile(ui_project: Path) -> None:
     assert "success" in response.text, "the error does not name the real profiles"
 
 
-def test_run_page_nav_carries_that_runs_profile(ui_project: Path) -> None:
-    """A run knows its profile without one being in the URL.
-
-    From a finished run, "show me the plan for this" is the obvious next
-    move, so the nav offers it rather than making the reader re-pick.
-    """
+def test_run_page_selector_shows_that_runs_profile(ui_project: Path) -> None:
+    """A run knows its profile without one being in the URL, and Run and
+    Plan beside it use it."""
     app = create_app(ui_project)
     store = app.state.store
     record = store.create_run(
@@ -698,48 +668,16 @@ def test_run_page_nav_carries_that_runs_profile(ui_project: Path) -> None:
 
     bar = _app_bar(TestClient(app).get(f"/runs/{record.run_id}").text)
 
-    assert re.search(r'<input[^>]*name="profile"[^>]*value="slow"', bar), (
-        "the Plan button does not offer this run's profile"
-    )
     assert '<option value="slow" selected>' in bar, "the selector does not show it"
 
 
-def test_app_js_syncs_the_nav_with_the_live_selector() -> None:
-    """The unsubmitted selection is the case HTML cannot express.
-
-    On the run console the selector is an input for ``run-form``, so its
-    value reaches the server only on submit. Nothing server-rendered can know
-    it, which is exactly the bug: pick a profile, click Plan, get no profile.
-    This is the one piece that needs script, so assert it is wired to the
-    same ``data-profile-link`` contract the templates render.
-    """
-    source = (STATIC_DIR / "app.js").read_text()
-
-    assert "data-profile-link" in source, "app.js does not target the nav links"
-    assert "profile-select" in source, "app.js does not read the selector"
-
-
 def test_unknown_profile_error_page_offers_a_way_out(ui_project: Path) -> None:
-    """The error page's nav must not carry the profile that caused it.
-
-    The whole point of naming the declared profiles is that the reader can
-    get somewhere useful. A nav that propagated the bad profile would make
-    every link on the page another 400 -- the dead end this error exists to
-    replace.
-    """
+    """The error page's selector must not hold the profile that caused it:
+    the next Run from it would be another 400."""
     body = TestClient(create_app(ui_project)).get("/?profile=nope").text
 
-    for base in ("/",):
-        assert _nav_href(body, base) == base, (
-            f"the {base!r} link carries the profile that was just refused"
-        )
-    hidden = re.search(r'<input[^>]*name="profile"[^>]*>', _app_bar(body))
-    assert hidden and "disabled" in hidden.group(0), (
-        "the Plan button still carries the profile that was just refused"
-    )
-
-
-# -- the run history keeps the profile without claiming to filter by it ----
+    assert '<option value="" selected>' in _app_bar(body)
+    assert 'value="nope"' not in body
 
 
 def test_run_history_refuses_an_unknown_profile(ui_project: Path) -> None:
@@ -750,12 +688,10 @@ def test_run_history_refuses_an_unknown_profile(ui_project: Path) -> None:
     assert "success" in response.text, "the error does not name the real profiles"
 
 
-# -- the app bar is the one place a run starts -----------------------------
+# -- the landing page is the newest run ------------------------------------
 #
-# There is no separate "Run" page any more: "/" is the run history, and the
-# controls that used to live on that page -- the profile, the Run button --
-# are in the app bar, on every page. Plan joins them there and leaves the
-# nav, because it acts on the selected profile exactly as Run does.
+# There is no run history page: the run page lists the profile's runs in
+# its sidebar, so "/" opens the newest one.
 
 
 def _app_bar(body: str) -> str:
@@ -764,90 +700,53 @@ def _app_bar(body: str) -> str:
     return match.group(1)
 
 
-def test_root_serves_the_run_history(ui_project: Path) -> None:
-    """ "/" is the history now, not a console shell."""
+def _next_pane(body: str) -> str:
+    match = re.search(r'<section class="pane pane--next".*?</section>', body, re.S)
+    assert match, "the sidebar has no Next run pane"
+    return match.group(0)
+
+
+def _made(store, root: Path, profile: str | None, when: datetime):
+    record = store.create_run(RunRequest(project_root=root, pipeline="fixture", profile=profile))
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+    conn = sqlite3.connect(store.path)  # only the clock is staged
+    try:
+        conn.execute(
+            "UPDATE runs SET created_at = ? WHERE run_id = ?",
+            (when.astimezone(timezone.utc).isoformat(), record.run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return record
+
+
+def test_root_opens_the_newest_run(ui_project: Path) -> None:
     app = create_app(ui_project)
-    record = app.state.store.create_run(
-        RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
-    )
+    now = datetime.now(timezone.utc)
+    _made(app.state.store, ui_project, "slow", now - timedelta(minutes=5))
+    newest = _made(app.state.store, ui_project, "success", now)
 
-    body = TestClient(app).get("/").text
+    response = TestClient(app).get("/", follow_redirects=False)
 
-    assert record.run_id in body
-
-
-def test_app_bar_orders_profile_then_run_then_plan(ui_project: Path) -> None:
-    """The order is the request: profile, then Run, then Plan."""
-    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
-
-    profile_at = bar.find('id="profile-select"')
-    run_at = bar.find('id="run-form"')
-    plan_at = bar.find('action="/plan"')
-
-    assert -1 not in (profile_at, run_at, plan_at), "a control is missing from the bar"
-    assert profile_at < run_at < plan_at
+    assert response.status_code == 303
+    assert response.headers["location"] == f"runs/{newest.run_id}"
 
 
-def test_app_bar_run_button_posts_the_selected_profile(ui_project: Path) -> None:
-    """The select carries ``form="run-form"``, so the bar's form takes it.
+def test_root_opens_the_chosen_profiles_newest_run(ui_project: Path) -> None:
+    """``?profile=`` is a profile's runs; blank is the runs with none."""
+    app = create_app(ui_project)
+    now = datetime.now(timezone.utc)
+    slow = _made(app.state.store, ui_project, "slow", now - timedelta(minutes=5))
+    bare = _made(app.state.store, ui_project, None, now - timedelta(minutes=9))
+    _made(app.state.store, ui_project, "success", now)
+    client = TestClient(app)
 
-    That association is the whole reason the selector can sit outside the
-    form it drives, and it is what makes Run work from any page.
-    """
-    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
-
-    assert '<form id="run-form"' in bar
-    assert 'method="post"' in bar and 'action="/runs"' in bar
-    assert 'form="run-form"' in bar, "the selector is not bound to the run form"
-    assert "btn--run" in bar, "Run is not the primary action"
-
-
-def test_app_bar_plan_button_carries_the_selected_profile(ui_project: Path) -> None:
-    """Plan is a GET to the plan page for whatever profile is selected."""
-    bar = _app_bar(TestClient(create_app(ui_project)).get("/?profile=slow").text)
-
-    assert 'action="/plan"' in bar
-    assert re.search(r'<input[^>]*name="profile"[^>]*value="slow"', bar), (
-        "the Plan button does not carry the profile"
-    )
+    assert client.get("/?profile=slow", follow_redirects=False).headers["location"] == f"runs/{slow.run_id}"
+    assert client.get("/?profile=", follow_redirects=False).headers["location"] == f"runs/{bare.run_id}"
 
 
-def test_app_bar_plan_button_sends_nothing_when_no_profile_is_selected(
-    ui_project: Path,
-) -> None:
-    """A disabled input is not submitted, so Plan stays a clean ``/plan``."""
-    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
-
-    hidden = re.search(r'<input[^>]*name="profile"[^>]*>', bar)
-    assert hidden, "the Plan form has no profile input"
-    assert "disabled" in hidden.group(0)
-
-
-def test_nav_no_longer_offers_a_plan_link(ui_project: Path) -> None:
-    """Plan is a button in the bar; a second one in the nav is the duplicate
-    the restructure removes."""
-    body = TestClient(create_app(ui_project)).get("/").text
-    nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S)
-    assert nav, "the nav is gone"
-
-    assert ">Plan<" not in nav.group(0)
-
-
-def test_nav_offers_the_history_alone(ui_project: Path) -> None:
-    """One destination left, and no "Run" page to link to.
-
-    The walkthrough is off the bar: ``/walkthrough`` still serves, and the
-    plan page still links into it, but the nav does not offer it.
-    """
-    body = TestClient(create_app(ui_project)).get("/").text
-    nav = re.search(r'<nav class="app-bar__nav".*?</nav>', body, re.S).group(0)
-
-    assert _nav_href(nav, "/") == "/"
-    assert "/walkthrough" not in nav, "the nav still offers the walkthrough"
-    assert ">Run<" not in nav, "the nav still links to a run page that is gone"
-
-
-def test_the_old_runs_url_still_reaches_the_history(ui_project: Path) -> None:
+def test_the_old_runs_url_still_reaches_the_newest_run(ui_project: Path) -> None:
     """Bookmarks and links from the proxied notebook environment must not 404."""
     app = create_app(ui_project)
     record = app.state.store.create_run(
@@ -857,88 +756,118 @@ def test_the_old_runs_url_still_reaches_the_history(ui_project: Path) -> None:
     response = TestClient(app).get("/runs")
 
     assert response.status_code == 200
-    assert record.run_id in response.text
+    assert str(response.url).endswith(f"/runs/{record.run_id}")
 
 
-@pytest.mark.parametrize("page", ["/", "/plan", "/walkthrough"])
-def test_every_page_can_start_a_run(ui_project: Path, page: str) -> None:
-    """The point of moving Run into the bar.
+def test_with_no_runs_the_landing_page_offers_the_first(ui_project: Path) -> None:
+    body = TestClient(create_app(ui_project)).get("/").text
 
-    The read-only pages used to replace the selector with a GET form of
-    their own, which meant the bar's select belonged to a different form --
-    a Run button beside it would have posted no profile at all.
-    """
-    bar = _app_bar(TestClient(create_app(ui_project)).get(page).text)
-
-    assert '<form id="run-form"' in bar
-    assert 'form="run-form"' in bar, f"{page}'s selector is not bound to the run form"
+    assert "Start a run from the sidebar" in body
+    assert "No runs with this profile yet" in body
+    assert '<form id="run-form"' in _next_pane(body)
 
 
-# -- the bar's controls go quiet while a run is in progress ----------------
+# -- Run and Plan are in the sidebar's Next run pane -----------------------
+
+
+def test_run_posts_the_selected_profile(ui_project: Path) -> None:
+    """The app bar's select carries ``form="run-form"``, so the pane's form
+    takes it: one selector driving a form it is not nested in."""
+    body = TestClient(create_app(ui_project)).get("/").text
+    pane = _next_pane(body)
+
+    assert '<form id="run-form"' in pane
+    assert 'method="post"' in pane and 'action="/runs"' in pane
+    assert 'form="run-form"' in _app_bar(body), "the selector is not bound to the run form"
+    assert "btn--run" in pane, "Run is not the primary action"
+
+
+def test_plan_gets_the_plan_for_the_selected_profile(ui_project: Path) -> None:
+    """Plan is a second submit button of the Run form that GETs the plan,
+    so it sends the same selector -- with no JavaScript."""
+    pane = _next_pane(TestClient(create_app(ui_project)).get("/").text)
+
+    plan = re.search(r"<button(?:(?!<button).)*?>\s*(?:<svg.*?</svg>)?Plan</button>", pane, re.S)
+    assert plan, "the pane has no Plan button"
+    assert 'formaction="/plan"' in plan.group(0) and 'formmethod="get"' in plan.group(0)
+
+
+@pytest.mark.parametrize("page", ["/", "/plan"])
+def test_every_workspace_page_can_start_a_run(ui_project: Path, page: str) -> None:
+    body = TestClient(create_app(ui_project)).get(page).text
+
+    assert '<form id="run-form"' in _next_pane(body)
+    assert 'form="run-form"' in _app_bar(body), f"{page}'s selector is not bound to the run form"
+
+
+def test_a_page_without_the_run_form_leaves_the_selector_unbound(ui_project: Path) -> None:
+    """An orphaned ``form=`` would take the select out of every form."""
+    body = TestClient(create_app(ui_project)).get("/walkthrough").text
+
+    assert 'id="run-form"' not in body
+    assert 'form="run-form"' not in body
+
+
+# -- Run and Plan go quiet while a run is in progress ----------------------
 #
 # One run per project is the store's rule, enforced by the lock row that
 # ``create_run`` takes and ``finish_run`` releases -- POST /runs answers 409
-# to anyone who asks anyway. The bar is where that rule becomes visible:
+# to anyone who asks anyway. The pane is where that rule becomes visible:
 # offering an enabled Run button whose only possible outcome is an error page
 # is an invitation to be told no.
 #
 # The disabling is an affordance, never the guard. The 409 stays exactly
-# where it is; these tests are about what the reader is offered.
+# where it is; these tests are about what the reader is offered. The
+# selector stays: it chooses which runs to show, which a run never blocks.
 
 
-def _control_tag(bar: str, pattern: str) -> str:
-    """The opening tag of one app-bar control, by a pattern matching it."""
-    match = re.search(pattern, bar, re.S)
-    assert match, f"no control matching {pattern!r} in the app bar"
+def _control_tag(html: str, pattern: str) -> str:
+    match = re.search(pattern, html, re.S)
+    assert match, f"no control matching {pattern!r}"
     return match.group(0)
 
 
-def _bar_controls(bar: str) -> dict[str, str]:
-    """The three controls that act on the selected profile."""
+def _pane_controls(pane: str) -> dict[str, str]:
+    """Run and Plan, each the whole button and never across another one."""
     return {
-        "select": _control_tag(bar, r"<select[^>]*id=\"profile-select\"[^>]*>"),
-        # The whole button, its icon included, and never across another one.
-        "run": _control_tag(bar, r"<button(?:(?!<button).)*?>\s*Run\s*</button>"),
-        "plan": _control_tag(bar, r"<button(?:(?!<button).)*?>\s*Plan\s*</button>"),
+        "run": _control_tag(pane, r"<button(?:(?!<button).)*?>\s*(?:<svg.*?</svg>)?Run</button>"),
+        "plan": _control_tag(pane, r"<button(?:(?!<button).)*?>\s*(?:<svg.*?</svg>)?Plan</button>"),
     }
 
 
-def test_app_bar_controls_are_disabled_while_a_run_holds_the_lock(
+def test_run_and_plan_are_disabled_while_a_run_holds_the_lock(
     ui_project: Path,
 ) -> None:
-    """The three controls that would start or re-aim a run.
-
-    Without this the bar offers a Run button whose only outcome is the 409
-    page, and a selector whose choice that page throws away.
-    """
     app = create_app(ui_project)
     app.state.store.create_run(
         RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
     )
 
-    bar = _app_bar(TestClient(app).get("/").text)
+    body = TestClient(app).get("/").text
 
-    for name, tag in _bar_controls(bar).items():
-        assert "disabled" in tag, f"the {name} control is still offered"
+    for name, tag in _pane_controls(_next_pane(body)).items():
+        assert "disabled" in tag, f"{name} is still offered"
+    select = _control_tag(_app_bar(body), r'<select[^>]*id="profile-select"[^>]*>')
+    assert "disabled" not in select, "the selector is refused, so the runs cannot be browsed"
 
 
-def test_app_bar_controls_are_offered_when_the_project_is_idle(
+def test_run_and_plan_are_offered_when_the_project_is_idle(
     ui_project: Path,
 ) -> None:
-    """The other half: a finished run must not leave the bar wedged shut."""
+    """The other half: a finished run must not leave the pane wedged shut."""
     app = create_app(ui_project)
     record = app.state.store.create_run(
         RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
     )
     app.state.store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
-    bar = _app_bar(TestClient(app).get("/").text)
+    pane = _next_pane(TestClient(app).get("/").text)
 
-    for name, tag in _bar_controls(bar).items():
-        assert "disabled" not in tag, f"the {name} control is refused for no reason"
+    for name, tag in _pane_controls(pane).items():
+        assert "disabled" not in tag, f"{name} is refused for no reason"
 
 
-def test_app_bar_says_why_it_is_disabled_and_links_to_the_run(
+def test_the_pane_says_why_run_is_disabled_and_links_to_the_run(
     ui_project: Path,
 ) -> None:
     """A control refused without a reason is a bug report waiting to happen.
@@ -950,45 +879,41 @@ def test_app_bar_says_why_it_is_disabled_and_links_to_the_run(
         RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
     )
 
-    bar = _app_bar(TestClient(app).get("/").text)
+    pane = _next_pane(TestClient(app).get("/").text)
 
-    hint = re.search(r'<a[^>]*class="app-bar__busy"[^>]*>.*?</a>', bar, re.S)
-    assert hint, "the bar does not say a run is in progress"
+    hint = re.search(r'<a[^>]*class="next__busy"[^>]*>.*?</a>', pane, re.S)
+    assert hint, "the pane does not say a run is in progress"
     assert f'href="/runs/{record.run_id}"' in hint.group(0)
     assert "hidden" not in hint.group(0), "the reason is on the page but invisible"
 
 
-def test_app_bar_hint_is_hidden_when_the_project_is_idle(ui_project: Path) -> None:
+def test_the_busy_hint_is_hidden_when_the_project_is_idle(ui_project: Path) -> None:
     """No run, no notice -- but the element stays, hidden.
 
     The poller toggles it rather than building it, so the hint's markup
-    lives in the template alone. A version assembled in JavaScript would be
-    a second copy of it, free to drift from this one.
+    lives in the template alone.
     """
-    bar = _app_bar(TestClient(create_app(ui_project)).get("/").text)
+    pane = _next_pane(TestClient(create_app(ui_project)).get("/").text)
 
-    hint = re.search(r"<a[^>]*class=\"app-bar__busy\"[^>]*>", bar)
+    hint = re.search(r"<a[^>]*class=\"next__busy\"[^>]*>", pane, re.S)
     assert hint, "the hint element is gone, so the poller has nothing to reveal"
-    assert "hidden" in hint.group(0), "the bar claims a run is in progress"
+    assert "hidden" in hint.group(0), "the pane claims a run is in progress"
 
 
-@pytest.mark.parametrize("page", ["/", "/plan", "/walkthrough"])
-def test_every_page_disables_the_bar_during_a_run(
+@pytest.mark.parametrize("page", ["/", "/plan"])
+def test_every_workspace_page_disables_run_during_a_run(
     ui_project: Path, page: str
 ) -> None:
-    """The bar is on every page, so the rule has to be on every page.
-
-    The run console is deliberately included: its own Run button is the app
-    bar's, and "run this again" is exactly the mis-click this prevents.
-    """
+    """The run page is deliberately included: "run this again" is exactly
+    the mis-click this prevents."""
     app = create_app(ui_project)
     app.state.store.create_run(
         RunRequest(project_root=ui_project, pipeline="fixture", profile="slow")
     )
 
-    bar = _app_bar(TestClient(app).get(page).text)
+    pane = _next_pane(TestClient(app).get(page).text)
 
-    assert all("disabled" in tag for tag in _bar_controls(bar).values())
+    assert all("disabled" in tag for tag in _pane_controls(pane).values())
 
 
 # -- ... and come back without a reload ------------------------------------

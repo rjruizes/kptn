@@ -82,6 +82,7 @@ from kptn_server.project import (
     resolve_graph,
 )
 from kptn_server.run_store import RunStore
+from kptn_server.routes.runs import runs_pane
 from kptn_server.routes.support import (
     error_response,
     is_fragment_request,
@@ -299,6 +300,7 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
             {
                 "nav_active": "plan",
                 "selected_profile": selected,
+                "runs_pane": runs_pane(request, selected),
                 "rows": [_plan_row(entry) for entry in entries],
                 "state_note": note,
             },

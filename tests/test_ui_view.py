@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -92,6 +93,40 @@ def test_their_history_lists_their_published_runs(client: TestClient, theirs: Pa
     assert f'data-run-id="{record.run_id}"' in response.text
     assert 'data-status="succeeded"' in response.text
     assert "read-only" in response.text
+
+
+def test_their_landing_page_opens_their_newest_run(client: TestClient, theirs: Path) -> None:
+    publish_run(theirs)
+    newest = publish_run(theirs)
+
+    response = client.get(f"/view/{OTHER}/", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"runs/{newest.run_id}"
+
+
+def test_their_workspace_lists_every_profile_and_runs_nothing(
+    client: TestClient, theirs: Path
+) -> None:
+    """No profile selector here, so the Runs pane is every run, each naming
+    its profile -- and no Next run pane: there is nothing to run."""
+    record = publish_run(theirs)
+
+    body = client.get(f"/view/{OTHER}/runs/{record.run_id}").text
+
+    assert 'class="runrow__profile">success<' in body
+    assert re.search(r'<a class="runrow"[^>]*aria-current="page"', body)
+    assert "pane--next" not in body and 'id="profile-select"' not in body
+    assert 'data-url="/view/' + OTHER + "/run-list?current=" + record.run_id + '"' in body
+
+
+def test_their_runs_pane_refreshes_from_the_index(client: TestClient, theirs: Path) -> None:
+    record = publish_run(theirs)
+
+    response = client.get(f"/view/{OTHER}/run-list")
+
+    assert response.status_code == 200
+    assert f'data-run-id="{record.run_id}"' in response.text
 
 
 def test_their_run_page_renders_their_output_escaped(

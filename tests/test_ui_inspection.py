@@ -787,7 +787,7 @@ def test_task_detail_is_a_whole_page_for_a_direct_request(
 
     assert response.status_code == 200
     assert response.text.lstrip().startswith("<!DOCTYPE html>")
-    assert "app-bar__nav" in response.text
+    assert '<header class="app-bar">' in response.text
     assert "Emit output and warnings." in response.text
 
 
@@ -799,7 +799,7 @@ def test_task_detail_is_a_bare_fragment_for_htmx(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert "<!DOCTYPE html>" not in response.text
-    assert "app-bar__nav" not in response.text
+    assert '<header class="app-bar">' not in response.text
     assert "Emit output and warnings." in response.text
 
 

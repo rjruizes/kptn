@@ -560,14 +560,14 @@ def test_event_stream_run_header_still_carries_the_run(
 ) -> None:
     """Sending an empty fragment would also pass the test above.
 
-    The header's timestamps and log path are gone, so the status line is what
-    is left to prove the frame is a rendered header rather than nothing.
+    The run bar names its run -- for a reader with the sidebar hidden -- and
+    the Run pane's head carries the status line, which is what is left to
+    prove each frame is a rendered region rather than nothing.
     """
-    payload = _region_frame(
-        client.get(f"/runs/{seeded_events.run_id}/events").text, "run_header"
-    )
+    text = client.get(f"/runs/{seeded_events.run_id}/events").text
 
-    assert f'data-run-id="{seeded_events.run_id}"' in payload["html"]
+    assert f'title="{seeded_events.run_id}"' in _region_frame(text, "run_header")["html"]
+    assert f'data-run-id="{seeded_events.run_id}"' in _region_frame(text, "run_info")["html"]
 
 
 def test_event_stream_region_frames_carry_no_id(
@@ -629,7 +629,9 @@ def _row_for(body: str, sequence: int) -> str:
 
 
 def _section_for(body: str, task: str) -> str:
-    start = body.index(f'data-unit="{task}"')
+    """The task's section in the log -- not its row in the sidebar's rail,
+    which carries the same ``data-unit``."""
+    start = body.index(f'data-unit="{task}"', body.index('id="console"'))
     start = body.rindex("<section", 0, start)
     return body[start : body.index("</section>", start)]
 
@@ -847,8 +849,8 @@ def test_the_log_download_sits_in_the_run_bar_and_the_counts_in_the_rail(
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     body = client.get(f"/runs/{record.run_id}").text
-    header = body[body.index('id="run-header"') : body.index('<nav class="rail"')]
-    rail = body[body.index('<nav class="rail"') : body.index('id="console"')]
+    header = body[body.index('id="run-header"') : body.index('id="console"')]
+    rail = body[body.index('<nav class="rail"') : body.index("</nav>", body.index('<nav class="rail"'))]
 
     assert f'action="/runs/{record.run_id}/log"' in header
     assert "data-counter" not in header
@@ -858,7 +860,7 @@ def test_the_log_download_sits_in_the_run_bar_and_the_counts_in_the_rail(
 def test_the_closing_frame_says_how_long_the_run_took(
     app, store: RunStore, client
 ) -> None:
-    """The header frame replaces ``#run-header`` whole, with the run row as
+    """The run info frame replaces ``#run-info`` whole, with the run row as
     it is at the end: a run that finishes under an open page says how long
     it took without a reload."""
     record = _start_run(store, app.state.project.root)
@@ -867,19 +869,19 @@ def test_the_closing_frame_says_how_long_the_run_took(
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     payloads = _data_payloads(client.get(f"/runs/{record.run_id}/events").text)
-    frame = next(p for p in payloads if p.get("target") == "run-header")
+    frame = next(p for p in payloads if p.get("target") == "run-info")
 
-    assert re.search(r'class="run-bar__meta">started [^<]* · took [^<]+<', frame["html"])
+    assert re.search(r'class="rinfo__meta">Started [^<]*, took [^<]+<', frame["html"])
 
 
-def test_the_counts_read_all_ran_cached_and_warnings(app, store: RunStore, client) -> None:
+def test_the_counts_read_all_ran_cached_and_issues(app, store: RunStore, client) -> None:
     record = _start_run(store, app.state.project.root)
     store.append_event(record.run_id, "task_started", task_name="alpha")
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     run_page = client.get(f"/runs/{record.run_id}").text
 
-    for word in ("All", "Ran", "Cached", "Warnings"):
+    for word in ("All", "Ran", "Cached", "Issues"):
         assert f"</b>{word}</button>" in run_page, word
 
 
