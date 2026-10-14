@@ -53,7 +53,11 @@ _LOGGER = logging.getLogger(__name__)
 JSONValue = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
-_INITIAL_MIGRATION = _MIGRATIONS_DIR / "001_runs.sql"
+#: ``NNN_name.sql``, applied in order; each ends by recording its ``NNN`` in
+#: ``schema_version``.
+_MIGRATIONS = sorted(
+    (int(path.name[:3]), path) for path in _MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql")
+)
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
@@ -120,6 +124,9 @@ class RunRequest:
 @dataclass(frozen=True)
 class RunRecord:
     run_id: str
+    #: The run's place in its project's history, from 1: what the UI calls
+    #: it. The run id stays its key.
+    number: int
     project_root: Path
     pipeline: str
     profile: str | None
@@ -242,6 +249,18 @@ def _normalize_warning_text(text: str) -> str:
     """
     without_ansi = _ANSI_RE.sub("", text)
     return _TIMESTAMP_RE.sub("<TS>", without_ansi)
+
+
+def _statements(sql: str) -> list[str]:
+    """A migration script's statements, one each, comments and all."""
+    statements: list[str] = []
+    pending = ""
+    for line in sql.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            statements.append(pending.strip())
+            pending = ""
+    return statements
 
 
 def _dt_to_text(value: datetime | None) -> str | None:
@@ -410,34 +429,42 @@ class RunStore:
         return conn
 
     @staticmethod
-    def _ensure_schema(conn: sqlite3.Connection) -> None:
+    def _schema_version(conn: sqlite3.Connection) -> int:
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
         ).fetchone()
-        if row is not None:
+        if row is None:
+            return 0
+        return conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
+
+    @classmethod
+    def _ensure_schema(cls, conn: sqlite3.Connection) -> None:
+        """Bring the database up to the newest migration.
+
+        The version is read again under ``BEGIN IMMEDIATE`` before anything
+        is applied: several processes open a new or older database at once
+        (the server, a worker, ``kptn run``), and the one that waited for the
+        write lock must find the work done rather than repeat it. Each
+        migration's statements run one at a time inside that transaction --
+        ``executescript`` would commit it first -- so a database is never
+        left half-migrated.
+        """
+        if cls._schema_version(conn) >= _MIGRATIONS[-1][0]:
             return
-        sql = _INITIAL_MIGRATION.read_text()
-        # executescript() commits any pending transaction before it starts,
-        # then runs the given statements in sequence. To make the
-        # check-then-create atomic across processes/connections racing to
-        # initialize a brand-new database, wrap the migration itself in an
-        # explicit BEGIN IMMEDIATE/COMMIT inside the same script: the first
-        # connection to acquire the write lock creates the schema and
-        # commits; a connection that was blocked waiting for the lock then
-        # re-runs the same script against an already-migrated database and
-        # deterministically fails on "table schema_version already exists",
-        # which we treat as "someone else already did this" rather than an
-        # error.
-        script = f"BEGIN IMMEDIATE;\n{sql}\nCOMMIT;\n"
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.executescript(script)
-        except sqlite3.OperationalError as exc:
-            if "already exists" not in str(exc):
-                raise
+            current = cls._schema_version(conn)
+            for version, path in _MIGRATIONS:
+                if version > current:
+                    for statement in _statements(path.read_text()):
+                        conn.execute(statement)
+            conn.execute("COMMIT")
+        except BaseException:
             try:
                 conn.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+            raise
 
     # -- row <-> dataclass conversion -----------------------------------------
 
@@ -445,6 +472,7 @@ class RunStore:
     def _row_to_run(row: sqlite3.Row) -> RunRecord:
         return RunRecord(
             run_id=row["run_id"],
+            number=row["number"],
             project_root=Path(row["project_root"]),
             pipeline=row["pipeline"],
             profile=row["profile"],
@@ -497,17 +525,22 @@ class RunStore:
                     f"project {canonical_root} already has an active run: {existing['run_id']}"
                 )
 
+            number = conn.execute(
+                "SELECT COALESCE(MAX(number), 0) + 1 FROM runs WHERE project_root = ?",
+                (str(canonical_root),),
+            ).fetchone()[0]
             conn.execute(
                 """
                 INSERT INTO runs (
-                    run_id, project_root, pipeline, profile, force, status,
+                    run_id, number, project_root, pipeline, profile, force, status,
                     created_at, started_at, finished_at, worker_pid,
                     worker_started_at, heartbeat_at, current_task, exit_code,
                     log_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)
                 """,
                 (
                     run_id,
+                    number,
                     str(canonical_root),
                     request.pipeline,
                     request.profile,
@@ -534,6 +567,7 @@ class RunStore:
         self.publish_index(canonical_root)
         return RunRecord(
             run_id=run_id,
+            number=number,
             project_root=canonical_root,
             pipeline=request.pipeline,
             profile=request.profile,

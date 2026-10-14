@@ -18,7 +18,7 @@
       <a class="runrow" href="{{ project_base }}/runs/{{ row.run_id }}" title="{{ row.title }}" data-run-id="{{ row.run_id }}"
          {%- if row.run_id == runs_pane.current %} aria-current="page"{% endif %}>
         {{ status_icon(row.icon, warned=row.warned) }}
-        <span class="runrow__id">{{ row.short_id }}</span>
+        <span class="runrow__id">{{ row.label }}</span>
         {%- if runs_pane.profiles %}<span class="runrow__profile">{{ row.profile or "no profile" }}</span>{% endif %}
         {%- if row.not_reporting %}<span class="runrow__stale" data-not-reporting>not reporting</span>{% endif %}
         <span class="runrow__t">{{ row.time }}</span>

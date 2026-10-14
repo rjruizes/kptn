@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kptn_server.app import STATIC_DIR, create_app
-from kptn_server.run_list import run_days
+from kptn_server.run_list import run_days, run_label
 from kptn_server.run_store import STATUS_SUCCEEDED, RunRequest, RunStore
 
 pytestmark = pytest.mark.ui_hygiene
@@ -25,6 +25,7 @@ class Run:
     status: str
     created_at: datetime
     profile: str | None = None
+    number: int | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
@@ -52,13 +53,22 @@ def test_runs_fall_under_the_day_they_were_made() -> None:
     assert labels[3].endswith(f", {(NOW - timedelta(days=400)).year}")
 
 
-def test_a_row_is_a_short_id_and_a_clock_time() -> None:
-    (day,) = run_days([_run("failed", timedelta(0), run_id="0123456789" + "f" * 22)], lambda run: 0, now=NOW)
+def test_a_row_is_the_runs_number_and_a_clock_time() -> None:
+    run = _run("failed", timedelta(0))
+    run.number = 12
+    (day,) = run_days([run], lambda run: 0, now=NOW)
     (row,) = day.rows
 
-    assert row.short_id == "0123456"
+    assert row.label == "#12"
     assert row.time == NOW.strftime("%I:%M %p").lstrip("0")
     assert row.icon == "failed"
+
+
+def test_a_run_without_a_number_goes_by_its_short_id() -> None:
+    """A colleague's index published before runs were numbered."""
+    run = _run("failed", timedelta(0), run_id="0123456789" + "f" * 22)
+
+    assert run_label(run) == "0123456"
 
 
 @pytest.mark.parametrize(

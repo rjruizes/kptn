@@ -1,8 +1,8 @@
 """The sidebar's Runs pane: a profile's runs, newest first, under the day
 they were made.
 
-One row per run -- how it went, as the rail's icon; its id, cut to the
-seven characters a reader can tell runs apart by; and the time it was made.
+One row per run -- how it went, as the rail's icon; its number, which is
+what the UI calls a run (:func:`run_label`); and the time it was made.
 Built here from run rows of either kind -- the owner's
 :class:`~kptn_server.run_store.RunRecord` or a published
 :class:`~kptn_server.run_files.IndexedRun` -- so the owner's pane and a
@@ -18,7 +18,7 @@ from typing import Any
 
 from kptn_server.run_outline import run_timing
 
-#: How many characters of a run's id the pane shows.
+#: How many characters of a run's id name a run that has no number.
 SHORT_ID = 7
 
 #: A run's status as the icon the rail draws for a task (``_status.html``).
@@ -45,14 +45,21 @@ _WORDS = {
 }
 
 
-def short_id(run_id: str) -> str:
-    return run_id[:SHORT_ID]
+def run_label(run: Any) -> str:
+    """What the UI calls *run*: ``#12``, its number in the project's history.
+
+    A colleague's index published before runs were numbered has none, and
+    there the run goes by the start of its id instead. The full id is never
+    far: it is the run's URL, and the label's tooltip.
+    """
+    number = getattr(run, "number", None)
+    return f"#{number}" if number is not None else run.run_id[:SHORT_ID]
 
 
 @dataclass(frozen=True)
 class RunRow:
     run_id: str
-    short_id: str
+    label: str
     #: The icon's state, and whether a succeeded run warned.
     icon: str
     warned: bool
@@ -107,7 +114,7 @@ def run_days(
         days[-1].rows.append(
             RunRow(
                 run_id=run.run_id,
-                short_id=short_id(run.run_id),
+                label=run_label(run),
                 icon=_ICONS.get(run.status, "waiting"),
                 warned=warned,
                 time=local.strftime("%I:%M %p").lstrip("0") if local is not None else "",
@@ -119,4 +126,4 @@ def run_days(
     return days
 
 
-__all__ = ["SHORT_ID", "RunDay", "RunRow", "run_days", "short_id"]
+__all__ = ["SHORT_ID", "RunDay", "RunRow", "run_days", "run_label"]

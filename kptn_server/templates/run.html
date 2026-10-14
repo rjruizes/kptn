@@ -21,7 +21,7 @@
 {% extends "workspace.html" %}
 {% from "_outline.html" import outline_nav %}
 
-{% block title %}{{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
+{% block title %}{{ run | run_label }} {{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
 
 {% block run_pane %}
 {% include "_run_info.html" %}

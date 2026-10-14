@@ -30,7 +30,7 @@
     up to date.
   #}
   <div class="run-bar__ctx">
-    <strong title="{{ run.run_id }}">{{ run.run_id[:7] }}</strong>
+    <strong title="{{ run.run_id }}">{{ run | run_label }}</strong>
     <span class="status status--{{ run.status }}">{{ run.status }}</span>
   </div>
 

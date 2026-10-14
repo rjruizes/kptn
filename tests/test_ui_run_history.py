@@ -344,7 +344,7 @@ def test_a_run_row_links_to_its_page_and_says_how_it_went(
     )
     row = _history_row(_runs(client, "failure"), record.run_id)
     assert f'href="/runs/{record.run_id}"' in row
-    assert f'<span class="runrow__id">{record.run_id[:7]}</span>' in row
+    assert f'<span class="runrow__id">#{record.number}</span>' in row
     assert 'aria-label="Succeeded"' in row
     assert 'title="Succeeded' in row
 

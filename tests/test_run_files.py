@@ -205,6 +205,27 @@ def test_creating_and_finishing_a_run_publish_the_index(tmp_path: Path) -> None:
     assert listed.counters["succeeded"] == 2
 
 
+def test_the_index_carries_each_runs_number(tmp_path: Path) -> None:
+    store, record, runs_dir = _store_and_run(tmp_path)
+    _two_tasks(store, record.run_id)
+    second = store.create_run(RunRequest(project_root=record.project_root, pipeline="main"))
+
+    assert [run.number for run in read_index(runs_dir)] == [second.number, record.number] == [2, 1]
+
+
+def test_an_index_from_before_run_numbers_reads_without_them(tmp_path: Path) -> None:
+    _store, record, runs_dir = _store_and_run(tmp_path)
+    index = runs_dir / INDEX_FILENAME
+    document = json.loads(index.read_text())
+    for row in document["runs"]:
+        del row["number"]
+    index.write_text(json.dumps(document))
+
+    (listed,) = read_index(runs_dir)
+    assert listed.run_id == record.run_id
+    assert listed.number is None
+
+
 def test_unforced_publishes_are_rate_limited(tmp_path: Path) -> None:
     store, record, runs_dir = _store_and_run(tmp_path)
     store.append_event(record.run_id, EventKind.RUN_STARTED.value)  # forced

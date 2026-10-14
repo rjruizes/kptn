@@ -16,7 +16,7 @@
 {% from "_outline.html" import outline_nav %}
 {% from "_run_bar.html" import log_controls, download_log, more_menu %}
 
-{% block title %}{{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
+{% block title %}{{ run | run_label }} {{ run.status }} - {{ project.display_name }} - kptn{% endblock %}
 
 {% block run_pane %}
 {% include "_run_info.html" %}
@@ -26,7 +26,7 @@
 {% block app_tools %}
 <div id="run-header" class="app-bar__tools">
   <div class="run-bar__ctx">
-    <strong title="{{ run.run_id }}">{{ run.run_id[:7] }}</strong>
+    <strong title="{{ run.run_id }}">{{ run | run_label }}</strong>
     <span class="status status--{{ run.status }}">{{ run.status }}</span>
   </div>
   {{ log_controls() }}

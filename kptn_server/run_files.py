@@ -220,6 +220,7 @@ def build_index(
         "runs": [
             {
                 "run_id": record.run_id,
+                "number": record.number,
                 "pipeline": record.pipeline,
                 "profile": record.profile,
                 "force": record.force,
@@ -263,6 +264,8 @@ class IndexedRun:
     current_task: str | None
     exit_code: int | None
     counters: dict[str, int] = field(default_factory=dict)
+    #: ``None`` in an index published before runs were numbered.
+    number: int | None = None
 
 
 def read_index(runs_dir: Path) -> list[IndexedRun]:
@@ -313,6 +316,7 @@ def _indexed_run(value: object) -> IndexedRun | None:
         if isinstance(count, int) and not isinstance(count, bool)
     }
     exit_code = row.get("exit_code")
+    number = row.get("number")
     return IndexedRun(
         run_id=run_id,
         pipeline=_text(row.get("pipeline")) or "",
@@ -329,6 +333,7 @@ def _indexed_run(value: object) -> IndexedRun | None:
             **{key: 0 for key in ("tasks", "skipped", "warnings", "succeeded", "failed", "unfinished")},
             **counted,
         },
+        number=number if isinstance(number, int) and not isinstance(number, bool) and number > 0 else None,
     )
 
 

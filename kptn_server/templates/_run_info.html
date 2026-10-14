@@ -9,7 +9,7 @@
 #}
 <div class="rinfo" id="run-info">
   <div class="rinfo__top">
-    <span class="rinfo__id" title="{{ run.run_id }}">{{ run.run_id[:7] }}</span>
+    <span class="rinfo__id" title="{{ run.run_id }}">{{ run | run_label }}</span>
     {% include "_run_status.html" %}
   </div>
   {%- set timing = run | run_timing %}

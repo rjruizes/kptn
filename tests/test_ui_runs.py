@@ -537,15 +537,20 @@ def _run_info(body: str) -> str:
     return match.group(0)
 
 
-def test_the_run_pane_names_the_run_by_its_short_id(
+def test_the_run_pane_names_the_run_by_its_number(
     client: TestClient, app, store: RunStore
 ) -> None:
-    """Seven characters, as the Runs pane lists it; the whole id on hover."""
+    """``#2``, as the Runs pane lists it; the whole id on hover."""
+    first = _seed_run(store, app.state.project.root, profile="slow")
+    store.finish_run(first.run_id, STATUS_FAILED, exit_code=1)
     record = _seed_run(store, app.state.project.root, profile="slow")
 
-    info = _run_info(client.get(f"/runs/{record.run_id}").text)
+    body = client.get(f"/runs/{record.run_id}").text
+    info = _run_info(body)
 
-    assert f'title="{record.run_id}">{record.run_id[:7]}</span>' in info
+    assert record.number == 2
+    assert f'title="{record.run_id}">#2</span>' in info
+    assert "<title>#2 " in body
 
 
 def test_the_run_info_heads_the_run_pane(
@@ -571,7 +576,7 @@ def test_the_run_bar_names_the_run_for_a_hidden_sidebar(
     ctx = re.search(r'<div class="run-bar__ctx">.*?</div>', body, re.S)
 
     assert ctx, "the run bar does not name the run"
-    assert f">{record.run_id[:7]}</strong>" in ctx.group(0)
+    assert f">#{record.number}</strong>" in ctx.group(0)
     assert "status--failed" in ctx.group(0)
 
 
@@ -690,7 +695,7 @@ def test_the_run_info_carries_the_status_after_the_id(
     info = _run_info(client.get(f"/runs/{record.run_id}").text)
 
     assert 'id="run-status"' in info, "the status is not in the run info"
-    assert info.index(record.run_id[:7]) < info.index('id="run-status"')
+    assert info.index(f"#{record.number}") < info.index('id="run-status"')
 
 
 def test_run_page_does_not_report_an_exit_code(
