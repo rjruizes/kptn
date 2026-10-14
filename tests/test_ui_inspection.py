@@ -148,7 +148,7 @@ def test_plan_view_renders_the_plan_builders_entries(
     monkeypatch.setattr(
         inspect_routes,
         "build_plan",
-        lambda resolved, state_store: [
+        lambda resolved, state_store, **_: [
             PlanEntry("only_from_build_plan", PlanAction.SKIP, reason="cached"),
         ],
     )
@@ -172,7 +172,7 @@ def test_plan_view_reports_every_plan_action(
     monkeypatch.setattr(
         inspect_routes,
         "build_plan",
-        lambda resolved, state_store: [
+        lambda resolved, state_store, **_: [
             PlanEntry("runs_now", PlanAction.RUN, reason="no cached hash"),
             PlanEntry("stays_cached", PlanAction.SKIP, reason="cached"),
             PlanEntry("fans_out", PlanAction.MAP, provider="upstream"),

@@ -247,3 +247,28 @@ def test_the_plan_waits_for_a_run_in_progress(app, store, client, project) -> No
 
     assert response.status_code == 409
     assert "A run is in progress" in response.text
+
+
+def test_the_plan_lists_a_config_driven_sources_tables(tmp_path: Path) -> None:
+    """The plan gets the config's values, as ``kptn plan`` does: a source
+    whose files come from config is planned table by table. The config
+    reads a relative path, so this also pins the project's directory."""
+    root = tmp_path / "sourced"
+    (root / "in" / "labs").mkdir(parents=True)
+    (root / "in" / "labs" / "a.csv").write_text("x\n1\n")
+    (root / "in" / "labs" / "b.csv").write_text("x\n2\n")
+    (root / "config.json").write_text('{"labs": "in/labs"}')
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "sourced"\nversion = "0.0.0"\n\n[tool.kptn]\npipeline = "sourced_pipeline"\n'
+    )
+    (root / "sourced_pipeline.py").write_text(
+        "import json\nfrom pathlib import Path\n\nimport kptn\n\n\n"
+        "def get_config():\n    return json.loads(Path('config.json').read_text())\n\n\n"
+        "labs = kptn.source('labs', files=lambda config: config['labs'])\n\n"
+        "pipeline = kptn.Pipeline('sourced', kptn.config(config=get_config) >> labs)\n"
+    )
+
+    html = TestClient(create_app(root)).get("/plan").text
+
+    assert set(_actions(html)) == {"labs[a]", "labs[b]"}
+    assert "files depend on config" not in html

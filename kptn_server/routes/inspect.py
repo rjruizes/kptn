@@ -69,7 +69,7 @@ from kptn.exceptions import KptnError
 from kptn.inspection import InspectionItem, PipelineInspection, inspect_pipeline
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.runner.checkpoint import TaskStateReader
-from kptn.runner.plan import PlanAction, PlanEntry, build_plan
+from kptn.runner.plan import PlanAction, PlanEntry, build_plan, config_values_for_plan
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
 from kptn_server.context import ui
@@ -173,7 +173,11 @@ def _open_state_store(project: ProjectContext) -> StateStoreBackend:
 
 
 def _plan_from_database(
-    project: ProjectContext, runs: RunStore, resolved: ResolvedGraph, profile: str | None
+    project: ProjectContext,
+    runs: RunStore,
+    resolved: ResolvedGraph,
+    profile: str | None,
+    planning: dict[str, Any],
 ) -> tuple[list[PlanEntry], str]:
     """The plan of a pipeline with a DuckDB factory, and where its state came from.
 
@@ -186,10 +190,10 @@ def _plan_from_database(
     """
     source = state_source(project, runs, profile)
     if source.path is None:
-        return build_plan(resolved, _NeverRunStateStore()), source.note
+        return build_plan(resolved, _NeverRunStateStore(), **planning), source.note
     conn = duckdb.connect(str(source.path), read_only=True)
     try:
-        return build_plan(resolved, TaskStateReader(conn)), source.note
+        return build_plan(resolved, TaskStateReader(conn), **planning), source.note
     finally:
         conn.close()
 
@@ -258,12 +262,18 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
             )
         try:
             resolved = resolve_graph(project, selected)
+            # The config's values, as ``kptn plan`` passes them: a source
+            # whose files come from config is planned table by table rather
+            # than shown as "files depend on config". Read in the project's
+            # directory (the slot's), where a config reading a relative path
+            # finds it; ``duckdb`` is left out, so no database is opened.
+            planning = {"config_values": config_values_for_plan(project.pipeline), "root": project.root}
             if uses_duckdb(project):
-                entries, note = _plan_from_database(project, current.store, resolved, selected)
+                entries, note = _plan_from_database(project, current.store, resolved, selected, planning)
             else:
                 store = _open_state_store(project)
                 try:
-                    entries = build_plan(resolved, store)
+                    entries = build_plan(resolved, store, **planning)
                 finally:
                     _release(store)
         except duckdb.Error as exc:
