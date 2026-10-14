@@ -1237,9 +1237,12 @@ body.no-side .side {
   color: var(--ink);
 }
 
+/* The trash is pinned beside the label and the name's first line, not
+ * centred on the text: a delete hands the card to a checkpoint whose name
+ * may wrap, and the button must not move from under the pointer. */
 .statecard {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
 }
 
@@ -1290,7 +1293,8 @@ body.no-side .side {
 
 .st-form {
   display: flex;
-  margin: 0;
+  flex: none;
+  margin: 4px 0 0;
 }
 
 /* The trash: a first click arms it -- red, "Delete?" -- and a second
