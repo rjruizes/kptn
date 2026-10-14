@@ -45,8 +45,8 @@ _RUNS_SEARCHED = 20
 class NextStart:
     """Everything the state card shows."""
 
-    #: ``database`` or ``checkpoint`` -- or ``busy`` (a run has the database
-    #: open) and ``unreadable`` (something else does).
+    #: ``database`` or ``checkpoint`` -- or ``unreadable``, when another
+    #: process has the database open.
     state: str
     label: str
     name: str
@@ -81,7 +81,9 @@ def next_start(
 
     No card, too, when there is nothing to start from: no run has reported a
     database yet, or there is neither a database nor a checkpoint -- the
-    next run starts fresh, and the pane shows Run and Plan alone.
+    next run starts fresh, and the pane shows Run and Plan alone. And none
+    while a run is in progress: what the next run starts from is decided
+    when this one ends, and the card comes back then.
     """
     if not uses_duckdb(project):
         return None
@@ -89,7 +91,7 @@ def next_start(
     if database is None:
         return None
     if store.active_run(project.root) is not None:
-        return NextStart("busy", "Starts from", database.name, "Known when this run ends.")
+        return None
 
     resolved = resolve_graph(project, profile)
     try:

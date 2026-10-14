@@ -161,7 +161,7 @@ def test_nothing_is_deleted_while_a_run_is_in_progress(app, store, client, proje
     card = client.get("/next-start").text
     response = _delete(client, "pipeline.db")
 
-    assert _card(card)[2] is None, "the card offers no delete during a run"
+    assert card.strip() == "", "the card shows during a run"
     assert response.status_code == 409
     assert (project / "pipeline.db").exists()
 

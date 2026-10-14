@@ -11,8 +11,8 @@
   button: the first click arms it ("Delete?"), a second within three
   seconds deletes, and it disarms when the time runs out or focus leaves.
   Without JavaScript, one click submits the form. While a run is in
-  progress the card says so and has no button: the server refuses the
-  delete then anyway.
+  progress there is no card -- the server refuses a delete then anyway --
+  and app.js fetches it again when the run ends.
 #}
 {% if card %}
 <div class="statecard" data-state="{{ card.state }}">
