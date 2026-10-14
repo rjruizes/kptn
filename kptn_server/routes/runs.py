@@ -164,7 +164,7 @@ STATUS_EVENT_NAME = "run_status"
 #: Adding a region here without teaching app.js about it is caught by a test,
 #: because the failure has no symptom of its own.
 REGION_EVENT_TARGETS: Mapping[str, str] = MappingProxyType(
-    {"run_header": "run-header", "run_info": "run-info"}
+    {"run_header": "run-header", "run_info": "run-info", "run_notice": "run-notice"}
 )
 
 #: How many runs ``GET /runs`` renders. The history is unbounded on disk and
@@ -601,6 +601,13 @@ def render_region(
         }
     elif name == "run_info":
         context = {"run": record, "is_terminal": record.status in TERMINAL_STATUSES}
+    elif name == "run_notice":
+        context = {
+            "run": record,
+            "force_finish_offered": looks_wedged(record),
+            "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
+            "project_base": project_base,
+        }
     else:
         raise ValueError(f"no such run-page region: {name!r}")
     return templates.get_template(f"_{name}.html").render(**context)

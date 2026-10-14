@@ -45,9 +45,8 @@ _RUNS_SEARCHED = 20
 class NextStart:
     """Everything the state card shows."""
 
-    #: ``database``, ``checkpoint``, ``fresh`` -- or ``unknown`` (no run has
-    #: reported a database yet), ``busy`` (a run has it open) and
-    #: ``unreadable`` (something else does).
+    #: ``database`` or ``checkpoint`` -- or ``busy`` (a run has the database
+    #: open) and ``unreadable`` (something else does).
     state: str
     label: str
     name: str
@@ -78,17 +77,17 @@ def uses_duckdb(project: ProjectContext) -> bool:
 def next_start(
     project: ProjectContext, store: RunStore, profile: str | None
 ) -> NextStart | None:
-    """What the next run of *profile* starts from, or ``None`` for no card."""
+    """What the next run of *profile* starts from, or ``None`` for no card.
+
+    No card, too, when there is nothing to start from: no run has reported a
+    database yet, or there is neither a database nor a checkpoint -- the
+    next run starts fresh, and the pane shows Run and Plan alone.
+    """
     if not uses_duckdb(project):
         return None
     database = reported_database(store, project.root)
     if database is None:
-        return NextStart(
-            "unknown",
-            "Starts from",
-            "Not known yet",
-            "Run the pipeline once to see its database here.",
-        )
+        return None
     if store.active_run(project.root) is not None:
         return NextStart("busy", "Starts from", database.name, "Known when this run ends.")
 
@@ -106,7 +105,7 @@ def next_start(
         )
 
     if start.kind == "fresh":
-        return NextStart("fresh", "Starts fresh", "No database")
+        return None
     if start.kind == "checkpoint":
         return NextStart(
             "checkpoint",

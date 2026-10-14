@@ -9,6 +9,10 @@
                       scrolling inside it
     profile_nav     - where choosing a profile goes (see below)
     select_form     - ``form="run-form"`` on a page that has the Run form
+    side_toggle     - the sidebar's button, at the far left of the app bar,
+                      on a page with a sidebar (workspace.html)
+    app_tools       - what acts on the page, before the gear: the run
+                      page's Stop, Collapse all, View, Retry and "..."
     scripts         - extra page-local script tags
 
   The app bar says where you are -- kptn, the project, the profile -- and
@@ -51,6 +55,7 @@
         It marks ``selected_profile``, which each route passes after
         validating it -- the run page's from the run row.
       #}
+      {% block side_toggle %}{% endblock %}
       <div class="app-bar__start">
         <a class="app-bar__brand" href="{{ base }}/" aria-label="kptn home">kptn</a>
         {% if picker %}
@@ -69,6 +74,8 @@
           </select>
         </label>
       </div>
+
+      {% block app_tools %}{% endblock %}
 
       {# The settings gear, out at the right-hand end of the bar. #}
       <div class="app-bar__end">

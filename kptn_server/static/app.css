@@ -160,7 +160,9 @@ pre {
   color: var(--ink);
 }
 
+/* Whole: when the bar runs short, the profile's box gives way first. */
 .app-bar__project {
+  flex: none;
   overflow: hidden;
   color: var(--ink-muted);
   text-overflow: ellipsis;
@@ -441,6 +443,17 @@ a.project-picker__item:focus-visible {
 @media (max-width: 760px) {
   .app-bar {
     padding: 8px 10px;
+  }
+
+  /* The run's tools take a row of their own, under the path. */
+  .app-bar__inner {
+    flex-wrap: wrap;
+  }
+
+  .app-bar__tools {
+    order: 3;
+    flex-wrap: wrap;
+    width: 100%;
   }
 
   .app-bar__brand,
@@ -758,13 +771,18 @@ button:disabled {
   padding: 0;
 }
 
-/* The main area beside the sidebar: a bar, then the log or the page. */
+/* The main area beside the sidebar: the log or the page, under any notice. */
 .run-page {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   background: var(--surface);
+}
+
+.run-page > .console {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Inline, because it sits beside the run's id in the Run pane. On the 409 page
@@ -789,28 +807,33 @@ button:disabled {
   font-size: 12px;
 }
 
-/* -- the run bar -- */
+/* -- the run's tools, in the app bar (_run_header.html) -- */
 
-.run-bar {
+.app-bar__tools {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 10px 14px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
+  gap: 6px;
+  min-width: 0;
 }
 
-/* Pulled back so the icon, not its hover square, lines up with the edge. */
-.run-bar__side {
+.app-bar__tools form {
+  display: flex;
+  margin: 0;
+}
+
+/* The sidebar's button leads the bar, pulled back so the icon, not its
+ * hover square, lines up with the edge. */
+.app-bar__side {
   margin-left: -6px;
 }
 
-/* Which run, beside the sidebar's button -- shown only when the sidebar,
- * whose Run pane says it otherwise, is hidden. */
+/* Which run, ahead of its tools -- shown only when the sidebar, whose Run
+ * pane says it otherwise, is hidden. */
 .run-bar__ctx {
   display: none;
   align-items: center;
   gap: 8px;
+  margin-right: 6px;
   font-size: 14px;
 }
 
@@ -819,12 +842,54 @@ button:disabled {
   font-weight: 500;
 }
 
-.no-side .run-bar__ctx {
+body.no-side .run-bar__ctx {
   display: flex;
+}
+
+/* The profile's box gives way to the tools, but not to nothing. */
+.selbox--path {
+  min-width: 110px;
+}
+
+/* Short of room, the tools are icons: their words stay their names, for a
+ * screen reader, and their tooltips. */
+@media (max-width: 1000px) {
+  .app-bar__tools .btn__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .app-bar__tools .btn {
+    gap: 3px;
+    padding: 5px 8px;
+  }
+}
+
+/* Above the log: the force-finish hatch, and the read-only view's notes
+ * about a run that has gone quiet or cannot be read. */
+.run-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.run-notice[hidden] {
+  display: none;
+}
+
+.run-notice p {
+  margin: 0;
 }
 
 /* The main area of a page with no log: the plan, or no run yet. */
 .page-scroll {
+  flex: 1;
   min-height: 0;
   overflow: auto;
   padding: var(--content-gutter);
@@ -835,65 +900,6 @@ button:disabled {
   color: var(--ink-faint);
   font-size: 13px;
   text-align: center;
-}
-
-.run-bar__title {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.run-bar__crumb {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  font-size: 14px;
-  font-weight: 400;
-}
-
-.run-bar__crumb a {
-  color: var(--ink-muted);
-  text-decoration: none;
-}
-
-.run-bar__crumb a:hover {
-  color: var(--accent);
-}
-
-.run-bar__sep {
-  color: var(--ink-faint);
-}
-
-.run-bar__crumb strong {
-  font-weight: 600;
-}
-
-.run-bar__meta {
-  color: var(--ink-faint);
-  font-size: 12.5px;
-}
-
-.run-bar__actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-}
-
-.run-bar__actions form {
-  margin: 0;
-}
-
-/* Below the bar's own row: the force-finish hatch, and the read-only view's
- * notes about a run that has gone quiet or cannot be read. */
-.run-bar > .run-actions__abandon,
-.run-bar__note {
-  flex-basis: 100%;
-  margin: 0;
 }
 
 .btn {
@@ -1056,12 +1062,13 @@ button:disabled {
   min-height: 0;
 }
 
-/* The sidebar hidden from the bar: the main area takes the whole width. */
-.run-body.no-side {
+/* The sidebar hidden from the app bar's button (app.js marks <body>):
+ * the main area takes the whole width. */
+body.no-side .run-body {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.run-body.no-side .side {
+body.no-side .side {
   display: none;
 }
 
@@ -1274,10 +1281,6 @@ button:disabled {
 .st-db__name {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-.st-db.none {
-  font-family: var(--font-ui);
 }
 
 .st-facts {
@@ -2026,14 +2029,6 @@ button.sec-h:hover {
 }
 
 @media (max-width: 760px) {
-  .run-bar {
-    padding: 10px 12px;
-  }
-
-  .run-bar__actions {
-    margin-left: 0;
-  }
-
   .run-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);

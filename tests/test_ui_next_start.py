@@ -132,14 +132,16 @@ def test_deleting_the_database_hands_the_card_to_its_checkpoint(app, store, clie
     )
 
 
-def test_with_nothing_left_the_next_run_starts_fresh(app, store, client, project) -> None:
+def test_with_nothing_left_there_is_no_card(app, store, client, project) -> None:
+    """Nothing to start from, nothing to say: the pane shows Run and Plan."""
     _report(store, project)
     _delete(client, "pipeline.db")
 
     response = _delete(client, "pipeline.init_database.backup.db")
 
+    assert response.status_code == 200
     assert not (project / "pipeline.init_database.backup.db").exists()
-    assert _card(response.text) == ("Starts fresh", "No database", None)
+    assert response.text.strip() == ""
 
 
 def test_a_stale_card_cannot_delete_what_took_its_place(app, store, client, project) -> None:
@@ -164,9 +166,8 @@ def test_nothing_is_deleted_while_a_run_is_in_progress(app, store, client, proje
     assert (project / "pipeline.db").exists()
 
 
-def test_before_any_run_reports_the_card_says_it_does_not_know(app, client) -> None:
-    label, name, file = _card(client.get("/next-start").text)
-    assert (name, file) == ("Not known yet", None)
+def test_before_any_run_reports_there_is_no_card(app, client) -> None:
+    assert client.get("/next-start").text.strip() == ""
 
 
 def test_a_pipeline_without_duckdb_has_no_card(ui_project: Path) -> None:

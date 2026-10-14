@@ -3,7 +3,8 @@
   kptn_server.next_start). A fragment, fetched by app.js into the pane's
   ``#next-start`` slot, and fetched again after a delete -- never assembled
   in the browser. The pane's header says "Next run", so the card's label is
-  the rest of the sentence: "Continues from", "Restores", "Starts fresh".
+  the rest of the sentence: "Continues from", "Restores". With nothing to
+  start from there is no card, and the pane shows Run and Plan alone.
 
   The trash button posts the file's *name*; the server deletes it only if
   it is still what the next run starts from. app.js makes it a two-click
@@ -17,10 +18,10 @@
 <div class="statecard" data-state="{{ card.state }}">
   <div class="st-text">
     <span class="st-lbl">{{ card.label }}</span>
-    <span class="st-db{% if card.state == 'fresh' or card.state == 'unknown' %} none{% endif %}"{% if card.path %} title="{{ card.path }}"{% endif %}>
+    <span class="st-db"{% if card.path %} title="{{ card.path }}"{% endif %}>
       {%- if card.state == "checkpoint" -%}
       <svg class="st-db__ckpt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z"/></svg>
-      {%- elif card.state not in ("fresh", "unknown") -%}
+      {%- else -%}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
       {%- endif -%}
       <span class="st-db__name">{{ card.name }}</span>

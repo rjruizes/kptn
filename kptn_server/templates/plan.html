@@ -11,7 +11,6 @@
   Jinja's autoescaping, like everything else in this UI.
 #}
 {% extends "workspace.html" %}
-{% from "_run_bar.html" import side_toggle %}
 
 {% block title %}Plan - {{ project.display_name }} - kptn{% endblock %}
 
@@ -21,18 +20,15 @@
 {% block main_label %}Plan{% endblock %}
 
 {% block main %}
-<div class="run-bar">
-  {{ side_toggle() }}
-  <div class="run-bar__title">
-    <h2 class="run-bar__crumb"><strong>Plan</strong></h2>
-    <span class="run-bar__meta">
-      {% if selected_profile %}{{ selected_profile }}{% else %}No profile{% endif %}
-      &middot; {{ rows | length }} task{{ '' if rows | length == 1 else 's' }}
-    </span>
-  </div>
-</div>
 <div class="page-scroll">
 <section class="panel" id="plan">
+  <header class="console__bar">
+    <h2>Plan</h2>
+    <span class="muted">
+      {% if selected_profile %}profile <code>{{ selected_profile }}</code>{% else %}no profile{% endif %}
+      &middot; {{ rows | length }} task{{ '' if rows | length == 1 else 's' }}
+    </span>
+  </header>
 
   <p class="muted">
     What <code>kptn run</code> would do next. Nothing on this page runs anything.

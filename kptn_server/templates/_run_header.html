@@ -1,39 +1,27 @@
 {#
-  A run's header, as a replaceable fragment.
+  A run's tools, in the app bar, as a replaceable fragment.
 
   Rendered in two places: on the run page, and as the ``run_header`` SSE frame
-  that closes a stream. It therefore takes only the run and the three flags
-  below -- never the request -- so it can be rendered straight from Python.
-
-  A plain ``<div>`` and not a panel of its own: the run page is one panel, and
-  this is the half of it that can go stale. The id stays on *this* element
-  rather than on the panel, so the stream's frame replaces the header without
-  taking the console with it.
+  that closes a stream. It therefore takes only the run and the flags below
+  -- never the request -- so it can be rendered straight from Python.
 
   Everything here comes from the run *row*, which is why it has to be
   replaceable at all. A run that goes terminal under an open stream leaves the
   page offering Stop for a process that is gone; the closing frame swaps this
-  whole section for the one the server would render now.
+  whole group for the one the server would render now.
 
-  The log path is deliberately not here: the raw log is a download rather
-  than a path to copy. Nor is the run's status or timing, which head the
-  sidebar's Run pane (``_run_info.html``), or its tallies -- the pane's
-  filters.
+  In order: the run's id and status, shown only while the sidebar -- whose
+  Run pane says them otherwise -- is hidden; Stop, while the run is going;
+  the log's Collapse all and View; Retry; and the "..." menu, with the log's
+  download and the page's link. The force-finish hatch is too much to sit
+  in a toolbar, so it is the main area's ``_run_notice.html``.
 
-  Two controls, and the difference between them is the point:
-
-  ``Stop``          asks the worker to wind down. It records intent and
-                    signals; it never writes an outcome, because only the
-                    worker knows whether cleanup finished.
-  ``Force-finish``  the escape hatch for a worker whose liveness can never be
-                    determined, and which reconciliation therefore cannot
-                    settle. It abandons a possibly-live process, so it is
-                    behind a disclosure *and* a typed confirmation -- never
-                    one click away from Stop.
+  ``Stop`` asks the worker to wind down. It records intent and signals; it
+  never writes an outcome, because only the worker knows whether cleanup
+  finished.
 #}
-{% from "_run_bar.html" import side_toggle, log_controls, download_log, more_menu %}
-<div id="run-header" class="run-bar">
-  {{ side_toggle() }}
+{% from "_run_bar.html" import log_controls, download_log, more_menu %}
+<div id="run-header" class="app-bar__tools">
 
   {#
     Which run, for when the sidebar is hidden: its id and its status, which
@@ -46,76 +34,33 @@
     <span class="status status--{{ run.status }}">{{ run.status }}</span>
   </div>
 
-  <div class="run-bar__actions">
-    {% if not is_terminal %}
-    <form class="run-actions__stop" method="post" action="{{ project_base }}/runs/{{ run.run_id }}/stop">
-      <button type="submit" class="btn btn--danger">Stop</button>
-    </form>
-    {% endif %}
+  {% if not is_terminal %}
+  <form class="run-actions__stop" method="post" action="{{ project_base }}/runs/{{ run.run_id }}/stop">
+    <button type="submit" class="btn btn--danger">Stop</button>
+  </form>
+  {% endif %}
 
-    {{ log_controls() }}
-    {{ download_log(project_base ~ "/runs/" ~ run.run_id ~ "/log") }}
-
-    {#
-      Run this again, with *this run's* profile -- not the app bar's
-      selector, which a reader without JavaScript may have changed. The
-      profile rides in a hidden input, sent empty for a run that had none:
-      ``POST /runs`` rejects a body with no ``profile`` field at all.
-
-      Deliberately not ``id="run-form"``: that id belongs to the Next run
-      pane's form, which the app bar's selector binds to by name. ``data-run-control``
-      puts it in the group the active-run poll governs.
-    #}
-    {% call more_menu() %}
-    <form class="run-header__retry" method="post" action="{{ project_base }}/runs">
-      <input type="hidden" name="profile" value="{{ run.profile or '' }}">
-      <button type="submit" class="menu-item" role="menuitem" data-run-control {% if active_run %}disabled{% endif %}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
-        Retry run
-      </button>
-    </form>
-    {% endcall %}
-  </div>
+  {{ log_controls() }}
 
   {#
-    Offered only for a run that looks wedged -- asked to stop and still
-    going, or no heartbeat for longer than the supervisor's grace window.
-    A visibly healthy run is exactly the case where abandoning its worker
-    does the damage the paragraphs below warn about, so the hatch stays out
-    of sight there. The route itself stays open to any non-terminal run: a
-    run can go from wedged to healthy between this render and the POST, and
-    refusing there would turn that race into the dead end this exists to
-    prevent.
+    Run this again, with *this run's* profile -- not the app bar's
+    selector, which a reader without JavaScript may have changed. The
+    profile rides in a hidden input, sent empty for a run that had none:
+    ``POST /runs`` rejects a body with no ``profile`` field at all.
+
+    Deliberately not ``id="run-form"``: that id belongs to the Next run
+    pane's form, which the app bar's selector binds to by name.
+    ``data-run-control`` puts it in the group the active-run poll governs.
   #}
-  {% if force_finish_offered %}
-  <details class="run-actions__abandon">
-    <summary>This run is stuck and Stop is not helping</summary>
-    <p class="muted">
-      A worker this machine will not let the supervisor inspect can never be
-      proven gone, so the run stays unfinished and keeps this project's
-      active-run lock -- and no new run can start. Force-finishing records
-      <code>interrupted</code> (the status that already means "this run's real
-      fate is unknown") and releases the lock.
-    </p>
-    <p class="muted">
-      It does <b>not</b> stop the worker. If that process is still alive it
-      keeps running, keeps writing to the log, and may still be touching this
-      project's outputs. Check for it yourself before starting another run.
-    </p>
-    <form method="post" action="{{ project_base }}/runs/{{ run.run_id }}/force-finish">
-      <label for="force-finish-confirm">
-        Type <code>{{ force_finish_confirmation }}</code> to confirm
-      </label>
-      <input id="force-finish-confirm" name="confirm" type="text" required
-             autocomplete="off" spellcheck="false"
-             aria-describedby="force-finish-confirm-hint">
-      <span id="force-finish-confirm-hint" class="muted">
-        the exact word, so this cannot be a mis-click
-      </span>
-      <button type="submit" class="button button--danger">
-        Force-finish and release the lock
-      </button>
-    </form>
-  </details>
-  {% endif %}
+  <form class="run-header__retry" method="post" action="{{ project_base }}/runs">
+    <input type="hidden" name="profile" value="{{ run.profile or '' }}">
+    <button type="submit" class="btn" title="Retry run" data-run-control {% if active_run %}disabled{% endif %}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+      <span class="btn__label">Retry</span>
+    </button>
+  </form>
+
+  {% call more_menu() %}
+  {{ download_log(project_base ~ "/runs/" ~ run.run_id ~ "/log") }}
+  {% endcall %}
 </div>

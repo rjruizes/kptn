@@ -1,0 +1,54 @@
+{#
+  Above the log: the escape hatch for a run whose worker will not stop, as a
+  replaceable fragment -- the ``run_notice`` frame that closes a stream
+  takes it away once the run is over. Takes only the run row and the flags
+  below, like ``_run_header.html``.
+
+  ``Force-finish`` is for a worker whose liveness can never be determined,
+  and which reconciliation therefore cannot settle. It abandons a
+  possibly-live process, so it is behind a disclosure *and* a typed
+  confirmation -- never one click away from Stop.
+#}
+<div id="run-notice" class="run-notice"{% if not force_finish_offered %} hidden{% endif %}>
+  {#
+    Offered only for a run that looks wedged -- asked to stop and still
+    going, or no heartbeat for longer than the supervisor's grace window.
+    A visibly healthy run is exactly the case where abandoning its worker
+    does the damage the paragraphs below warn about, so the hatch stays out
+    of sight there. The route itself stays open to any non-terminal run: a
+    run can go from wedged to healthy between this render and the POST, and
+    refusing there would turn that race into the dead end this exists to
+    prevent.
+  #}
+  {% if force_finish_offered %}
+  <details class="run-actions__abandon">
+    <summary>This run is stuck and Stop is not helping</summary>
+    <p class="muted">
+      A worker this machine will not let the supervisor inspect can never be
+      proven gone, so the run stays unfinished and keeps this project's
+      active-run lock -- and no new run can start. Force-finishing records
+      <code>interrupted</code> (the status that already means "this run's real
+      fate is unknown") and releases the lock.
+    </p>
+    <p class="muted">
+      It does <b>not</b> stop the worker. If that process is still alive it
+      keeps running, keeps writing to the log, and may still be touching this
+      project's outputs. Check for it yourself before starting another run.
+    </p>
+    <form method="post" action="{{ project_base }}/runs/{{ run.run_id }}/force-finish">
+      <label for="force-finish-confirm">
+        Type <code>{{ force_finish_confirmation }}</code> to confirm
+      </label>
+      <input id="force-finish-confirm" name="confirm" type="text" required
+             autocomplete="off" spellcheck="false"
+             aria-describedby="force-finish-confirm-hint">
+      <span id="force-finish-confirm-hint" class="muted">
+        the exact word, so this cannot be a mis-click
+      </span>
+      <button type="submit" class="button button--danger">
+        Force-finish and release the lock
+      </button>
+    </form>
+  </details>
+  {% endif %}
+</div>

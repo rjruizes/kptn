@@ -10,13 +10,14 @@
 
   The panes fold like VS Code's sections, each by its header (app.js, which
   remembers them for this reader). The whole sidebar hides from the button
-  at the left of the main area's bar.
+  at the far left of the app bar, above it.
 
   A colleague's project (``read_only``) gets the same workspace from the
   read-only shell, without the Next run pane: there is nothing there to run.
 #}
 {% extends "view_base.html" if read_only else "base.html" %}
 {% from "_status.html" import status_icon %}
+{% from "_run_bar.html" import side_toggle %}
 
 {# A pane's header: folds the pane (app.js). #}
 {% macro pane_head(key, title, count=none) -%}
@@ -28,6 +29,7 @@
 {%- endmacro %}
 
 {% block body_class %}page--run{% endblock %}
+{% block side_toggle %}{{ side_toggle() }}{% endblock %}
 {% block select_form %} form="run-form"{% endblock %}
 
 {% block content %}

@@ -96,7 +96,7 @@ var STATUS_EVENT = "run_status";
  * is gone. Must stay in step with
  * kptn_server.routes.runs.REGION_EVENT_TARGETS; a test enforces it,
  * because a region nobody listens for is dropped in silence. */
-var REGION_EVENTS = { run_header: "run-header", run_info: "run-info" };
+var REGION_EVENTS = { run_header: "run-header", run_info: "run-info", run_notice: "run-notice" };
 
 function highestSequence(list) {
   var rows = list.querySelectorAll("[data-sequence]");
@@ -233,8 +233,10 @@ function initLogControls(console_) {
       buttons[i].disabled = !foldable;
       var label = buttons[i].querySelector("span");
       var path = buttons[i].querySelector("path");
+      /* The title too: on a narrow screen the button is its icon alone. */
+      buttons[i].title = open ? "Collapse all" : "Expand all";
       if (label) {
-        label.textContent = open ? "Collapse all" : "Expand all";
+        label.textContent = buttons[i].title;
       }
       if (path) {
         path.setAttribute("d", open ? "M7 4l5 5 5-5M7 20l5-5 5 5" : "M7 9l5-5 5 5M7 15l5 5 5-5");
@@ -610,17 +612,18 @@ function initRail(console_, list) {
   };
 }
 
-/* The bar's sidebar button hides the sidebar and gives the main area the
- * whole width, remembered for this reader. Hiding it also drops the rail's
+/* The app bar's sidebar button hides the sidebar and gives the main area
+ * the whole width, remembered for this reader. Hiding it also drops the rail's
  * filter: the filter's buttons live in the sidebar, and a log narrowed out
- * of sight would look like a log with output missing. By delegation,
- * because the stream's closing frame replaces the run bar; ``sync`` puts
- * the replacement button in step. */
+ * of sight would look like a log with output missing. By delegation, and
+ * ``sync`` keeps every such button's label in step. */
 function initSidebar() {
-  var body = document.querySelector(".run-body");
-  if (!body) {
+  if (!document.querySelector(".run-body")) {
     return null;
   }
+  /* On <body>, so the app bar -- outside the workspace -- can show the
+   * run's id while the sidebar is hidden. */
+  var body = document.body;
 
   function stored() {
     try {

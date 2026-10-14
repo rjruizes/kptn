@@ -26,10 +26,12 @@
 <body class="{% block body_class %}{% endblock %}" data-base="{{ base }}" data-project-base="{{ project_base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
+      {% block side_toggle %}{% endblock %}
       <div class="app-bar__start">
         <a class="app-bar__brand" href="{{ base }}/" aria-label="kptn home">kptn</a>
         {% include "_project_picker.html" %}
       </div>
+      {% block app_tools %}{% endblock %}
       <div class="app-bar__end">
         {% include "_settings.html" %}
       </div>

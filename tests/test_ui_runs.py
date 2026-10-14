@@ -649,21 +649,15 @@ def test_retry_is_disabled_while_a_run_holds_the_lock(
 
 
 def test_run_page_is_one_panel(client: TestClient, app, store: RunStore) -> None:
-    """The heading, the controls and the console are one surface, not two.
-
-    They were two bordered cards with a gap between them, which read as two
-    unrelated things -- and the top one was four lines tall.
-    """
+    """The log is the main area, with no bar of its own over it: the run's
+    tools are in the app bar."""
     record = _seed_run(store, app.state.project.root)
 
     body = client.get(f"/runs/{record.run_id}").text
     panels = re.findall(r'<section class="(?:panel|run-page)[^"]*"', body)
 
     assert len(panels) == 1, f"the run page renders {len(panels)} panels"
-    panel = body[body.index('<section class="run-page') :]
-    assert panel.index('id="run-header"') < panel.index('id="console"'), (
-        "the console renders before the run's own header"
-    )
+    assert body.index('id="run-header"') < body.index("</header>") < body.index('id="console"')
 
 
 def test_run_header_stays_a_swappable_region(

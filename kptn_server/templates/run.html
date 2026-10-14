@@ -6,11 +6,13 @@
   ``_outline``      its tallies as filters, and the pipeline as a tree of
                     tasks with the run on it; clicking a task takes the log
                     to it.
-  ``_run_header``   the bar over the log: Stop, the log's controls, and
-                    force-finish.
+  ``_run_header``   the run's tools, in the app bar: Stop, the log's
+                    controls, Retry, and the "..." menu.
+  ``_run_notice``   above the log, the force-finish hatch for a run that
+                    will not stop.
   ``_console``      the log, which ``app.js`` appends to live.
 
-  The run info and the bar are rendered from the run row, so a run that
+  The run info, the tools and the notice are rendered from the run row, so a run that
   ends under an open stream leaves them showing what was true when the page
   was rendered. They are partials rather than markup inlined here precisely
   so the stream's closing frame can re-render them: one definition, two
@@ -26,7 +28,9 @@
 {{ outline_nav(outline, outline_selected, outline_counts) }}
 {% endblock %}
 
+{% block app_tools %}{% include "_run_header.html" %}{% endblock %}
+
 {% block main %}
-{% include "_run_header.html" %}
+{% include "_run_notice.html" %}
 {% include "_console.html" %}
 {% endblock %}

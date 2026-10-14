@@ -839,17 +839,17 @@ def test_a_succeeded_finish_is_said_by_the_heading_not_a_row(
 # -- counts and the log download in the run bar ----------------------------
 
 
-def test_the_log_download_sits_in_the_run_bar_and_the_counts_in_the_rail(
+def test_the_log_download_sits_in_the_run_tools_and_the_counts_in_the_rail(
     app, store: RunStore, client
 ) -> None:
-    """The run's tallies are the rail's filters, outside the run bar -- so
-    the bar's closing frame, which replaces it whole, cannot blank them."""
+    """The run's tallies are the rail's filters, outside the run tools -- so
+    the tools' closing frame, which replaces them whole, cannot blank them."""
     record = _start_run(store, app.state.project.root)
     store.append_event(record.run_id, "task_started", task_name="alpha")
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     body = client.get(f"/runs/{record.run_id}").text
-    header = body[body.index('id="run-header"') : body.index('id="console"')]
+    header = body[body.index('id="run-header"') : body.index('class="app-bar__end"')]
     rail = body[body.index('<nav class="rail"') : body.index("</nav>", body.index('<nav class="rail"'))]
 
     assert f'action="/runs/{record.run_id}/log"' in header

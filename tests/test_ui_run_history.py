@@ -1130,31 +1130,33 @@ def test_run_page_and_stream_render_one_run_header(
     assert fragment.strip() in page
 
 
-def test_log_download_sits_in_the_header_after_retry(
-    client, completed_run: RunRecord
-) -> None:
-    """The download is a control on the run, so it sits with the controls,
-    and Retry -- done less often than reading -- after it, in the "..." menu.
-
-    It used to live in the console bar, beside "Follow output". They are not
-    the same kind of thing: one decided where output goes on screen, the
-    other takes the run away with you.
-    """
+def test_the_run_tools_sit_in_the_app_bar(client, completed_run: RunRecord) -> None:
+    """Collapse all, View, Retry and "..." before the gear, with the log's
+    download in the "..." menu -- taken away with you less often than the
+    run is read -- and nothing left in a bar over the log."""
     body = client.get(f"/runs/{completed_run.run_id}").text
 
-    header = body[body.index('id="run-header"') : body.index('id="console"')]
-    retry_at = header.find('class="run-header__retry"')
-    download_at = header.find(f'action="/runs/{completed_run.run_id}/log"')
+    bar = body[body.index('<header class="app-bar">') : body.index("</header>")]
+    tools = bar[bar.index('id="run-header"') : bar.index('class="app-bar__end"')]
+    order = [
+        tools.index("data-fold-all"),
+        tools.index('aria-controls="view-menu"'),
+        tools.index('class="run-header__retry"'),
+        tools.index('id="more-menu"'),
+    ]
+    assert order == sorted(order)
+    menu = tools[tools.index('id="more-menu"') :]
+    assert f'action="/runs/{completed_run.run_id}/log"' in menu, "the download is not in the menu"
+    assert 'class="run-header__retry"' not in menu, "Retry is still in the menu"
 
-    assert retry_at != -1, "Retry left the run header"
-    assert download_at != -1, "the log download is not in the run header"
-    assert download_at < retry_at, "Retry renders before the log download"
-    menu = header[header.index('id="more-menu"') :]
-    assert 'class="run-header__retry"' in menu, "Retry is not in the more menu"
+    main = body[body.index('<section class="run-page"') :]
+    assert "/log" not in main[: main.index('id="console-events"')], "the download is above the log too"
 
-    # Where the console bar used to be: above the event list.
-    console = body[body.index('id="console"') : body.index('id="console-events"')]
-    assert "/log" not in console, "the download is still in the console too"
+
+def test_the_sidebar_button_leads_the_app_bar(client, completed_run: RunRecord) -> None:
+    bar = client.get(f"/runs/{completed_run.run_id}").text.split('<header class="app-bar">')[1]
+
+    assert bar.index("data-side-toggle") < bar.index('class="app-bar__brand"')
 
 
 def test_following_the_output_is_not_a_toggle(

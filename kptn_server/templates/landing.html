@@ -4,14 +4,10 @@
   one, so this is where a project's first run starts: from the sidebar.
 #}
 {% extends "workspace.html" %}
-{% from "_run_bar.html" import side_toggle %}
 
 {% block main_label %}Runs{% endblock %}
 
 {% block main %}
-<div class="run-bar">
-  {{ side_toggle() }}
-</div>
 <div class="page-scroll">
   {% if problem %}
   <div class="notice notice--error">
