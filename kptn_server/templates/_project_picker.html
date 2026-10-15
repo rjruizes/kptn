@@ -11,7 +11,8 @@
   the home page does: there is nothing to show until a project is chosen,
   and a native select can only be opened by the reader's own click. And it
   has room for what a select cannot hold: a divider between your working
-  directories and everyone else's, and why a broken one cannot be opened.
+  directories and everyone else's, why a broken one cannot be opened, and
+  the deleted ones whose runs a shared logs directory kept.
 
   The release sits outside the dropdown, as the first segment of a path --
   ``r1 / rruizesparza_main`` -- since it is the scope of the list, not a
@@ -21,8 +22,10 @@
   outside close it.
 #}
 {% if picker %}
-{% set mine = picker.entries | selectattr("owned") | list %}
-{% set others = picker.entries | rejectattr("owned") | list %}
+{% set live = picker.entries | rejectattr("removed") | list %}
+{% set mine = live | selectattr("owned") | list %}
+{% set others = live | rejectattr("owned") | list %}
+{% set removed = picker.entries | selectattr("removed") | list %}
 {% set chosen = picker.entries | selectattr("slug", "equalto", picker.current) | first %}
 <div class="project-picker-path">
 {% if picker.release %}
@@ -33,7 +36,8 @@
   <summary class="project-picker__summary">
     {% if chosen %}
     <code class="project-picker__current">{{ chosen.slug }}</code>
-    {% if not chosen.owned %}<span class="app-bar__readonly" title="Read from the files this project's runs publish. Nothing here can start, stop, or change a run.">read-only</span>{% endif %}
+    {% if chosen.removed %}<span class="app-bar__readonly" title="This working directory has been deleted. Its runs are read from the shared logs directory they were written to.">removed</span>
+    {% elif not chosen.owned %}<span class="app-bar__readonly" title="Read from the files this project's runs publish. Nothing here can start, stop, or change a run.">read-only</span>{% endif %}
     {% else %}
     <span class="project-picker__prompt">Choose a project</span>
     {% endif %}
@@ -69,6 +73,19 @@
     <hr class="project-picker__divider">
     <ul class="project-picker__list" id="other-projects">
       {% for entry in others %}
+      <li>
+        <a class="project-picker__item" href="{{ base }}/view/{{ entry.slug }}/"
+           {% if entry.slug == picker.current %}aria-current="page"{% endif %}><code>{{ entry.slug }}</code></a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if removed %}
+    <hr class="project-picker__divider">
+    <p class="project-picker__heading muted">Removed</p>
+    <ul class="project-picker__list" id="removed-projects">
+      {% for entry in removed %}
       <li>
         <a class="project-picker__item" href="{{ base }}/view/{{ entry.slug }}/"
            {% if entry.slug == picker.current %}aria-current="page"{% endif %}><code>{{ entry.slug }}</code></a>

@@ -470,8 +470,11 @@ def create_multi_app(
         # Somebody else's project is a 404 here, not a page: this prefix opens
         # the project's run store and supervises its processes, and theirs
         # live in another pod. Theirs is under ``/view/{slug}``.
-        if entry is None or not entry.owned:
+        # A removed working directory is gone, yours or not: only its
+        # published runs are left, under ``/view/{slug}``.
+        if entry is None or not entry.owned or entry.removed:
             raise HTTPException(status_code=404, detail=f"No such project: {slug}")
+        assert entry.database_path is not None  # every live entry has one
         store = app.state.stores.get(entry.slug)
         if store is None:
             store = RunStore(entry.database_path)
@@ -517,14 +520,15 @@ def create_multi_app(
         Sets ``request.state.view`` and never ``request.state.ui``: a
         :class:`~kptn_server.routes.view.RequestView` has no store, no
         supervisor and no slot to reach for. Your own project is a 404 here,
-        so there is exactly one URL for each project.
+        so there is exactly one URL for each project -- unless it has been
+        removed, when this is the only one.
 
         A project listed with an error still resolves: its published history
         needs none of what failed to load.
         """
         slug = request.path_params["slug"]
         entry = registry.resolve(slug, servable_only=False)
-        if entry is None or entry.owned:
+        if entry is None or (entry.owned and not entry.removed):
             raise HTTPException(status_code=404, detail=f"No such project: {slug}")
         request.state.view = RequestView(
             entry=entry,

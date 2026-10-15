@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -374,3 +375,51 @@ def test_shared_logs_outside_the_projects_root_are_not_read(
     assert record.run_id not in history.text
     assert "cannot be read" in history.text
     assert "outside" in history.text
+
+
+# -- removed working directories -----------------------------------------------
+
+
+@pytest.fixture
+def removed(projects_root: Path, theirs: Path) -> tuple[TestClient, RunRecord]:
+    """Their directory deleted after one run; mine still names the logs root."""
+    _share_logs(projects_root / "r1" / f"{USER}_main")
+    _share_logs(theirs)
+    record = publish_run(theirs)
+    shutil.rmtree(theirs)
+    return TestClient(create_multi_app(projects_root, USER)), record
+
+
+def test_a_removed_directory_is_listed_under_removed(removed) -> None:
+    client, _record = removed
+    body = client.get("/").text
+    assert 'id="removed-projects"' in body
+    removed_list = body[body.index('id="removed-projects"'):]
+    assert f"/view/{OTHER}/" in removed_list
+
+
+def test_a_removed_directorys_runs_still_open(removed) -> None:
+    client, record = removed
+
+    history = client.get(f"/view/{OTHER}/")
+    page = client.get(f"/view/{OTHER}/runs/{record.run_id}")
+    download = client.get(f"/view/{OTHER}/runs/{record.run_id}/log")
+
+    assert f'data-run-id="{record.run_id}"' in history.text
+    assert ">removed<" in history.text
+    assert "hello &lt;b&gt;world&lt;/b&gt;" in page.text
+    assert download.status_code == 200 and b"hello <b>world</b>" in download.content
+
+
+def test_my_removed_directory_is_viewed_not_served(projects_root: Path) -> None:
+    mine = projects_root / "r1" / f"{USER}_main"
+    _share_logs(mine)
+    copy_fixture_project(FIXTURE_PROJECT, projects_root / "r1", f"{USER}_old")
+    old = (projects_root / "r1" / f"{USER}_old").resolve()
+    _share_logs(old)
+    record = publish_run(old)
+    shutil.rmtree(old)
+    client = TestClient(create_multi_app(projects_root, USER))
+
+    assert client.get(f"/p/{USER}_old/").status_code == 404
+    assert f'data-run-id="{record.run_id}"' in client.get(f"/view/{USER}_old/").text

@@ -305,6 +305,14 @@ pre {
   border-top: 1px solid var(--line);
 }
 
+/* Names a group of the picker's list: the removed working directories. */
+.project-picker__heading {
+  margin: 4px 10px 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .project-picker__list {
   list-style: none;
   margin: 0;
