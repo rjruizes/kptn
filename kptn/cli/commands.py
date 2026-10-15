@@ -16,6 +16,7 @@ from kptn.graph.pipeline import Pipeline
 from kptn.project import load_pipeline
 from kptn.runner.api import resolve_pipeline
 from kptn.runner.api import run as _run_pipeline
+from kptn.sources.shared import SHARED_CACHE_ENV
 import kptn.runner.plan as runner_plan
 
 if TYPE_CHECKING:
@@ -36,7 +37,20 @@ def run(
             "`kptn ui` shows them, as it does for runs it starts itself."
         ),
     ),
+    shared_cache: bool = typer.Option(
+        True,
+        "--shared-cache/--no-shared-cache",
+        help=(
+            "Restore source tables from, and publish them to, the shared cache "
+            "named by settings.shared_cache in kptn.yaml. Off: build every "
+            "table in this directory."
+        ),
+    ),
 ) -> None:
+    if not shared_cache:
+        # The run reads the variable wherever it executes, recorded in this
+        # process or not, so neither RunRequest nor kptn.run needs a field.
+        os.environ[SHARED_CACHE_ENV] = "off"
     project_root = Path.cwd()
     try:
         pipeline = load_pipeline(project_root)

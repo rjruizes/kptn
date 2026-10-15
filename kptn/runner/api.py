@@ -16,6 +16,7 @@ from kptn.runner.events import EventEmitter, EventKind, EventSink
 from kptn.runner.plan import config_values_for_plan
 from kptn.runner.plan import plan as _plan
 from kptn.sources.build import BRONZE_DIR
+from kptn.sources.shared import resolve_shared_cache
 from kptn.sources.views import with_search_path
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
@@ -148,6 +149,10 @@ def run(
             raise
         config = KptnConfig()  # sensible defaults; state store won't be used
 
+    # Built source tables are shared between working directories when
+    # kptn.yaml names a cache and KPTN_SHARED_CACHE is not "off".
+    shared = resolve_shared_cache(config.settings.shared_cache, cwd)
+
     if profile is not None:
         resolved = ProfileResolver(config).compile(pipeline, profile)
     else:
@@ -199,6 +204,7 @@ def run(
             force=force,
             extra_kwargs=kwargs or None,
             emitter=emitter,
+            shared=shared,
         )
     except Exception as exc:
         emitter.emit(EventKind.RUN_FINISHED, status="failed", error=str(exc))
