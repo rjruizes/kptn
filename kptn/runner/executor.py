@@ -46,6 +46,7 @@ from kptn.sources.build import (
     remove_stale_tables,
     state_value,
 )
+from kptn.sources.shared import SharedCache, link
 from kptn.sources.views import apply_search_path, register_views
 from kptn.state_store.protocol import StateStoreBackend
 
@@ -142,6 +143,7 @@ def _emit_task_finished(
     started_at: float,
     cached: bool = False,
     error: str | None = None,
+    shared: str | None = None,
 ) -> None:
     payload: dict[str, bool | float | str] = {
         "mode": mode,
@@ -151,6 +153,8 @@ def _emit_task_finished(
     }
     if error is not None:
         payload["error"] = error
+    if shared is not None:
+        payload["shared"] = shared
     emitter.emit(EventKind.TASK_FINISHED, task_name=task_name, **payload)
 
 
@@ -364,12 +368,17 @@ def _execute_source(
     force: bool,
     no_cache: bool,
     groups: list[str] | None,
+    shared: SharedCache | None = None,
 ) -> bool:
     """Bring every table of *node* up to date. True if any table changed.
 
     A source is judged only on its own files, check files and code; upstream
     dirtiness is deliberately ignored, so a rebuilt schema does not force a
     re-read of unchanged files.
+
+    With *shared*, a table that is not current is linked from the shared
+    cache when its key is there, and otherwise built into the cache and
+    linked. ``force`` and ``no_cache`` build a local file and never publish.
     """
     try:
         plans = plan_tables(node.name, node.spec, config_kwargs, root=root)
@@ -384,18 +393,31 @@ def _execute_source(
         emitter, node.name, mode="source", groups=groups, count=len(plans)
     )
     changed = bool(remove_stale_tables(node.name, {p.table for p in plans}, root=root))
+    sharing = None if force or no_cache else shared
     for plan in plans:
         if not force and not no_cache and is_current(
             plan, state_store, resolved.storage_key, resolved.pipeline
         ):
             _emit_task_skipped(emitter, plan.state_name, mode="source_table", groups=groups)
             continue
+        hit = sharing.lookup(plan) if sharing is not None else None
         table_started = _emit_task_started(
-            emitter, plan.state_name, mode="source_table", groups=groups
+            emitter, plan.state_name, mode="source_table", groups=groups,
+            **({"shared": "restored"} if hit is not None else {}),
         )
+        outcome: str | None = None
         try:
             with emitter.task_scope(plan.state_name):
-                build_table(plan, node.spec, root=root)
+                if hit is not None:
+                    link(plan.parquet, hit)
+                    outcome = "restored"
+                elif sharing is not None:
+                    target, outcome = sharing.publish(plan, node.spec, root=root)
+                    link(plan.parquet, target)
+                else:
+                    build_table(plan, node.spec, root=root)
+                # Through the link, for a shared table: the entry never changes.
+                value = state_value(plan)
         except Exception as exc:
             _emit_task_finished(
                 emitter, plan.state_name, mode="source_table", status="failed",
@@ -407,11 +429,10 @@ def _execute_source(
             )
             raise TaskError(f"Source '{node.name}', table '{plan.table}': {exc}") from exc
         if not no_cache:
-            state_store.write_hash(
-                resolved.storage_key, resolved.pipeline, plan.state_name, state_value(plan)
-            )
+            state_store.write_hash(resolved.storage_key, resolved.pipeline, plan.state_name, value)
         _emit_task_finished(
-            emitter, plan.state_name, mode="source_table", status="succeeded", started_at=table_started
+            emitter, plan.state_name, mode="source_table", status="succeeded",
+            started_at=table_started, shared=outcome,
         )
         changed = True
 
@@ -433,6 +454,7 @@ def execute(
     force: bool = False,
     extra_kwargs: "dict[str, Any] | None" = None,
     emitter: EventEmitter | None = None,
+    shared: SharedCache | None = None,
 ) -> "Any | None":
     """Execute the resolved pipeline graph.
 
@@ -462,6 +484,10 @@ def execute(
         emitter:
             Optional structured event emitter. When omitted, execution emits the
             existing console output through the default console sink.
+        shared:
+            The shared cache source tables are restored from and published
+            to; ``None`` builds every table in the working directory. Ignored
+            when *force* or *no_cache* is set.
 
     Returns the DuckDB connection when ``keep_db_open=True`` and a factory was
     provided; ``None`` otherwise.
@@ -630,6 +656,7 @@ def execute(
                 force=force,
                 no_cache=no_cache,
                 groups=group_paths.get(node.name),
+                shared=shared,
             ):
                 dirty_names.add(node.name)
             continue

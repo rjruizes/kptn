@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,8 @@ from kptn.graph.nodes import ConfigNode, SourceNode, TaskNode
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.runner.events import EventEmitter, EventKind
 from kptn.runner.executor import execute
+from kptn.sources.build import plan_tables
+from kptn.sources.shared import SharedCache
 from tests.fakes import FakeStateStore
 
 
@@ -167,3 +170,98 @@ def test_files_from_config(project: Path) -> None:
     node = SourceNode(spec=handle.__kptn__, name="s")
     _run(Graph(nodes=[conf, node], edges=[(conf, node)]), FakeStateStore(), project)
     assert (project / "_bronze/s/a.parquet").exists()
+
+
+# -- the shared cache --------------------------------------------------------
+
+
+def _finished(sink: RecordingSink, name: str):
+    [event] = [e for e in sink.events if e.kind is EventKind.TASK_FINISHED and e.task_name == name]
+    return event
+
+
+def _graph(node: SourceNode) -> Graph:
+    return Graph(nodes=[node], edges=[])
+
+
+def test_miss_publishes_and_links(project: Path) -> None:
+    cache = SharedCache(project / "cache")
+    sink = _run(_graph(_source_node(project)), FakeStateStore(), project, shared=cache)
+    for table in ("a", "b"):
+        parquet = project / "_bronze" / "s" / f"{table}.parquet"
+        assert parquet.is_symlink() and parquet.resolve().is_relative_to(cache.root.resolve())
+        assert _finished(sink, f"s[{table}]").payload["shared"] == "published"
+
+
+def test_hit_restores_without_building(project: Path) -> None:
+    cache = SharedCache(project / "cache")
+    node = _source_node(project)
+    _run(_graph(node), FakeStateStore(), project, shared=cache)
+    shutil.rmtree(project / "_bronze")  # another working directory, in effect
+    with (
+        patch("kptn.sources.shared.build_table") as published,
+        patch("kptn.runner.executor.build_table") as local,
+    ):
+        sink = _run(_graph(node), FakeStateStore(), project, shared=cache, expect_warning=False)
+    published.assert_not_called()
+    local.assert_not_called()
+    [started] = [e for e in sink.events if e.kind is EventKind.TASK_STARTED and e.task_name == "s[a]"]
+    assert started.payload["shared"] == "restored"
+    assert _finished(sink, "s[a]").payload["shared"] == "restored"
+    assert _finished(sink, "s").payload["cached"] is False  # a restore is a change
+    assert (project / "_bronze" / "s" / "a.parquet").is_symlink()
+
+
+def test_restored_table_is_current_next_run(project: Path) -> None:
+    cache = SharedCache(project / "cache")
+    node = _source_node(project)
+    _run(_graph(node), FakeStateStore(), project, shared=cache)
+    shutil.rmtree(project / "_bronze")
+    store = FakeStateStore()
+    _run(_graph(node), store, project, shared=cache, expect_warning=False)
+    sink = _run(_graph(node), store, project, shared=cache, expect_warning=False)
+    assert _names(sink, EventKind.TASK_SKIPPED) == ["s[a]", "s[b]"]
+
+
+@pytest.mark.parametrize("flag", ["force", "no_cache"])
+def test_force_and_no_cache_build_locally(project: Path, flag: str) -> None:
+    cache = SharedCache(project / "cache")
+    node = _source_node(project)
+    _run(_graph(node), FakeStateStore(), project, shared=cache)
+    [plan_a, _] = plan_tables("s", node.spec, {}, root=project)
+    entry = cache.lookup(plan_a)
+    assert entry is not None
+    before = entry.stat().st_mtime_ns
+    sink = _run(_graph(node), FakeStateStore(), project, shared=cache, **{flag: True})
+    parquet = project / "_bronze" / "s" / "a.parquet"
+    assert parquet.is_file() and not parquet.is_symlink()
+    assert entry.stat().st_mtime_ns == before  # the entry is untouched
+    assert "shared" not in _finished(sink, "s[a]").payload
+
+
+def test_dangling_link_rebuilds_and_republishes(project: Path) -> None:
+    cache = SharedCache(project / "cache")
+    node = _source_node(project)
+    store = FakeStateStore()
+    _run(_graph(node), store, project, shared=cache)
+    shutil.rmtree(cache.root / "s" / "a")  # someone deleted a wrong entry
+    sink = _run(_graph(node), store, project, shared=cache)
+    assert _finished(sink, "s[a]").payload["shared"] == "published"
+    assert _names(sink, EventKind.TASK_SKIPPED) == ["s[b]"]
+    assert (project / "_bronze" / "s" / "a.parquet").exists()
+
+
+def test_failed_publish_raises_and_records_nothing(project: Path) -> None:
+    cache = SharedCache(project / "cache")
+    store = FakeStateStore()
+    with patch("kptn.sources.shared.build_table", side_effect=RuntimeError("check failed")):
+        with pytest.raises(TaskError, match="check failed"):
+            _run(_graph(_source_node(project)), store, project, shared=cache, expect_warning=False)
+    assert store.read_hash("kptn", "default", "s[a]") is None
+    assert not (project / "_bronze" / "s" / "a.parquet").exists()
+
+
+def test_without_a_shared_cache_tables_are_local_files(project: Path) -> None:
+    sink = _run(_graph(_source_node(project)), FakeStateStore(), project)
+    assert not (project / "_bronze" / "s" / "a.parquet").is_symlink()
+    assert "shared" not in _finished(sink, "s[a]").payload
