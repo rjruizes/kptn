@@ -219,19 +219,17 @@ def test_plan_view_reads_an_existing_state_store(
 
     This is the other half of the test above: not creating the store must not
     become not *reading* it, which would make every task look stale forever.
+    ``setup_task`` is recorded too: a stale upstream would make noisy_task run.
     """
     from kptn.change_detector.detector import _hash_code
     from kptn.graph.nodes import TaskNode
     from kptn.state_store.sqlite import SqliteBackend
 
     project = create_app(ui_project).state.project
-    node = next(
-        n
-        for n in project.pipeline.nodes
-        if isinstance(n, TaskNode) and n.name == "noisy_task"
-    )
     store = SqliteBackend(path=str(ui_project / ".kptn" / "kptn.db"))
-    store.write_hash(".kptn/kptn.db", "fixture", "noisy_task", _hash_code(node))
+    for node in project.pipeline.nodes:
+        if isinstance(node, TaskNode) and node.name in ("setup_task", "noisy_task"):
+            store.write_hash(".kptn/kptn.db", "fixture", node.name, _hash_code(node))
 
     body = client.get("/plan?profile=success").text
 

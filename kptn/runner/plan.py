@@ -232,9 +232,9 @@ def build_plan(
     if callable(getattr(state_store, "read_hashes", None)):
         reader = _PrefetchedHashes(cast(StateStoreBackend, state_store), resolved.storage_key, resolved.pipeline)
     entries: list[PlanEntry] = []
-    # The executor's cascade, for what a source starts: a source with a table
-    # to build or restore makes everything downstream run, whatever its own
-    # hashes say. A task's own staleness does not start a cascade here.
+    # The executor's cascade: a source with a table to build or restore, or a
+    # stale task, makes everything downstream run, whatever its own hashes
+    # say. A task that runs only for want of outputs ("no outputs") does not.
     predecessors: dict[str, list[str]] = {}
     for src, dst in resolved.graph.edges:
         predecessors.setdefault(dst.name, []).append(src.name)
@@ -281,6 +281,8 @@ def build_plan(
             stale, reason = is_stale(node, reader, resolved.storage_key, resolved.pipeline)
         except HashError:
             stale, reason = True, "hash unavailable"
+        if stale:
+            dirty.add(node.name)
         entries.append(
             PlanEntry(
                 node.name,
