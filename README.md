@@ -277,6 +277,38 @@ pipeline = kptn.Pipeline(
 
 Each table is cached on its own files, check file and the source's code. A change upstream, such as a rebuilt schema, does not re-read unchanged files.
 
+### Shared cache
+
+Working directories that read the same files can share built tables. Name a cache in `kptn.yaml`, relative to the project:
+
+```yaml
+settings:
+  shared_cache: ../../r6/_kptn_cache
+```
+
+A table built in one working directory is published there under a key made from its files' paths, sizes and modification times, its check file, the source's code and kptn's reading conventions. Any working directory that computes the same key links to it instead of reading the files again: `_bronze/<source>/<table>.parquet` becomes a symlink into the cache. A restored table counts as a change, so what reads it reruns.
+
+The console says which happened: `[RESTORE] … — from shared cache`, or `[SHARE] … — published` after a build (`— linked to an identical build` when another run published the same key first). `kptn plan` and the UI's plan page show "in shared cache" for a table the next run would restore.
+
+| To | |
+|---|---|
+| Build here without sharing, for one run | `kptn run --no-shared-cache` |
+| … for a whole session | `export KPTN_SHARED_CACHE=off` |
+| Rebuild here and ignore the cache | `kptn run --force` (and `no_cache=True`) builds a local file, never publishes |
+| Remove a bad entry | Delete `<cache>/<source>/<table>/<key>/`. Every working directory linked to it rebuilds on its next run. |
+
+The cache holds `entry.json` and one parquet file per entry, and nothing else. `entry.json` records the key's parts, every input file with its size and modification time, the row count and columns, and who built it, where, when and with which kptn; kptn never reads it. `.tmp/` holds publishes in progress, or left by a crashed run, and can be cleared when no run is active. Entries are never pruned; remove a release's cache with its release.
+
+**Several accounts on one share.** Every account that runs the pipeline must read every entry and create new ones. Put them all in one Unix group, with the same group ID on every machine or pod that mounts the share, and create the cache before the first run:
+
+```shell
+mkdir ../../r6/_kptn_cache
+chgrp <pipeline-group> ../../r6/_kptn_cache
+chmod 2775 ../../r6/_kptn_cache
+```
+
+kptn creates everything inside it with modes `2775` (directories) and `0664` (files), whatever each user's umask. On a laptop nothing needs setting up: kptn creates the cache directory itself if its parent exists. kptn's state store and the pipeline database stay in each working directory; only built parquet files are shared.
+
 ### Caching and Re-runs
 
 kptn hashes each task's declared outputs and source code. On re-run:
@@ -339,7 +371,7 @@ The `kptn` CLI discovers your pipeline from `[tool.kptn] pipeline = "..."` in `p
 
 ```shell
 kptn plan [--profile PROFILE]          # preview what will run or be skipped
-kptn run  [--profile PROFILE] [--force] [--no-record] # execute the pipeline
+kptn run  [--profile PROFILE] [--force] [--no-record] [--no-shared-cache] # execute the pipeline
 kptn ui   [--port PORT] [--no-open]     # serve the pipeline UI for this project
 ```
 
