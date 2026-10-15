@@ -43,9 +43,9 @@ from kptn.exceptions import ProfileError
 from kptn.profiles.loader import ProfileLoader
 from kptn_server.project import (
     PROFILE_CONFIG_FILENAME,
-    RUN_LOG_RELATIVE_DIR,
     UI_DATABASE_RELATIVE_PATH,
 )
+from kptn_server.run_files import runs_dir_of
 
 _MANIFEST_FILENAME = "pyproject.toml"
 
@@ -100,6 +100,12 @@ class ProjectEntry:
     ``owned`` is whether it belongs to the person this server runs for. Only
     an owned project's run store is ever opened, and only an owned project's
     pipeline is ever imported.
+
+    ``run_log_dir`` is where the project's runs publish their files:
+    ``.kptn/runs``, or its ``settings.shared_logs`` directory. A shared one
+    outside the projects root is never read -- it is named by somebody
+    else's ``kptn.yaml`` and could point anywhere the reader can see -- and
+    ``run_log_error`` then says why.
     """
 
     slug: str
@@ -111,6 +117,7 @@ class ProjectEntry:
     run_log_dir: Path
     error: str | None = None
     owned: bool = True
+    run_log_error: str | None = None
 
 
 class ProjectRegistry:
@@ -245,6 +252,7 @@ class ProjectRegistry:
         root = workdir.resolve()
         error: str | None = None
         profiles: tuple[str, ...] = ()
+        shared_logs: str | None = None
 
         try:
             with open(manifest, "rb") as handle:
@@ -259,11 +267,22 @@ class ProjectRegistry:
 
         if error is None:
             try:
-                profiles = tuple(
-                    ProfileLoader.load(root / PROFILE_CONFIG_FILENAME).profiles
-                )
+                loaded = ProfileLoader.load(root / PROFILE_CONFIG_FILENAME)
             except ProfileError as exc:
                 error = str(exc)
+            else:
+                profiles = tuple(loaded.profiles)
+                shared_logs = loaded.settings.shared_logs
+
+        run_log_dir = runs_dir_of(root, shared_logs)
+        run_log_error: str | None = None
+        if shared_logs is not None and not run_log_dir.is_relative_to(
+            self.projects_root.resolve()
+        ):
+            run_log_error = (
+                f"settings.shared_logs puts this project's runs in {run_log_dir}, "
+                f"outside {self.projects_root}, so they are not read here."
+            )
 
         return ProjectEntry(
             slug=workdir.name,
@@ -272,9 +291,10 @@ class ProjectRegistry:
             display_name=workdir.name,
             profiles=profiles,
             database_path=root / UI_DATABASE_RELATIVE_PATH,
-            run_log_dir=root / RUN_LOG_RELATIVE_DIR,
+            run_log_dir=run_log_dir,
             error=error,
             owned=owned,
+            run_log_error=run_log_error,
         )
 
 

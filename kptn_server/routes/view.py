@@ -103,7 +103,9 @@ def view(request: Request) -> RequestView:
 
 
 def _runs_dir(entry: ProjectEntry) -> Path:
-    return published_runs_dir(entry.root)
+    if entry.run_log_error is not None:
+        raise RunFileError(entry.run_log_error)
+    return published_runs_dir(entry.run_log_dir)
 
 
 def _load_index(entry: ProjectEntry) -> tuple[list[IndexedRun], str | None]:

@@ -337,3 +337,40 @@ def test_a_live_runs_stream_tails_the_file_until_the_run_ends(
         if line.startswith("id: ")
     ]
     assert sequences == sorted(set(sequences))
+
+
+# -- settings.shared_logs ------------------------------------------------------
+
+
+def _share_logs(project: Path, setting: str = "../_kptn_logs") -> None:
+    config = project / "kptn.yaml"
+    config.write_text(config.read_text().replace("settings:\n", f"settings:\n  shared_logs: {setting}\n", 1))
+
+
+def test_their_runs_are_read_from_their_shared_logs(projects_root: Path, theirs: Path) -> None:
+    _share_logs(theirs)
+    record = publish_run(theirs)
+    client = TestClient(create_multi_app(projects_root, USER))  # scans the edited kptn.yaml
+    assert record.log_path.parent == theirs.parent / "_kptn_logs" / OTHER
+
+    history = client.get(f"/view/{OTHER}/")
+    page = client.get(f"/view/{OTHER}/runs/{record.run_id}")
+
+    assert f'data-run-id="{record.run_id}"' in history.text
+    assert "hello &lt;b&gt;world&lt;/b&gt;" in page.text
+
+
+def test_shared_logs_outside_the_projects_root_are_not_read(
+    projects_root: Path, theirs: Path, tmp_path: Path
+) -> None:
+    _share_logs(theirs, str(tmp_path / "elsewhere"))
+    (tmp_path / "elsewhere").mkdir()
+    record = publish_run(theirs)
+    client = TestClient(create_multi_app(projects_root, USER))
+
+    history = client.get(f"/view/{OTHER}/")
+
+    assert history.status_code == 200
+    assert record.run_id not in history.text
+    assert "cannot be read" in history.text
+    assert "outside" in history.text

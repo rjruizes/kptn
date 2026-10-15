@@ -565,15 +565,15 @@ def _decode_line(line: bytes) -> FileEvent | None:
 # -- untrusted files ---------------------------------------------------------
 
 
-def published_runs_dir(project_root: Path) -> Path:
-    """``<project_root>/.kptn/runs``, refusing one reached through a symlink.
+def published_runs_dir(runs_dir: Path) -> Path:
+    """*runs_dir*, refusing one reached through a symlink.
 
-    *project_root* must already be resolved (the registry resolves every
-    root). A ``.kptn`` or ``runs`` that is a link could point anywhere the
-    *reader* can see -- their own pod's home directory included -- so the
-    path has to be the literal one.
+    *runs_dir* must already be resolved up to the directory the project
+    names: the registry resolves every root, and a shared logs root. A
+    ``.kptn``, ``runs`` or per-project logs directory that is a link could
+    point anywhere the *reader* can see -- their own pod's home directory
+    included -- so the path has to be the literal one.
     """
-    runs_dir = project_root / ".kptn" / "runs"
     if os.path.realpath(runs_dir) != str(runs_dir):
         raise RunFileError(f"{runs_dir} is reached through a symlink")
     return runs_dir

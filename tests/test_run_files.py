@@ -337,7 +337,7 @@ def test_a_runs_directory_reached_through_a_symlink_is_refused(tmp_path: Path) -
     (root / ".kptn" / "runs").symlink_to(tmp_path / "elsewhere")
 
     with pytest.raises(RunFileError):
-        run_files.published_runs_dir(root.resolve())
+        run_files.published_runs_dir(root.resolve() / ".kptn" / "runs")
 
 
 def test_an_oversized_index_is_refused(tmp_path: Path, monkeypatch) -> None:

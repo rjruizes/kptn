@@ -46,14 +46,14 @@ from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.resolver import ProfileResolver
 from kptn.profiles.schema import KptnConfig
 from kptn.project import load_pipeline
-from kptn_server.run_files import runs_dir_of
+from kptn_server.run_files import LOCAL_RUNS_DIR, runs_dir_of
 
 #: Project-relative location of the durable run store.
 UI_DATABASE_RELATIVE_PATH = Path(".kptn") / "ui.db"
 
 #: Project-relative directory holding one captured log per run, unless
 #: ``settings.shared_logs`` moves them (see :func:`kptn_server.run_files.runs_dir_for`).
-RUN_LOG_RELATIVE_DIR = Path(".kptn") / "runs"
+RUN_LOG_RELATIVE_DIR = LOCAL_RUNS_DIR
 
 #: Project-relative profile configuration, optional.
 PROFILE_CONFIG_FILENAME = "kptn.yaml"

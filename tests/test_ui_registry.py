@@ -248,3 +248,28 @@ def test_default_user_falls_back_to_user(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("USER", "shell-person")
 
     assert default_user() == "shell-person"
+
+
+# -- settings.shared_logs ------------------------------------------------------
+
+
+def test_run_log_dir_follows_shared_logs(tmp_path: Path) -> None:
+    workdir = make_workdir(tmp_path, "r7", f"{USER}_main")
+    (workdir / "kptn.yaml").write_text("settings:\n  shared_logs: ../_kptn_logs\n")
+
+    (entry,) = ProjectRegistry(tmp_path, USER).scan()
+
+    assert entry.run_log_dir == (tmp_path / "r7" / "_kptn_logs" / f"{USER}_main").resolve()
+    assert entry.run_log_error is None
+    assert not (tmp_path / "r7" / "_kptn_logs").exists()  # the registry creates nothing
+
+
+def test_shared_logs_outside_the_projects_root_are_not_read(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    workdir = make_workdir(root, "r7", f"{USER}_main")
+    (workdir / "kptn.yaml").write_text(f"settings:\n  shared_logs: {tmp_path / 'elsewhere'}\n")
+
+    (entry,) = ProjectRegistry(root, USER).scan()
+
+    assert entry.run_log_error is not None and "outside" in entry.run_log_error
+    assert entry.error is None  # still served as a project; only its logs are not read
