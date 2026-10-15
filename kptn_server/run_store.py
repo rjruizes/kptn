@@ -46,6 +46,8 @@ from kptn_server.run_files import (
     INDEX_LIMIT,
     INDEX_PUBLISH_INTERVAL_SECONDS,
     RUN_FILE_SUFFIX,
+    IndexedRun,
+    RunFileError,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1168,10 +1170,13 @@ class RunStore:
             if not records:
                 conn.execute("COMMIT")
                 return
+            runs_dir = records[0].log_path.parent
             tallies = self._tallies(conn, [record.run_id for record in records])
             run_files.write_index(
-                records[0].log_path.parent,
-                run_files.build_index(root, records, tallies),
+                runs_dir,
+                run_files.build_index(
+                    root, records, tallies, carried=self._carried(conn, runs_dir)
+                ),
             )
             conn.execute("COMMIT")
         except Exception as exc:  # noqa: BLE001 - publishing must never fail a caller
@@ -1182,6 +1187,32 @@ class RunStore:
             self._report_publish_failure(root, exc)
         finally:
             self._release(conn)
+
+    @staticmethod
+    def _carried(conn: sqlite3.Connection, runs_dir: Path) -> list[IndexedRun]:
+        """Rows of the index in *runs_dir* for runs this database never stored.
+
+        A working directory deleted and recreated under the same name shares
+        one shared logs directory with its earlier self; its new ``ui.db``
+        knows nothing of the earlier runs, and only the index still lists
+        them. Without carrying them, the first publish would forget them.
+        An index that is missing or cannot be trusted carries nothing.
+        """
+        try:
+            previous = run_files.read_index(runs_dir)
+        except (FileNotFoundError, RunFileError, OSError):
+            return []
+        if not previous:
+            return []
+        ids = [run.run_id for run in previous]
+        known = {
+            row[0]
+            for row in conn.execute(
+                f"SELECT run_id FROM runs WHERE run_id IN ({','.join('?' * len(ids))})",
+                ids,
+            )
+        }
+        return [run for run in previous if run.run_id not in known]
 
     def ensure_index(self, project_root: Path | str) -> None:
         """Publish ``index.json`` if the project has none yet.

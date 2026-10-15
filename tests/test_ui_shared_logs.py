@@ -104,3 +104,40 @@ def test_ensure_index_with_no_runs_writes_nothing(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _store(project).ensure_index(project.resolve())
     assert not (tmp_path / "r7" / "_kptn_logs").exists()
+
+
+# -- one history across a directory's lifetimes --------------------------------
+
+
+def test_a_recreated_directory_keeps_the_earlier_runs(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    store = _store(project)
+    first = _finished_run(store, project)
+    store.close()
+    shutil.rmtree(project)
+
+    project = _project(tmp_path)  # the same name, and a fresh ui.db
+    second = _finished_run(_store(project), project)
+
+    runs = read_index(_logs(tmp_path))
+    assert [run.run_id for run in runs] == [second.run_id, first.run_id]
+    assert [run.number for run in runs] == [1, 1]
+    assert runs[1].status == STATUS_SUCCEEDED
+    assert runs[1].counters == runs[0].counters
+
+
+def test_runs_this_database_knows_are_not_carried_twice(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    store = _store(project)
+    first = _finished_run(store, project)
+    second = _finished_run(store, project)
+    assert [run.run_id for run in read_index(_logs(tmp_path))] == [second.run_id, first.run_id]
+
+
+def test_an_untrustworthy_earlier_index_carries_nothing(tmp_path: Path) -> None:
+    logs = tmp_path / "r7" / "_kptn_logs" / "alice_main"
+    logs.mkdir(parents=True)
+    (logs / INDEX_FILENAME).write_text("not json")
+    project = _project(tmp_path)
+    record = _finished_run(_store(project), project)
+    assert [run.run_id for run in read_index(_logs(tmp_path))] == [record.run_id]

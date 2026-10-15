@@ -299,18 +299,23 @@ def build_index(
     records: Sequence[RunRecord],
     tallies: Mapping[str, Mapping[tuple[str, str | None], int]],
     *,
+    carried: Sequence[IndexedRun] = (),
     published_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """The ``index.json`` document for *records*, newest first as given.
+    """The ``index.json`` document for *records* and *carried*, newest first.
+
+    *carried* are rows an earlier index listed for runs this database never
+    stored -- the runs of a working directory that was deleted and recreated
+    under the same name, whose logs stay in one shared logs directory. They
+    are written back as they were read; nothing here can know more about
+    them. At most :data:`INDEX_LIMIT` rows are kept, by ``created_at``.
 
     Worker PIDs are left out on purpose: they name processes in the owner's
     pod, and a reader in another pod could only misuse them.
     """
-    return {
-        "schema": INDEX_SCHEMA,
-        "project_root": str(project_root),
-        "published_at": _iso(published_at or datetime.now(timezone.utc)),
-        "runs": [
+    rows: list[tuple[datetime | None, dict[str, Any]]] = [
+        (
+            record.created_at,
             {
                 "run_id": record.run_id,
                 "number": record.number,
@@ -325,10 +330,45 @@ def build_index(
                 "current_task": record.current_task,
                 "exit_code": record.exit_code,
                 "counters": counters(tallies.get(record.run_id, {})),
-            }
-            for record in records
-        ],
+            },
+        )
+        for record in records
+    ]
+    rows.extend((run.created_at, _indexed_row(run)) for run in carried)
+    # Stable, so records keep the database's order among equal times.
+    rows.sort(key=lambda pair: _sortable(pair[0]), reverse=True)
+    return {
+        "schema": INDEX_SCHEMA,
+        "project_root": str(project_root),
+        "published_at": _iso(published_at or datetime.now(timezone.utc)),
+        "runs": [row for _created, row in rows[:INDEX_LIMIT]],
     }
+
+
+def _indexed_row(run: IndexedRun) -> dict[str, Any]:
+    """*run* as the index row it was read from: the inverse of ``_indexed_run``."""
+    return {
+        "run_id": run.run_id,
+        "number": run.number,
+        "pipeline": run.pipeline,
+        "profile": run.profile,
+        "force": run.force,
+        "status": run.status,
+        "created_at": _iso(run.created_at),
+        "started_at": _iso(run.started_at),
+        "finished_at": _iso(run.finished_at),
+        "heartbeat_at": _iso(run.heartbeat_at),
+        "current_task": run.current_task,
+        "exit_code": run.exit_code,
+        "counters": dict(run.counters),
+    }
+
+
+def _sortable(value: datetime | None) -> datetime:
+    """*value* comparable with any other: aware, and a missing time oldest."""
+    if value is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def write_index(runs_dir: Path, document: Mapping[str, Any]) -> None:

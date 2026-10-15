@@ -473,3 +473,43 @@ def test_shared_logs_root_does_not_touch_the_filesystem(tmp_path: Path) -> None:
     assert run_files.shared_logs_root(tmp_path / "w", "../logs") == (tmp_path / "logs").resolve()
     assert run_files.shared_logs_root(tmp_path / "w", None) is None
     assert not (tmp_path / "logs").exists()
+
+
+def _indexed(run_id: str, created_at: datetime | None) -> run_files.IndexedRun:
+    return run_files.IndexedRun(
+        run_id=run_id,
+        pipeline="p",
+        profile=None,
+        force=False,
+        status="succeeded",
+        created_at=created_at,
+        started_at=None,
+        finished_at=None,
+        heartbeat_at=None,
+        current_task=None,
+        exit_code=0,
+        counters={"tasks": 1},
+        number=7,
+    )
+
+
+def test_carried_rows_merge_by_creation_time_and_are_capped(tmp_path: Path) -> None:
+    store, record, _runs_dir = _store_and_run(tmp_path)
+    now = record.created_at
+    older = _indexed("a" * 32, now - timedelta(days=1))
+    newer = _indexed("b" * 32, now + timedelta(days=1))
+    undated = _indexed("c" * 32, None)
+
+    document = run_files.build_index(
+        record.project_root, [record], {}, carried=[undated, older, newer]
+    )
+    assert [row["run_id"] for row in document["runs"]] == [
+        "b" * 32, record.run_id, "a" * 32, "c" * 32
+    ]
+    assert document["runs"][0]["number"] == 7
+    assert document["runs"][0]["counters"] == {"tasks": 1}
+
+    many = [_indexed(f"{i:032x}", now - timedelta(minutes=i + 1)) for i in range(run_files.INDEX_LIMIT)]
+    document = run_files.build_index(record.project_root, [record], {}, carried=many)
+    assert len(document["runs"]) == run_files.INDEX_LIMIT
+    assert document["runs"][0]["run_id"] == record.run_id
