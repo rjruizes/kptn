@@ -23,6 +23,7 @@ from kptn.graph.nodes import (
 from kptn.graph.topo import topo_sort
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.sources.build import is_current, plan_tables
+from kptn.sources.shared import SharedCache
 from kptn.state_store.protocol import StateStoreBackend
 
 _PLAN_NON_EXEC = (ParallelNode, StageNode, NoopNode, PipelineNode, ConfigNode)
@@ -183,22 +184,25 @@ def _plan_source(
     resolved: ResolvedGraph,
     config_values: Mapping[str, Any] | None,
     root: Path,
+    shared: SharedCache | None = None,
 ) -> list[PlanEntry]:
     """One entry per table of *node*, or one entry for the source when its
-    tables cannot be known without running anything."""
+    tables cannot be known without running anything.
+
+    A table the shared cache already has still runs -- restoring it changes
+    the local file and reruns what reads it -- but says it will not be built.
+    """
     if config_values is None and callable(node.spec.files):
         return [PlanEntry(node.name, PlanAction.RUN, reason="files depend on config")]
     try:
         entries: list[PlanEntry] = []
         for plan in plan_tables(node.name, node.spec, config_values or {}, root=root):
-            current = is_current(plan, reader, resolved.storage_key, resolved.pipeline)
-            entries.append(
-                PlanEntry(
-                    plan.state_name,
-                    PlanAction.SKIP if current else PlanAction.RUN,
-                    reason="cached" if current else "inputs changed",
-                )
-            )
+            if is_current(plan, reader, resolved.storage_key, resolved.pipeline):
+                entries.append(PlanEntry(plan.state_name, PlanAction.SKIP, reason="cached"))
+            elif shared is not None and shared.lookup(plan) is not None:
+                entries.append(PlanEntry(plan.state_name, PlanAction.RUN, reason="in shared cache"))
+            else:
+                entries.append(PlanEntry(plan.state_name, PlanAction.RUN, reason="inputs changed"))
         return entries
     except Exception as exc:  # includes errors raised by a files= or table= callable
         return [PlanEntry(node.name, PlanAction.RUN, reason=str(exc))]
@@ -218,6 +222,7 @@ def build_plan(
     *,
     config_values: Mapping[str, Any] | None = None,
     root: Path | None = None,
+    shared: SharedCache | None = None,
 ) -> list[PlanEntry]:
     reader: StateStoreBackend | HashReader | _PrefetchedHashes = state_store
     if callable(getattr(state_store, "read_hashes", None)):
@@ -229,7 +234,9 @@ def build_plan(
         if node.name in resolved.bypassed_names:
             continue
         if isinstance(node, SourceNode):
-            entries.extend(_plan_source(node, reader, resolved, config_values, root or Path.cwd()))
+            entries.extend(
+                _plan_source(node, reader, resolved, config_values, root or Path.cwd(), shared)
+            )
             continue
         if isinstance(node, SourceViewsNode):
             entries.append(PlanEntry(node.name, PlanAction.RUN, reason="always runs"))
@@ -303,5 +310,6 @@ def plan(
     state_store: StateStoreBackend,
     *,
     config_values: Mapping[str, Any] | None = None,
+    shared: SharedCache | None = None,
 ) -> None:
-    render_plan(build_plan(resolved, state_store, config_values=config_values))
+    render_plan(build_plan(resolved, state_store, config_values=config_values, shared=shared))

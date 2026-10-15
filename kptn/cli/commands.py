@@ -16,7 +16,7 @@ from kptn.graph.pipeline import Pipeline
 from kptn.project import load_pipeline
 from kptn.runner.api import resolve_pipeline
 from kptn.runner.api import run as _run_pipeline
-from kptn.sources.shared import SHARED_CACHE_ENV
+from kptn.sources.shared import SHARED_CACHE_ENV, shared_cache_for
 import kptn.runner.plan as runner_plan
 
 if TYPE_CHECKING:
@@ -151,6 +151,7 @@ def plan(
     try:
         pipeline = load_pipeline(project_root)
         resolved, state_store = resolve_pipeline(pipeline, project_root, profile)
+        shared = shared_cache_for(project_root)
     except ProjectConfigError as e:
         raise typer.BadParameter(str(e)) from e
     except ProfileError as e:
@@ -158,7 +159,10 @@ def plan(
         raise typer.Exit(code=1)
 
     runner_plan.plan(
-        resolved, state_store, config_values=runner_plan.config_values_for_plan(pipeline)
+        resolved,
+        state_store,
+        config_values=runner_plan.config_values_for_plan(pipeline),
+        shared=shared,
     )
 
 

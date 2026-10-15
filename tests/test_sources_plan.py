@@ -81,3 +81,23 @@ def test_config_values_for_plan_failure_is_none(capsys) -> None:
 
 def test_no_config_node_gives_empty_values() -> None:
     assert config_values_for_plan(Graph(nodes=[], edges=[])) == {}
+
+
+def test_table_in_shared_cache_is_planned_as_a_restore(tmp_path: Path) -> None:
+    from kptn.sources.shared import SharedCache
+
+    work = tmp_path / "w"
+    _write(work, "in/a.csv", "x\n1\n")
+    node = SourceNode(spec=kptn.source("s", files=str(work / "in")).__kptn__, name="s")
+    cache = SharedCache(tmp_path / "cache")
+    with pytest.warns(UserWarning):
+        execute(
+            _resolved(node), FakeStateStore(), cwd=work, shared=cache,
+            emitter=EventEmitter("r", "default", None, _Sink()),
+        )
+
+    fresh = FakeStateStore()  # a working directory that never ran
+    [entry] = build_plan(_resolved(node), fresh, config_values={}, root=work, shared=cache)
+    assert (entry.action, entry.reason) == (PlanAction.RUN, "in shared cache")
+    [entry] = build_plan(_resolved(node), fresh, config_values={}, root=work)
+    assert (entry.action, entry.reason) == (PlanAction.RUN, "inputs changed")

@@ -16,7 +16,7 @@ from kptn.runner.events import EventEmitter, EventKind, EventSink
 from kptn.runner.plan import config_values_for_plan
 from kptn.runner.plan import plan as _plan
 from kptn.sources.build import BRONZE_DIR
-from kptn.sources.shared import resolve_shared_cache
+from kptn.sources.shared import resolve_shared_cache, shared_cache_for
 from kptn.sources.views import with_search_path
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
@@ -229,4 +229,9 @@ def plan(
         Optional profile name to resolve from ``kptn.yaml``.
     """
     resolved, state_store = resolve_pipeline(pipeline, Path.cwd(), profile)
-    _plan(resolved, state_store, config_values=config_values_for_plan(pipeline))
+    _plan(
+        resolved,
+        state_store,
+        config_values=config_values_for_plan(pipeline),
+        shared=shared_cache_for(Path.cwd()),
+    )
