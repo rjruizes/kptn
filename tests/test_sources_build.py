@@ -165,3 +165,22 @@ def test_remove_stale_tables(tmp_path: Path) -> None:
     removed = remove_stale_tables("asa24", {"keep"}, root=tmp_path)
     assert [p.name for p in removed] == ["gone.parquet"]
     assert sorted(p.name for p in folder.iterdir()) == [".x.parquet.abc.tmp", "keep.parquet"]
+
+
+def test_plan_carries_stamps_and_code_hash(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    spec = _spec(root)
+    [food, _ndsr] = _plans(root, spec)
+    assert food.stamps == tuple(fingerprint(f.path) for f in food.files)
+    assert food.code_hash == source_code_hash(spec)
+
+
+def test_build_table_writes_to_dest(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    [plan, _] = _plans(root)
+    dest = tmp_path / "elsewhere" / "out.parquet"
+    with pytest.warns(UserWarning):  # no check file
+        build_table(plan, _spec(root), root=root, dest=dest)
+    assert dest.is_file() and not plan.parquet.exists()
+    assert duckdb.sql(f"SELECT count(*) FROM '{dest}'").fetchone() == (2,)
+    assert [p.name for p in dest.parent.iterdir()] == ["out.parquet"]

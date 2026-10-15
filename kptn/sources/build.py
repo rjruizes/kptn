@@ -71,6 +71,10 @@ class TablePlan:
     input_hash: str
     key: str
     parquet: Path
+    #: The ``source_code_hash`` folded into ``key``, kept for ``entry.json``.
+    code_hash: str
+    #: ``size:mtime_ns`` of each file in ``files``, in the same order.
+    stamps: tuple[str, ...]
 
     @property
     def state_name(self) -> str:
@@ -114,6 +118,8 @@ def plan_tables(
                 input_hash=input_hash,
                 key=_sha(name, table, input_hash, code, SOURCE_FORMAT_VERSION),
                 parquet=root / BRONZE_DIR / name / f"{table}.parquet",
+                code_hash=code,
+                stamps=tuple(stamps[f.path] for f in table_files),
             )
         )
     return plans
@@ -132,10 +138,16 @@ def is_current(plan: TablePlan, state_store: _ReadsHashes, storage_key: str, pip
     return stored == state_value(plan)
 
 
-def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path) -> bool:
-    """Read, validate and atomically write one table. Returns whether checks ran."""
-    plan.parquet.parent.mkdir(parents=True, exist_ok=True)
-    tmp = plan.parquet.with_name(f".{plan.parquet.name}.{uuid4().hex}.tmp")
+def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path, dest: Path | None = None) -> bool:
+    """Read, validate and atomically write one table to *dest*, by default
+    ``plan.parquet``. Returns whether checks ran.
+
+    ``os.replace`` onto a symlink replaces the link, never its target, so a
+    local build leaves a shared-cache entry untouched.
+    """
+    dest = plan.parquet if dest is None else dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.{uuid4().hex}.tmp")
     conn = duckdb.connect()
     try:
         view = create_table_view(conn, plan.source, plan.table, list(plan.files), spec.read)
@@ -144,7 +156,7 @@ def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path) -> bool:
         )
         target = "'" + str(tmp).replace("'", "''") + "'"
         conn.execute(f"COPY (SELECT * FROM {view}) TO {target} (FORMAT parquet)")
-        os.replace(tmp, plan.parquet)
+        os.replace(tmp, dest)
         return checked
     finally:
         conn.close()
