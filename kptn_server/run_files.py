@@ -146,11 +146,12 @@ def truncate(path: Path, size: int) -> None:
         os.truncate(path, size)
 
 
-def write_atomically(path: Path, data: bytes) -> None:
+def write_atomically(path: Path, data: bytes, *, mode: int | None = None) -> None:
     """Replace *path* with *data* so that a reader sees the old file or the new one.
 
     The temporary name is unique per process and call, so two writers never
     share one; whichever renames last wins, and both renamed a whole file.
+    *mode*, when given, is set on the file before it is renamed into place.
     """
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
@@ -158,6 +159,8 @@ def write_atomically(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+            if mode is not None:
+                os.fchmod(handle.fileno(), mode)
         os.replace(temporary, path)
     except BaseException:
         with suppress(OSError):
@@ -180,6 +183,17 @@ def shared_logs_root(project_root: Path, setting: str | None) -> Path | None:
     if not root.is_absolute():
         root = project_root / root
     return root.resolve()
+
+
+def runs_dir_of(project_root: Path, setting: str | None) -> Path:
+    """Where *project_root*'s run files go under the ``shared_logs`` *setting*.
+
+    For a reader: creates nothing, unlike :func:`runs_dir_for`.
+    """
+    shared = shared_logs_root(project_root, setting)
+    if shared is None:
+        return project_root / LOCAL_RUNS_DIR
+    return shared / project_root.name
 
 
 def runs_dir_for(project_root: Path) -> Path:
@@ -320,7 +334,7 @@ def build_index(
 def write_index(runs_dir: Path, document: Mapping[str, Any]) -> None:
     runs_dir.mkdir(parents=True, exist_ok=True)
     data = json.dumps(document, ensure_ascii=False, indent=1).encode("utf-8")
-    write_atomically(runs_dir / INDEX_FILENAME, data)
+    write_atomically(runs_dir / INDEX_FILENAME, data, mode=LOG_FILE_MODE)
 
 
 @dataclass(frozen=True)
@@ -600,6 +614,7 @@ __all__ = [
     "read_untrusted",
     "run_file_text",
     "runs_dir_for",
+    "runs_dir_of",
     "shared_logs_root",
     "truncate",
     "write_atomically",

@@ -23,7 +23,9 @@ projects, defeating that lock, so the root is resolved here once and reused.
 
 *State stays under ``.kptn/``.* UI state is exactly ``.kptn/ui.db`` (run
 history) and ``.kptn/runs/`` (captured worker output). Nothing about the UI
-writes anywhere else in the project.
+writes anywhere else in the project. The one exception is outside it: with
+``settings.shared_logs`` set, run files go to the shared logs directory
+instead, so that they outlive the working directory.
 
 Loading goes through the shared CLI loader (:func:`kptn.project.load_pipeline`)
 and :class:`kptn.profiles.loader.ProfileLoader` rather than reimplementing
@@ -44,11 +46,13 @@ from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.resolver import ProfileResolver
 from kptn.profiles.schema import KptnConfig
 from kptn.project import load_pipeline
+from kptn_server.run_files import runs_dir_of
 
 #: Project-relative location of the durable run store.
 UI_DATABASE_RELATIVE_PATH = Path(".kptn") / "ui.db"
 
-#: Project-relative directory holding one captured log per run.
+#: Project-relative directory holding one captured log per run, unless
+#: ``settings.shared_logs`` moves them (see :func:`kptn_server.run_files.runs_dir_for`).
 RUN_LOG_RELATIVE_DIR = Path(".kptn") / "runs"
 
 #: Project-relative profile configuration, optional.
@@ -151,7 +155,7 @@ class ProjectContext:
             # the author wrote kptn.yaml.
             profiles=tuple(config.profiles),
             database_path=canonical_root / UI_DATABASE_RELATIVE_PATH,
-            run_log_dir=canonical_root / RUN_LOG_RELATIVE_DIR,
+            run_log_dir=runs_dir_of(canonical_root, config.settings.shared_logs),
             pipeline=pipeline,
             config=config,
         )

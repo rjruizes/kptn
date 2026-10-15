@@ -136,3 +136,20 @@ def test_kptn_run_refuses_while_another_recorded_run_is_live(
     assert [r.run_id for r in store.list_runs(ui_project_cwd.resolve(), limit=50)] == [
         active.run_id
     ]
+
+
+def test_kptn_run_writes_its_log_to_shared_logs(ui_project_cwd: Path) -> None:
+    config = ui_project_cwd / "kptn.yaml"
+    config.write_text(
+        config.read_text().replace("settings:\n", "settings:\n  shared_logs: ../_kptn_logs\n", 1)
+    )
+
+    result = CliRunner().invoke(app, ["run"])
+
+    assert result.exit_code == 0, result.output
+    _store, (run,) = recorded_runs(ui_project_cwd)
+    logs = (ui_project_cwd.parent / "_kptn_logs" / ui_project_cwd.name).resolve()
+    assert run.log_path == logs / f"{run.run_id}.jsonl"
+    assert "ordinary output\n" in run_file_text(run.log_path)
+    assert (logs / "index.json").is_file()
+    assert not list((ui_project_cwd / ".kptn").glob("runs/*.jsonl"))

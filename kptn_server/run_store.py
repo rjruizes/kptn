@@ -508,9 +508,16 @@ class RunStore:
         canonical_root = Path(request.project_root).resolve()
         run_id = uuid.uuid4().hex
         created_at = datetime.now(timezone.utc)
-        runs_dir = canonical_root / ".kptn" / "runs"
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        log_path = runs_dir / f"{run_id}{RUN_FILE_SUFFIX}"
+        # Decided once per run and recorded as ``log_path``: everything after
+        # this -- appends, the console, the index -- follows the recorded path.
+        log_path = run_files.runs_dir_for(canonical_root) / f"{run_id}{RUN_FILE_SUFFIX}"
+        # Created here, with an explicit mode, so a colleague can read it
+        # whatever this process's umask; appends then open an existing file.
+        descriptor = os.open(log_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, run_files.LOG_FILE_MODE)
+        try:
+            os.fchmod(descriptor, run_files.LOG_FILE_MODE)
+        finally:
+            os.close(descriptor)
 
         conn = self._acquire()
         try:
@@ -560,6 +567,7 @@ class RunStore:
                 conn.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+            log_path.unlink(missing_ok=True)
             raise
         finally:
             self._release(conn)
@@ -1115,7 +1123,13 @@ class RunStore:
             run_files.truncate(log_path, size)
 
     def publish_index(self, project_root: Path | str, *, force: bool = True) -> None:
-        """Rewrite ``<project_root>/.kptn/runs/index.json`` from this database.
+        """Rewrite the project's ``index.json`` from this database.
+
+        It goes beside the newest run's file -- ``.kptn/runs/`` or the shared
+        logs directory, whichever that run was recorded to -- so a change to
+        ``settings.shared_logs`` takes effect from the next run, and this,
+        called every few seconds, never rereads ``kptn.yaml``. A project with
+        no runs has nothing to publish.
 
         Unforced calls are rate-limited to one per
         :data:`~kptn_server.run_files.INDEX_PUBLISH_INTERVAL_SECONDS` per
@@ -1151,9 +1165,12 @@ class RunStore:
                 (key, INDEX_LIMIT),
             ).fetchall()
             records = [self._row_to_run(row) for row in rows]
+            if not records:
+                conn.execute("COMMIT")
+                return
             tallies = self._tallies(conn, [record.run_id for record in records])
             run_files.write_index(
-                root / ".kptn" / "runs",
+                records[0].log_path.parent,
                 run_files.build_index(root, records, tallies),
             )
             conn.execute("COMMIT")
@@ -1173,7 +1190,18 @@ class RunStore:
         it until its next run, and until then a colleague would see no
         history at all.
         """
-        if not (Path(project_root) / ".kptn" / "runs" / INDEX_FILENAME).exists():
+        conn = self._acquire()
+        try:
+            row = conn.execute(
+                """
+                SELECT log_path FROM runs WHERE project_root = ?
+                ORDER BY created_at DESC, run_id DESC LIMIT 1
+                """,
+                (str(Path(project_root)),),
+            ).fetchone()
+        finally:
+            self._release(conn)
+        if row is not None and not (Path(row["log_path"]).parent / INDEX_FILENAME).exists():
             self.publish_index(project_root)
 
     def _report_publish_failure(self, root: Path, exc: Exception) -> None:
