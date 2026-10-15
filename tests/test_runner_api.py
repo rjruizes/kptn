@@ -311,11 +311,13 @@ def test_plan_uses_shared_resolution() -> None:
     state_store = MagicMock()
 
     with patch("kptn.runner.api.resolve_pipeline", return_value=(resolved, state_store)) as mock_resolve, \
-         patch("kptn.runner.api._plan") as mock_plan:
+         patch("kptn.runner.api._plan") as mock_plan, \
+         patch("kptn.runner.api.shared_cache_for", return_value=None) as mock_shared:
         plan(pipeline, profile="dev")
 
     mock_resolve.assert_called_once_with(pipeline, Path.cwd(), "dev")
-    mock_plan.assert_called_once_with(resolved, state_store, config_values={})
+    mock_shared.assert_called_once_with(Path.cwd())
+    mock_plan.assert_called_once_with(resolved, state_store, config_values={}, shared=None)
 
 
 def _run_and_get_factory(graph: Graph):

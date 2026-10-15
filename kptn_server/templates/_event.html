@@ -50,11 +50,14 @@
 #}
 {% macro section_outcome(section, finished) -%}
 {%- set state = finished.status if finished and finished.status else section.state -%}
+{#- What the shared cache did for a source table, as the heading says it. #}
+{%- set shared_words = {"restored": "from shared cache", "published": "published", "linked": "linked to shared build"} -%}
 <span class="sec-h__end" id="{{ section.id }}-outcome" data-state="{{ state }}">
   <span class="sec-h__meta">
     {%- if state == "cached" %}cached{% if section.reason %} · {{ section.reason }}{% endif %}
     {%- else %}
     {%- if section.runner %}{{ section.runner }} · {% endif -%}
+    {%- if finished and finished.shared %}{{ shared_words.get(finished.shared, finished.shared) }} · {% endif -%}
     {%- if finished and finished.duration %}{{ finished.duration }} · {% endif -%}
     <span data-sec-lines="{{ section.lines }}">{{ lines_text(section.lines) }}</span>
     {%- endif -%}

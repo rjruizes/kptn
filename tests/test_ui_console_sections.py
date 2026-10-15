@@ -291,3 +291,37 @@ def test_a_folded_section_stays_findable(app) -> None:
     assert '"beforematch"' in script
     css = (STATIC_DIR / "app.css").read_text()
     assert ".sec.is-closed .sec__lines {\n  display: none;" not in css
+
+
+def test_a_shared_table_says_so_in_its_heading(app, store, client) -> None:
+    record = store.create_run(RunRequest(project_root=app.state.project.root, pipeline="fixture"))
+    run_id = record.run_id
+    store.append_event(run_id, "run_started")
+    store.append_event(run_id, "task_started", task_name="s", payload={"mode": "source", "count": 2})
+    for table, outcome in (("a", "restored"), ("b", "published")):
+        name = f"s[{table}]"
+        started = {"mode": "source_table", **({"shared": "restored"} if outcome == "restored" else {})}
+        store.append_event(run_id, "task_started", task_name=name, payload=started)
+        store.append_event(
+            run_id,
+            "task_finished",
+            task_name=name,
+            payload={"mode": "source_table", "status": "succeeded", "duration_seconds": 1.0, "shared": outcome},
+        )
+    store.append_event(
+        run_id, "task_finished", task_name="s",
+        payload={"mode": "source", "status": "succeeded", "duration_seconds": 2.0},
+    )
+    store.append_event(run_id, "run_finished", payload={"status": STATUS_SUCCEEDED})
+    store.finish_run(run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    log = client.get(f"/runs/{run_id}").text
+    log = log[log.index('id="console"') :]
+    a = log[log.index('data-unit="s[a]"') : log.index('data-unit="s[b]"')]
+    b = log[log.index('data-unit="s[b]"') :]
+    assert "ingest · from shared cache · 1.0s · " in a
+    assert "ingest · published · 1.0s · " in b
+
+    frames = _payloads(client.get(f"/runs/{run_id}/events").text)
+    finished = next(f for f in frames if f["task"] == "s[a]" and f["kind"] == "task_finished")
+    assert "from shared cache" in finished["outcome"]["html"]

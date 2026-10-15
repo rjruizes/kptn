@@ -101,3 +101,19 @@ def test_table_in_shared_cache_is_planned_as_a_restore(tmp_path: Path) -> None:
     assert (entry.action, entry.reason) == (PlanAction.RUN, "in shared cache")
     [entry] = build_plan(_resolved(node), fresh, config_values={}, root=work)
     assert (entry.action, entry.reason) == (PlanAction.RUN, "inputs changed")
+
+
+def test_rendered_plan_names_a_restore() -> None:
+    import io
+
+    from kptn.runner.plan import PlanEntry, render_plan
+
+    out = io.StringIO()
+    render_plan(
+        [
+            PlanEntry("s[a]", PlanAction.RUN, reason="in shared cache"),
+            PlanEntry("s[b]", PlanAction.RUN, reason="inputs changed"),
+        ],
+        stream=out,
+    )
+    assert out.getvalue().splitlines() == ["[RUN] s[a] — in shared cache", "[RUN] s[b]"]

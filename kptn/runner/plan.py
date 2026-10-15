@@ -160,6 +160,10 @@ class _PrefetchedHashes:
         return self._hashes.get(task)
 
 
+#: Why a table that is not current will be restored rather than built.
+SHARED_REASON = "in shared cache"
+
+
 def config_values_for_plan(graph: Any) -> dict[str, Any] | None:
     """The config node's values, for resolving config-derived source files.
 
@@ -200,7 +204,7 @@ def _plan_source(
             if is_current(plan, reader, resolved.storage_key, resolved.pipeline):
                 entries.append(PlanEntry(plan.state_name, PlanAction.SKIP, reason="cached"))
             elif shared is not None and shared.lookup(plan) is not None:
-                entries.append(PlanEntry(plan.state_name, PlanAction.RUN, reason="in shared cache"))
+                entries.append(PlanEntry(plan.state_name, PlanAction.RUN, reason=SHARED_REASON))
             else:
                 entries.append(PlanEntry(plan.state_name, PlanAction.RUN, reason="inputs changed"))
         return entries
@@ -293,16 +297,17 @@ def render_plan(entries: Iterable[PlanEntry], stream: TextIO = sys.stdout) -> No
                 flush=True,
             )
         else:
-            print(
-                _format_plan_status_line(
-                    PlanAction.RUN,
-                    entry.task_name,
-                    provider=None,
-                    timestamp=False,
-                ),
-                file=stream,
-                flush=True,
+            line = _format_plan_status_line(
+                PlanAction.RUN,
+                entry.task_name,
+                provider=None,
+                timestamp=False,
             )
+            # Other reasons are the UI's; a restore is worth a terminal word
+            # because it will not read any files.
+            if entry.reason == SHARED_REASON:
+                line += f" — {SHARED_REASON}"
+            print(line, file=stream, flush=True)
 
 
 def plan(
