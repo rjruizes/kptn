@@ -309,6 +309,38 @@ chmod 2775 ../../r6/_kptn_cache
 
 kptn creates everything inside it with modes `2775` (directories) and `0664` (files), whatever each user's umask. On a laptop nothing needs setting up: kptn creates the cache directory itself if its parent exists. kptn's state store and the pipeline database stay in each working directory; only built parquet files are shared.
 
+### Shared logs
+
+A working directory's run history normally lives in its `.kptn/runs/`, and goes when the directory is deleted. To keep it, name a shared logs directory in `kptn.yaml`, relative to the project:
+
+```yaml
+settings:
+  shared_logs: ../_kptn_logs
+```
+
+Recorded runs, from `kptn run` or started in `kptn ui`, then write their `<run_id>.jsonl` and the project's `index.json` to `../_kptn_logs/<working directory name>/` from the start. Delete `r7/alice_main/` and its history stays in `r7/_kptn_logs/alice_main/`. Only the logs move: `.kptn/ui.db` and kptn's state store stay in the working directory and go with it. `kptn run --no-record` and `kptn.run()` from a notebook keep no log, with or without the setting.
+
+Keep one logs directory per release, beside the working directories: a subdirectory is named by its working directory alone, so two releases sharing one would mix the histories of same-named directories.
+
+In `kptn ui --projects-root`, a deleted working directory whose logs remain is listed under **Removed** in the project picker and opens read-only at `/view/<directory>/`, yours included. They are found through the logs directories that the release's remaining working directories name, so a release with no working directories left lists none (the files stay on disk). A logs directory outside the projects root is never read, whoever's `kptn.yaml` names it.
+
+A directory recreated under the same name keeps one history. Its new `ui.db` numbers runs from 1 again, so the index can list two runs `#1`; each still has its own run id and page. Its own `/p/` history shows only the runs its current `ui.db` recorded.
+
+| To | |
+|---|---|
+| Bring along runs recorded before the setting | `cp -p .kptn/runs/*.jsonl ../_kptn_logs/<name>/` — until then, colleagues see them listed without a log |
+| Forget a directory's history | Delete `_kptn_logs/<name>/` |
+
+**Several accounts on one share.** Use the pipeline group from the shared cache and create the directory before the first run:
+
+```shell
+mkdir _kptn_logs
+chgrp <pipeline-group> _kptn_logs
+chmod 2775 _kptn_logs
+```
+
+kptn creates each working directory's subdirectory with mode `2755` and its files with `0644`, whatever the umask: everyone can read every history, and only its owner writes it. On a laptop kptn creates the directory itself if its parent exists.
+
 ### Caching and Re-runs
 
 kptn hashes each task's declared outputs and source code. On re-run:
@@ -431,7 +463,8 @@ log download is rendered from it. Runs recorded by an earlier kptn have a
 `.kptn/runs/<run_id>.log` of raw output instead, and are still shown.
 
 All of it is inside the project on purpose, so run history travels with a checkout
-and is removed by deleting `.kptn/`. `.kptn/ui.db` is separate from kptn's own
+and is removed by deleting `.kptn/` — unless `settings.shared_logs` moves the
+run files out, so that they outlive the checkout (see [Shared logs](#shared-logs)). `.kptn/ui.db` is separate from kptn's own
 task-state database (`.kptn/kptn.db` by default): clearing UI history never
 invalidates the cache, and `kptn run --force` never erases history.
 
@@ -546,7 +579,8 @@ since nothing else can show until a project is chosen. Yours open in full, at
 their run history, each run's console (live while it runs), and its log
 download.
 
-Those pages read only `.kptn/runs/index.json` and the runs' `.jsonl` files.
+Those pages read only `.kptn/runs/index.json` and the runs' `.jsonl` files
+(from the project's shared logs directory, when it sets one).
 They never open another person's `.kptn/ui.db`: each person's server runs in
 its own pod, and SQLite's WAL mode is not safe to share between machines over
 a network filesystem. Nor do they import another person's pipeline, so there
