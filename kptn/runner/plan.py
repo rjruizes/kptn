@@ -232,17 +232,34 @@ def build_plan(
     if callable(getattr(state_store, "read_hashes", None)):
         reader = _PrefetchedHashes(cast(StateStoreBackend, state_store), resolved.storage_key, resolved.pipeline)
     entries: list[PlanEntry] = []
+    # The executor's cascade, for what a source starts: a source with a table
+    # to build or restore makes everything downstream run, whatever its own
+    # hashes say. A task's own staleness does not start a cascade here.
+    predecessors: dict[str, list[str]] = {}
+    for src, dst in resolved.graph.edges:
+        predecessors.setdefault(dst.name, []).append(src.name)
+    dirty: set[str] = set()
     for node in topo_sort(resolved.graph):
+        upstream_dirty = any(p in dirty for p in predecessors.get(node.name, ()))
         if isinstance(node, _PLAN_NON_EXEC):
+            if upstream_dirty:
+                dirty.add(node.name)
             continue
         if node.name in resolved.bypassed_names:
             continue
         if isinstance(node, SourceNode):
-            entries.extend(
-                _plan_source(node, reader, resolved, config_values, root or Path.cwd(), shared)
+            # Upstream dirtiness is ignored: a source is judged on its own files.
+            source_entries = _plan_source(
+                node, reader, resolved, config_values, root or Path.cwd(), shared
             )
+            if any(e.action is PlanAction.RUN for e in source_entries):
+                dirty.add(node.name)
+            entries.extend(source_entries)
             continue
         if isinstance(node, SourceViewsNode):
+            # Recreating views changes no data: it passes dirtiness on, never starts it.
+            if upstream_dirty:
+                dirty.add(node.name)
             entries.append(PlanEntry(node.name, PlanAction.RUN, reason="always runs"))
             continue
         if isinstance(node, MapNode):
@@ -252,7 +269,13 @@ def build_plan(
                     f"MapNode '{node.name}' has an empty 'over' expression; "
                     "cannot determine provider for plan output."
                 )
+            if upstream_dirty:
+                dirty.add(node.name)
             entries.append(PlanEntry(node.name, PlanAction.MAP, provider=provider))
+            continue
+        if upstream_dirty:
+            dirty.add(node.name)
+            entries.append(PlanEntry(node.name, PlanAction.RUN, reason="upstream changed"))
             continue
         try:
             stale, reason = is_stale(node, reader, resolved.storage_key, resolved.pipeline)

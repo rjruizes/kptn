@@ -117,3 +117,60 @@ def test_rendered_plan_names_a_restore() -> None:
         stream=out,
     )
     assert out.getvalue().splitlines() == ["[RUN] s[a] — in shared cache", "[RUN] s[b]"]
+
+
+def _report() -> None:
+    pass
+
+
+def _downstream_of_source(tmp_path: Path, store: FakeStateStore) -> ResolvedGraph:
+    """``s >> source_views >> report >> summary``, with s built and report and
+    summary cached."""
+    from kptn.change_detector.hasher import hash_task_source
+    from kptn.graph.decorators import TaskSpec
+    from kptn.graph.nodes import TaskNode
+
+    _write(tmp_path, "in/a.csv", "x\n1\n")
+    handle = kptn.source("s", files=str(tmp_path / "in"))
+    source = SourceNode(spec=handle.__kptn__, name="s")
+    views_handle = kptn.source_views(kptn.Stage("bronze", handle))
+    views = SourceViewsNode(spec=views_handle.__kptn__, name=views_handle.__name__)
+    report = TaskNode(fn=_report, spec=TaskSpec(outputs=[]), name="report")
+    summary = TaskNode(fn=_report, spec=TaskSpec(outputs=[]), name="summary")
+    with pytest.warns(UserWarning):
+        execute(_resolved(source), store, cwd=tmp_path, emitter=EventEmitter("r", "default", None, _Sink()))
+    for name in ("report", "summary"):
+        store.write_hash("kptn", "default", name, hash_task_source(_report))
+    graph = Graph(
+        nodes=[source, views, report, summary],
+        edges=[(source, views), (views, report), (report, summary)],
+    )
+    return ResolvedGraph(graph=graph, pipeline="default", storage_key="kptn")
+
+
+def test_a_table_to_build_makes_downstream_run(tmp_path: Path) -> None:
+    store = FakeStateStore()
+    resolved = _downstream_of_source(tmp_path, store)
+    for parquet in (tmp_path / "_bronze").rglob("*.parquet"):
+        parquet.unlink()
+
+    entries = build_plan(resolved, store, config_values={}, root=tmp_path)
+    assert [(e.task_name, e.action, e.reason) for e in entries] == [
+        ("s[a]", PlanAction.RUN, "inputs changed"),
+        ("bronze_views", PlanAction.RUN, "always runs"),
+        ("report", PlanAction.RUN, "upstream changed"),
+        ("summary", PlanAction.RUN, "upstream changed"),
+    ]
+
+
+def test_cached_source_and_views_leave_downstream_cached(tmp_path: Path) -> None:
+    store = FakeStateStore()
+    resolved = _downstream_of_source(tmp_path, store)
+
+    entries = build_plan(resolved, store, config_values={}, root=tmp_path)
+    assert [(e.task_name, e.action) for e in entries] == [
+        ("s[a]", PlanAction.SKIP),
+        ("bronze_views", PlanAction.RUN),
+        ("report", PlanAction.SKIP),
+        ("summary", PlanAction.SKIP),
+    ]
