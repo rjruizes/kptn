@@ -14,6 +14,9 @@ class KptnSettings(BaseModel):
     db: str = "sqlite"
     db_path: str | None = None
     cache_namespace: str | None = None
+    #: Where built source tables are shared between working directories,
+    #: relative to the project root. Unset: no sharing.
+    shared_cache: str | None = None
 
 
 class ProfileSpec(BaseModel):
