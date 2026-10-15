@@ -17,6 +17,9 @@ class KptnSettings(BaseModel):
     #: Where built source tables are shared between working directories,
     #: relative to the project root. Unset: no sharing.
     shared_cache: str | None = None
+    #: Where recorded runs keep their logs, one subdirectory per working
+    #: directory, relative to the project root. Unset: ``.kptn/runs``.
+    shared_logs: str | None = None
 
 
 class ProfileSpec(BaseModel):

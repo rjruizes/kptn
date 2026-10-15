@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 
 import pytest
 
+from kptn.exceptions import ProfileError
 from kptn.runner.events import EventKind, RunEvent
 from kptn_server import run_files
 from kptn_server.capture import RunStoreSink
@@ -409,3 +411,65 @@ def test_index_writes_leave_no_temporary_files(tmp_path: Path) -> None:
     for _ in range(3):
         store.publish_index(record.project_root)
     assert not [name for name in os.listdir(runs_dir) if name.endswith(".tmp")]
+
+
+# -- shared logs: where run files go ------------------------------------------
+
+
+def _mode(p: Path) -> int:
+    return stat.S_IMODE(p.stat().st_mode)
+
+
+def _workdir(root: Path, yaml: str | None) -> Path:
+    root.mkdir(parents=True)
+    if yaml is not None:
+        (root / "kptn.yaml").write_text(yaml)
+    return root
+
+
+SHARED_LOGS_YAML = "settings:\n  shared_logs: ../_kptn_logs\n"
+
+
+def test_without_shared_logs_runs_stay_in_dot_kptn(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", None)
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "runs"
+    assert (project / ".kptn" / "runs").is_dir()
+
+
+def test_shared_logs_is_relative_to_the_project_and_named_by_directory(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    expected = (tmp_path / "r7" / "_kptn_logs" / "alice_main").resolve()
+    assert run_files.runs_dir_for(project) == expected
+    assert expected.is_dir()
+    assert not (project / ".kptn").exists()
+
+
+def test_shared_logs_modes_whatever_the_umask(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    old = os.umask(0o077)
+    try:
+        runs = run_files.runs_dir_for(project)
+    finally:
+        os.umask(old)
+    # The setgid bit is dropped by some systems when the owner is not in the
+    # directory's group; the rest of the mode must hold everywhere.
+    assert _mode(runs.parent) & 0o777 == run_files.LOG_ROOT_MODE & 0o777
+    assert _mode(runs) & 0o777 == run_files.LOG_DIR_MODE & 0o777
+
+
+def test_missing_parent_of_shared_logs_is_an_error(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", "settings:\n  shared_logs: ../no/such/logs\n")
+    with pytest.raises(ProfileError, match="shared_logs"):
+        run_files.runs_dir_for(project)
+    assert not (tmp_path / "r7" / "no").exists()
+
+
+def test_unreadable_kptn_yaml_falls_back_to_dot_kptn(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", "settings: [unclosed\n")
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "runs"
+
+
+def test_shared_logs_root_does_not_touch_the_filesystem(tmp_path: Path) -> None:
+    assert run_files.shared_logs_root(tmp_path / "w", "../logs") == (tmp_path / "logs").resolve()
+    assert run_files.shared_logs_root(tmp_path / "w", None) is None
+    assert not (tmp_path / "logs").exists()

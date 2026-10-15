@@ -1,6 +1,8 @@
 """The run files a colleague's server can read.
 
-Two kinds of file, both under ``<project>/.kptn/runs/``:
+Two kinds of file, both under ``<project>/.kptn/runs/`` -- or, when
+``kptn.yaml`` sets ``shared_logs``, under ``<shared_logs>/<working directory
+name>/``, where they outlive the working directory (see :func:`runs_dir_for`):
 
 ``<run_id>.jsonl``
     Every event of one run, one JSON object per line, appended in sequence
@@ -41,6 +43,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence, cast
 
+from kptn.exceptions import ProfileError
+from kptn.profiles.loader import ProfileLoader
 from kptn.runner.events import EventKind
 
 if TYPE_CHECKING:
@@ -72,6 +76,16 @@ MAX_INDEX_BYTES = 4 * 1024 * 1024
 RUN_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 
 _TASK_OUTCOMES = ("succeeded", "failed")
+
+#: Where run files go when ``kptn.yaml`` names no ``shared_logs``.
+LOCAL_RUNS_DIR = Path(".kptn") / "runs"
+
+#: Explicit modes for shared run logs, whatever the umask. Every account
+#: creates its own subdirectory in the root, so the root is group-writable;
+#: only the owner writes inside their own.
+LOG_ROOT_MODE = 0o2775
+LOG_DIR_MODE = 0o2755
+LOG_FILE_MODE = 0o644
 
 
 class RunFileError(Exception):
@@ -149,6 +163,71 @@ def write_atomically(path: Path, data: bytes) -> None:
         with suppress(OSError):
             os.unlink(temporary)
         raise
+
+
+# -- where run files live ----------------------------------------------------
+
+
+def shared_logs_root(project_root: Path, setting: str | None) -> Path | None:
+    """The shared logs root *setting* names, resolved; None when unset.
+
+    Relative to *project_root*, the directory holding ``kptn.yaml``, as
+    ``shared_cache`` is. Touches nothing beyond ``resolve()``.
+    """
+    if setting is None:
+        return None
+    root = Path(setting).expanduser()
+    if not root.is_absolute():
+        root = project_root / root
+    return root.resolve()
+
+
+def runs_dir_for(project_root: Path) -> Path:
+    """Where the next recorded run of *project_root* writes its files.
+
+    ``<shared_logs>/<working directory name>`` when ``kptn.yaml`` sets
+    ``shared_logs``, else ``.kptn/runs``; created either way. Of a shared
+    root only the last component is created, so a typo in a parent fails
+    here instead of building a tree in the wrong place.
+
+    A ``kptn.yaml`` that does not load falls back to ``.kptn/runs``: the run
+    fails on that same error when it loads its profile, and that failure is
+    logged where its owner can read it.
+
+    Raises:
+        ProfileError: ``settings.shared_logs`` names a directory whose
+            parent does not exist.
+    """
+    try:
+        setting = ProfileLoader.load(project_root / "kptn.yaml").settings.shared_logs
+    except ProfileError:
+        setting = None
+    shared = shared_logs_root(project_root, setting)
+    if shared is None:
+        runs = project_root / LOCAL_RUNS_DIR
+        runs.mkdir(parents=True, exist_ok=True)
+        return runs
+    try:
+        _mkdir(shared, LOG_ROOT_MODE)
+    except FileNotFoundError as exc:
+        raise ProfileError(
+            f"settings.shared_logs {str(shared)!r}: its parent directory does not exist. "
+            "Check settings.shared_logs in kptn.yaml."
+        ) from exc
+    runs = shared / project_root.name
+    _mkdir(runs, LOG_DIR_MODE)
+    return runs
+
+
+def _mkdir(path: Path, mode: int) -> None:
+    """Create one directory with *mode*, whatever the umask. One that already
+    exists, perhaps another account's, is left as it is: chmod on it would
+    fail."""
+    try:
+        path.mkdir()
+    except FileExistsError:
+        return
+    os.chmod(path, mode)
 
 
 # -- the index ---------------------------------------------------------------
@@ -503,6 +582,10 @@ __all__ = [
     "INDEX_PUBLISH_INTERVAL_SECONDS",
     "INDEX_SCHEMA",
     "IndexedRun",
+    "LOCAL_RUNS_DIR",
+    "LOG_DIR_MODE",
+    "LOG_FILE_MODE",
+    "LOG_ROOT_MODE",
     "RUN_FILE_SUFFIX",
     "RUN_ID_RE",
     "RunFileError",
@@ -516,6 +599,8 @@ __all__ = [
     "read_span_text",
     "read_untrusted",
     "run_file_text",
+    "runs_dir_for",
+    "shared_logs_root",
     "truncate",
     "write_atomically",
     "write_index",
