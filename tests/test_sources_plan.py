@@ -57,7 +57,7 @@ def test_resolution_error_is_a_run_entry(tmp_path: Path) -> None:
 
 def test_views_always_run() -> None:
     a = kptn.source("a", files="in")
-    handle = kptn.source_views(kptn.Stage("bronze", a))
+    handle = kptn.source_views(kptn.Stage("raw_ingest", a))
     node = SourceViewsNode(spec=handle.__kptn__, name=handle.__name__)
     [entry] = build_plan(_resolved(node), FakeStateStore())
     assert (entry.action, entry.reason) == (PlanAction.RUN, "always runs")
@@ -133,7 +133,7 @@ def _downstream_of_source(tmp_path: Path, store: FakeStateStore) -> ResolvedGrap
     _write(tmp_path, "in/a.csv", "x\n1\n")
     handle = kptn.source("s", files=str(tmp_path / "in"))
     source = SourceNode(spec=handle.__kptn__, name="s")
-    views_handle = kptn.source_views(kptn.Stage("bronze", handle))
+    views_handle = kptn.source_views(kptn.Stage("raw_ingest", handle))
     views = SourceViewsNode(spec=views_handle.__kptn__, name=views_handle.__name__)
     report = TaskNode(fn=_report, spec=TaskSpec(outputs=[]), name="report")
     summary = TaskNode(fn=_report, spec=TaskSpec(outputs=[]), name="summary")
@@ -157,7 +157,7 @@ def test_a_table_to_build_makes_downstream_run(tmp_path: Path) -> None:
     entries = build_plan(resolved, store, config_values={}, root=tmp_path)
     assert [(e.task_name, e.action, e.reason) for e in entries] == [
         ("s[a]", PlanAction.RUN, "inputs changed"),
-        ("bronze_views", PlanAction.RUN, "always runs"),
+        ("raw_ingest_views", PlanAction.RUN, "always runs"),
         ("report", PlanAction.RUN, "upstream changed"),
         ("summary", PlanAction.RUN, "upstream changed"),
     ]
@@ -170,7 +170,7 @@ def test_cached_source_and_views_leave_downstream_cached(tmp_path: Path) -> None
     entries = build_plan(resolved, store, config_values={}, root=tmp_path)
     assert [(e.task_name, e.action) for e in entries] == [
         ("s[a]", PlanAction.SKIP),
-        ("bronze_views", PlanAction.RUN),
+        ("raw_ingest_views", PlanAction.RUN),
         ("report", PlanAction.SKIP),
         ("summary", PlanAction.SKIP),
     ]

@@ -81,7 +81,7 @@ class SourceNode:
 @dataclass
 class SourceViewsNode:
     spec: "SourceViewsSpec"
-    name: str                   # e.g. "bronze_views" for kptn.source_views(Stage("bronze", ...))
+    name: str                   # e.g. "raw_ingest_views" for kptn.source_views(Stage("raw_ingest", ...))
 
 
 # Union of all node types present after Epic 1 Stories 1.1–1.7.

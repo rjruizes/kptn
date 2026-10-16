@@ -46,30 +46,30 @@ def test_with_search_path_wraps_every_connection(tmp_path: Path) -> None:
 
 def test_register_views_uses_relative_paths_that_survive_a_move(tmp_path: Path) -> None:
     root = tmp_path / "branch_a"
-    _parquet(root, "asa24", "foodtotals", 1)
-    _parquet(root, "dhq3", "dhq3_codes", 2)
+    _parquet(root, "sales", "orders", 1)
+    _parquet(root, "survey", "codes", 2)
     db = root / "pipeline.db"
     conn = duckdb.connect(str(db))
     apply_search_path(conn, root / "_bronze")
-    created = register_views(conn, root / "_bronze", ("asa24", "dhq3", "absent"))
-    assert created == ['raw."asa24_foodtotals"', 'raw."dhq3_dhq3_codes"']
+    created = register_views(conn, root / "_bronze", ("sales", "survey", "absent"))
+    assert created == ['raw."sales_orders"', 'raw."survey_codes"']
     conn.close()
 
     moved = tmp_path / "branch_b"
     shutil.move(root, moved)
     conn = duckdb.connect(str(moved / "pipeline.db"))
     apply_search_path(conn, moved / "_bronze")
-    assert conn.sql('SELECT v FROM raw."asa24_foodtotals"').fetchall() == [("1",)]
+    assert conn.sql('SELECT v FROM raw."sales_orders"').fetchall() == [("1",)]
 
 
 def _views_node() -> SourceViewsNode:
-    a = kptn.source("asa24", files="in")
-    handle = kptn.source_views(kptn.Stage("bronze", a))
+    a = kptn.source("sales", files="in")
+    handle = kptn.source_views(kptn.Stage("raw_ingest", a))
     return SourceViewsNode(spec=handle.__kptn__, name=handle.__name__)
 
 
 def test_executor_registers_views_and_does_not_dirty_downstream(tmp_path: Path) -> None:
-    _parquet(tmp_path, "asa24", "foodtotals", 1)
+    _parquet(tmp_path, "sales", "orders", 1)
     db = str(tmp_path / "pipeline.db")
     views = _views_node()
     fn = MagicMock(return_value=None)
@@ -95,11 +95,11 @@ def test_executor_registers_views_and_does_not_dirty_downstream(tmp_path: Path) 
         )
     names_started = [e.task_name for e in sink_events if e.kind is EventKind.TASK_STARTED]
     names_skipped = [e.task_name for e in sink_events if e.kind is EventKind.TASK_SKIPPED]
-    assert "bronze_views" in names_started
+    assert "raw_ingest_views" in names_started
     assert "consumer" in names_skipped
     conn = duckdb.connect(db)
     apply_search_path(conn, tmp_path / "_bronze")
-    assert conn.sql('SELECT v FROM raw."asa24_foodtotals"').fetchall() == [("1",)]
+    assert conn.sql('SELECT v FROM raw."sales_orders"').fetchall() == [("1",)]
 
 
 def test_executor_views_need_a_duckdb_factory(tmp_path: Path) -> None:

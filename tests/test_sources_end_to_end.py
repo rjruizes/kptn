@@ -33,7 +33,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 def project(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "kptn.yaml").write_text(
-        "settings:\n  db: duckdb\nprofiles:\n  only_a:\n    stage_selections:\n      bronze: [a]\n"
+        "settings:\n  db: duckdb\nprofiles:\n  only_a:\n    stage_selections:\n      raw_ingest: [a]\n"
     )
     _write(tmp_path, "in/a/t.csv", "x\n1\n")
     _write(tmp_path, "in/a/u.csv", "y\n2\n")
@@ -53,12 +53,12 @@ def project(tmp_path: Path, monkeypatch):
 
     a = kptn.source("a", files="in/a")
     b = kptn.source("b", files="in/b")
-    bronze = kptn.Stage("bronze", a, b)
+    raw_ingest = kptn.Stage("raw_ingest", a, b)
     pipeline = kptn.Pipeline(
         "p",
         kptn.config(duckdb=(get_engine, "engine"))
-        >> kptn.parallel(init_database, bronze)
-        >> kptn.source_views(bronze)
+        >> kptn.parallel(init_database, raw_ingest)
+        >> kptn.source_views(raw_ingest)
         >> consumer,
     )
     return tmp_path, pipeline, seen
@@ -76,7 +76,7 @@ def test_first_run_builds_and_consumer_reads_views(project) -> None:
         rec = _run(pipeline)
     assert sorted(p.name for p in (root / "_bronze" / "a").iterdir()) == ["t.parquet", "u.parquet"]
     assert seen == [1]
-    assert "bronze_views" in rec.names(EventKind.TASK_STARTED)
+    assert "raw_ingest_views" in rec.names(EventKind.TASK_STARTED)
 
 
 def test_second_run_is_fully_cached(project) -> None:

@@ -27,9 +27,9 @@ from tests.fakes import FakeStateStore
 
 def _project(root: Path) -> Path:
     for rel, text in {
-        "in/m1/foodtotals_2024-01-24.csv": "recallid,kcal\n1,200\n",
-        "in/m2/foodtotals_2024-02-01.csv": "recallid,kcal\n2,300\n",
-        "in/m1/ndsr_2024-01-24.csv": "recallid,x\n1,a\n",
+        "in/m1/orders_2024-01-24.csv": "orderid,amount\n1,200\n",
+        "in/m2/orders_2024-02-01.csv": "orderid,amount\n2,300\n",
+        "in/m1/refunds_2024-01-24.csv": "orderid,x\n1,a\n",
     }.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -39,14 +39,14 @@ def _project(root: Path) -> Path:
 
 def _spec(root: Path):
     return kptn.source(
-        "asa24",
+        "sales",
         files=[str(root / "in" / "m1"), str(root / "in" / "m2")],
         table=lambda f: f.name.split("_")[0],
     ).__kptn__
 
 
 def _plans(root: Path, spec=None):
-    return plan_tables("asa24", spec or _spec(root), {}, root=root)
+    return plan_tables("sales", spec or _spec(root), {}, root=root)
 
 
 def test_fingerprint_is_size_and_mtime(tmp_path: Path) -> None:
@@ -69,10 +69,10 @@ def test_fingerprints_preserve_order(tmp_path: Path) -> None:
 
 def test_plan_tables_groups_and_names(tmp_path: Path) -> None:
     plans = _plans(_project(tmp_path))
-    assert [p.table for p in plans] == ["foodtotals", "ndsr"]
-    assert plans[0].state_name == "asa24[foodtotals]"
-    assert plans[0].parquet == tmp_path / BRONZE_DIR / "asa24" / "foodtotals.parquet"
-    assert [f.rel for f in plans[0].files] == ["m1/foodtotals_2024-01-24.csv", "m2/foodtotals_2024-02-01.csv"]
+    assert [p.table for p in plans] == ["orders", "refunds"]
+    assert plans[0].state_name == "sales[orders]"
+    assert plans[0].parquet == tmp_path / BRONZE_DIR / "sales" / "orders.parquet"
+    assert [f.rel for f in plans[0].files] == ["m1/orders_2024-01-24.csv", "m2/orders_2024-02-01.csv"]
 
 
 def test_key_is_independent_of_working_directory(tmp_path: Path) -> None:
@@ -85,34 +85,34 @@ def test_key_is_independent_of_working_directory(tmp_path: Path) -> None:
 def test_changing_one_file_changes_only_its_table(tmp_path: Path) -> None:
     root = _project(tmp_path)
     before = {p.table: p.key for p in _plans(root)}
-    (root / "in/m1/ndsr_2024-01-24.csv").write_text("recallid,x\n1,bb\n")
+    (root / "in/m1/refunds_2024-01-24.csv").write_text("orderid,x\n1,bb\n")
     after = {p.table: p.key for p in _plans(root)}
-    assert after["ndsr"] != before["ndsr"]
-    assert after["foodtotals"] == before["foodtotals"]
+    assert after["refunds"] != before["refunds"]
+    assert after["orders"] == before["orders"]
 
 
 def test_touching_a_file_changes_its_key(tmp_path: Path) -> None:
     """The documented tradeoff: a new modification time means a rebuild."""
     root = _project(tmp_path)
     before = {p.table: p.key for p in _plans(root)}
-    path = root / "in/m1/ndsr_2024-01-24.csv"
+    path = root / "in/m1/refunds_2024-01-24.csv"
     st = path.stat()
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-    assert {p.table: p.key for p in _plans(root)}["ndsr"] != before["ndsr"]
+    assert {p.table: p.key for p in _plans(root)}["refunds"] != before["refunds"]
 
 
 def test_check_file_content_is_part_of_the_input_hash(tmp_path: Path) -> None:
     root = _project(tmp_path)
     before = {p.table: p.key for p in _plans(root)}
-    check = root / "checks" / "asa24" / "ndsr.yml"
+    check = root / "checks" / "sales" / "refunds.yml"
     check.parent.mkdir(parents=True)
-    check.write_text("checks for asa24_ndsr:\n- row_count > 0\n")
+    check.write_text("checks for sales_refunds:\n- row_count > 0\n")
     with_check = {p.table: p.key for p in _plans(root)}
-    assert with_check["ndsr"] != before["ndsr"]
-    assert with_check["foodtotals"] == before["foodtotals"]
+    assert with_check["refunds"] != before["refunds"]
+    assert with_check["orders"] == before["orders"]
     st = check.stat()
     os.utime(check, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-    assert {p.table: p.key for p in _plans(root)}["ndsr"] == with_check["ndsr"]
+    assert {p.table: p.key for p in _plans(root)}["refunds"] == with_check["refunds"]
 
 
 def test_source_code_hash_tracks_callables() -> None:
@@ -126,9 +126,9 @@ def test_build_writes_parquet_and_leaves_no_temp_files(tmp_path: Path) -> None:
     plan = _plans(root)[0]
     with pytest.warns(UserWarning):  # no check file
         assert build_table(plan, _spec(root), root=root) is False
-    rows = duckdb.sql(f"SELECT recallid, _source_file FROM '{plan.parquet}' ORDER BY 2").fetchall()
-    assert rows == [("1", "m1/foodtotals_2024-01-24.csv"), ("2", "m2/foodtotals_2024-02-01.csv")]
-    assert [p.name for p in plan.parquet.parent.iterdir()] == ["foodtotals.parquet"]
+    rows = duckdb.sql(f"SELECT orderid, _source_file FROM '{plan.parquet}' ORDER BY 2").fetchall()
+    assert rows == [("1", "m1/orders_2024-01-24.csv"), ("2", "m2/orders_2024-02-01.csv")]
+    assert [p.name for p in plan.parquet.parent.iterdir()] == ["orders.parquet"]
 
 
 def test_failed_check_keeps_previous_parquet(tmp_path: Path) -> None:
@@ -141,7 +141,7 @@ def test_failed_check_keeps_previous_parquet(tmp_path: Path) -> None:
         with pytest.raises(TaskError, match="bad data"):
             build_table(plan, _spec(root), root=root)
     assert plan.parquet.read_bytes() == before
-    assert [p.name for p in plan.parquet.parent.iterdir()] == ["foodtotals.parquet"]
+    assert [p.name for p in plan.parquet.parent.iterdir()] == ["orders.parquet"]
 
 
 def test_is_current_follows_stored_value_and_parquet(tmp_path: Path) -> None:
@@ -158,11 +158,11 @@ def test_is_current_follows_stored_value_and_parquet(tmp_path: Path) -> None:
 
 
 def test_remove_stale_tables(tmp_path: Path) -> None:
-    folder = tmp_path / BRONZE_DIR / "asa24"
+    folder = tmp_path / BRONZE_DIR / "sales"
     folder.mkdir(parents=True)
     for name in ("keep.parquet", "gone.parquet", ".x.parquet.abc.tmp"):
         (folder / name).write_bytes(b"x")
-    removed = remove_stale_tables("asa24", {"keep"}, root=tmp_path)
+    removed = remove_stale_tables("sales", {"keep"}, root=tmp_path)
     assert [p.name for p in removed] == ["gone.parquet"]
     assert sorted(p.name for p in folder.iterdir()) == [".x.parquet.abc.tmp", "keep.parquet"]
 
@@ -170,9 +170,9 @@ def test_remove_stale_tables(tmp_path: Path) -> None:
 def test_plan_carries_stamps_and_code_hash(tmp_path: Path) -> None:
     root = _project(tmp_path)
     spec = _spec(root)
-    [food, _ndsr] = _plans(root, spec)
-    assert food.stamps == tuple(fingerprint(f.path) for f in food.files)
-    assert food.code_hash == source_code_hash(spec)
+    [orders, _refunds] = _plans(root, spec)
+    assert orders.stamps == tuple(fingerprint(f.path) for f in orders.files)
+    assert orders.code_hash == source_code_hash(spec)
 
 
 def test_build_table_writes_to_dest(tmp_path: Path) -> None:

@@ -13,65 +13,65 @@ from kptn.sources.checks import check_path, run_checks
 def _conn_with_view() -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect()
     conn.execute("CREATE SCHEMA raw")
-    conn.execute("CREATE VIEW raw.asa24_foodtotals AS SELECT '1' AS recallid, '200' AS kcal")
+    conn.execute("CREATE VIEW raw.sales_orders AS SELECT '1' AS orderid, '200' AS amount")
     return conn
 
 
 def _write_check(root: Path, body: str) -> Path:
-    path = check_path(root, "asa24", "foodtotals")
+    path = check_path(root, "sales", "orders")
     path.parent.mkdir(parents=True)
     path.write_text(body)
     return path
 
 
 def test_check_path_convention(tmp_path: Path) -> None:
-    assert check_path(tmp_path, "asa24", "foodtotals") == tmp_path / "checks" / "asa24" / "foodtotals.yml"
+    assert check_path(tmp_path, "sales", "orders") == tmp_path / "checks" / "sales" / "orders.yml"
 
 
 def test_missing_check_file_warns_and_returns_false(tmp_path: Path) -> None:
-    with pytest.warns(UserWarning, match=r"checks/asa24/foodtotals\.yml"):
-        assert run_checks(_conn_with_view(), source="asa24", table="foodtotals", root=tmp_path) is False
+    with pytest.warns(UserWarning, match=r"checks/sales/orders\.yml"):
+        assert run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path) is False
 
 
 def test_check_file_without_soda_is_an_error(tmp_path: Path, monkeypatch) -> None:
-    _write_check(tmp_path, "checks for asa24_foodtotals:\n- row_count > 0\n")
+    _write_check(tmp_path, "checks for sales_orders:\n- row_count > 0\n")
     monkeypatch.setitem(sys.modules, "soda", None)
     monkeypatch.setitem(sys.modules, "soda.scan", None)
     with pytest.raises(TaskError, match=r"kptn\[soda\]"):
-        run_checks(_conn_with_view(), source="asa24", table="foodtotals", root=tmp_path)
+        run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path)
 
 
 def test_passing_checks_return_true(tmp_path: Path) -> None:
     pytest.importorskip("soda.scan")
     _write_check(
         tmp_path,
-        "checks for asa24_foodtotals:\n"
+        "checks for sales_orders:\n"
         "- schema:\n"
         "    fail:\n"
-        "      when required column missing: [recallid, kcal]\n",
+        "      when required column missing: [orderid, amount]\n",
     )
-    assert run_checks(_conn_with_view(), source="asa24", table="foodtotals", root=tmp_path) is True
+    assert run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path) is True
 
 
 def test_failing_checks_raise(tmp_path: Path) -> None:
     pytest.importorskip("soda.scan")
     _write_check(
         tmp_path,
-        "checks for asa24_foodtotals:\n"
+        "checks for sales_orders:\n"
         "- schema:\n"
         "    fail:\n"
-        "      when required column missing: [recallid, not_there]\n",
+        "      when required column missing: [orderid, not_there]\n",
     )
-    with pytest.raises(TaskError, match="asa24.foodtotals"):
-        run_checks(_conn_with_view(), source="asa24", table="foodtotals", root=tmp_path)
+    with pytest.raises(TaskError, match="sales.orders"):
+        run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path)
 
 
 def test_missing_check_warning_points_at_the_declaration(tmp_path: Path) -> None:
     with pytest.warns(UserWarning) as record:
         run_checks(
             _conn_with_view(),
-            source="asa24",
-            table="foodtotals",
+            source="sales",
+            table="orders",
             root=tmp_path,
             declared_at=("/project/pipeline.py", 31),
         )

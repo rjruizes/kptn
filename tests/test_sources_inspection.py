@@ -11,44 +11,44 @@ from kptn.runner.events import EventEmitter, EventKind
 
 
 def _pipeline():
-    a = kptn.source("asa24", files="in/asa24")
-    bronze = kptn.Stage("bronze", a)
-    return kptn.Pipeline("p", bronze >> kptn.source_views(bronze))
+    a = kptn.source("sales", files="in/sales")
+    raw_ingest = kptn.Stage("raw_ingest", a)
+    return kptn.Pipeline("p", raw_ingest >> kptn.source_views(raw_ingest))
 
 
 def test_inspection_shows_sources_as_tasks(tmp_path: Path) -> None:
     inspection = inspect_pipeline(_pipeline(), KptnConfig(), None, tmp_path)
     by_name = {i.name: i for i in inspection.items}
-    src = by_name["asa24"]
+    src = by_name["sales"]
     assert (src.kind, src.executable) == ("source", True)
-    assert src.inputs == ("in/asa24",)
+    assert src.inputs == ("in/sales",)
     assert src.source_path is not None and src.source_path.name == "test_sources_inspection.py"
     assert src.source_line is not None
-    views = by_name["bronze_views"]
+    views = by_name["raw_ingest_views"]
     assert (views.kind, views.executable) == ("views", True)
-    assert views.inputs == ("_bronze/asa24/*.parquet",)
+    assert views.inputs == ("_bronze/sales/*.parquet",)
 
 
 def test_inspection_marks_the_ingest_steps(tmp_path: Path) -> None:
     @kptn.task(outputs=[])
     def transform() -> None: ...
 
-    a = kptn.source("asa24", files="in/asa24")
-    bronze = kptn.Stage("bronze", a)
+    a = kptn.source("sales", files="in/sales")
+    raw_ingest = kptn.Stage("raw_ingest", a)
     other = kptn.Stage("silver", transform)
-    pipeline = kptn.Pipeline("p", bronze >> kptn.source_views(bronze) >> other)
+    pipeline = kptn.Pipeline("p", raw_ingest >> kptn.source_views(raw_ingest) >> other)
 
     inspection = inspect_pipeline(pipeline, KptnConfig(), None, tmp_path)
     ingest = {i.name for i in inspection.items if i.ingest}
-    assert ingest == {"bronze", "asa24", "bronze_views"}
+    assert ingest == {"raw_ingest", "sales", "raw_ingest_views"}
 
 
 def test_console_prints_source_line() -> None:
     out = io.StringIO()
     emitter = EventEmitter("r", "p", None, ConsoleEventSink(stream_out=out, stream_err=io.StringIO()))
-    emitter.emit(EventKind.TASK_STARTED, task_name="asa24", mode="source", count=9)
+    emitter.emit(EventKind.TASK_STARTED, task_name="sales", mode="source", count=9)
     line = out.getvalue().strip()
-    assert line.startswith("[SOURCE] ") and line.endswith("asa24 — 9 tables")
+    assert line.startswith("[SOURCE] ") and line.endswith("sales — 9 tables")
 
 
 def test_ui_task_kinds_include_sources() -> None:
@@ -76,13 +76,13 @@ def test_pipeline_outline_lists_steps_with_their_groups(tmp_path: Path) -> None:
     @kptn.task(outputs=[])
     def report() -> None: ...
 
-    a = kptn.source("asa24", files="in/asa24")
-    bronze = kptn.Stage("bronze", a)
+    a = kptn.source("sales", files="in/sales")
+    raw_ingest = kptn.Stage("raw_ingest", a)
     module = kptn.Pipeline("load_module", load)  # ty: ignore[invalid-argument-type]
     pipeline = kptn.Pipeline(
         "p",
-        kptn.parallel(init_database, bronze)
-        >> kptn.source_views(bronze)
+        kptn.parallel(init_database, raw_ingest)
+        >> kptn.source_views(raw_ingest)
         >> kptn.Stage("datasets", module)
         >> report,
     )
@@ -90,8 +90,8 @@ def test_pipeline_outline_lists_steps_with_their_groups(tmp_path: Path) -> None:
     outline = pipeline_outline(pipeline, KptnConfig(), None)
     assert [(e.name, e.kind, e.groups) for e in outline] == [
         ("init_database", "python", ()),
-        ("asa24", "source", ("bronze",)),
-        ("bronze_views", "views", ()),
+        ("sales", "source", ("raw_ingest",)),
+        ("raw_ingest_views", "views", ()),
         ("load", "python", ("datasets", "load_module")),
         ("report", "python", ()),
     ]

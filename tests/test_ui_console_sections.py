@@ -76,31 +76,31 @@ def test_a_failure_is_a_line_of_its_own() -> None:
 
 def test_a_source_is_a_marker_and_its_tables_open_sections_under_it() -> None:
     layout = ConsoleLayout()
-    marker = layout.place(_event(1, "task_started", "asa24", mode="source", count=2, groups=["bronze"]))
+    marker = layout.place(_event(1, "task_started", "sales", mode="source", count=2, groups=["raw_ingest"]))
     assert marker.hidden and marker.container is None and marker.opens == ()
 
-    skipped = layout.place(_event(2, "task_skipped", "asa24[items]", mode="source_table", groups=["bronze"]))
-    built = layout.place(_event(3, "task_started", "asa24[totals]", mode="source_table", groups=["bronze"]))
+    skipped = layout.place(_event(2, "task_skipped", "sales[items]", mode="source_table", groups=["raw_ingest"]))
+    built = layout.place(_event(3, "task_started", "sales[totals]", mode="source_table", groups=["raw_ingest"]))
     for placement, label, status in ((skipped, "items", "cached"), (built, "totals", "")):
         [section] = placement.opens
         assert (section.label, section.path, section.runner, section.status) == (
             label,
-            ("bronze", "asa24"),
+            ("raw_ingest", "sales"),
             "ingest",
             status,
         )
-    layout.place(_event(4, "task_finished", "asa24[totals]", mode="source_table", status="succeeded"))
+    layout.place(_event(4, "task_finished", "sales[totals]", mode="source_table", status="succeeded"))
     # The source's own outcome: its tables have said it already.
-    outcome = layout.place(_event(5, "task_finished", "asa24", mode="source", status="failed"))
+    outcome = layout.place(_event(5, "task_finished", "sales", mode="source", status="failed"))
     assert outcome.hidden and outcome.container is None and outcome.opens == ()
 
 
 def test_a_source_failing_before_any_table_gets_a_section_of_its_own() -> None:
     layout = ConsoleLayout()
-    layout.place(_event(1, "task_started", "dhq3", mode="source", count=0, groups=["bronze"]))
-    failed = layout.place(_event(2, "task_finished", "dhq3", mode="source", status="failed", error="no files"))
+    layout.place(_event(1, "task_started", "survey", mode="source", count=0, groups=["raw_ingest"]))
+    failed = layout.place(_event(2, "task_finished", "survey", mode="source", status="failed", error="no files"))
     [section] = failed.opens
-    assert (section.key, section.label, section.path) == ("dhq3", "dhq3", ("bronze",))
+    assert (section.key, section.label, section.path) == ("survey", "survey", ("raw_ingest",))
     assert not failed.hidden and section.state == "failed"
 
 
@@ -114,8 +114,8 @@ def test_warnings_are_counted_on_their_section() -> None:
 
 def test_a_cached_section_says_why_it_was_skipped() -> None:
     layout = ConsoleLayout()
-    layout.place(_event(1, "task_started", "asa24", mode="source"))
-    [table] = layout.place(_event(2, "task_skipped", "asa24[items]", mode="source_table")).opens
+    layout.place(_event(1, "task_started", "sales", mode="source"))
+    [table] = layout.place(_event(2, "task_skipped", "sales[items]", mode="source_table")).opens
     [task] = layout.place(_event(3, "task_skipped", "curate", mode="python")).opens
     assert (table.state, table.reason) == ("cached", "source unchanged")
     assert (task.state, task.reason) == ("cached", "inputs unchanged")
@@ -151,7 +151,7 @@ def _source_run(store: RunStore, root: Path) -> str:
     record = store.create_run(RunRequest(project_root=root, pipeline="fixture"))
     run_id = record.run_id
     store.append_event(run_id, "run_started")
-    groups = {"groups": ["bronze"]}
+    groups = {"groups": ["raw_ingest"]}
     store.append_event(run_id, "task_started", task_name="s", payload={"mode": "source", "count": 2, **groups})
     store.append_event(run_id, "task_skipped", task_name="s[a]", payload={"mode": "source_table", **groups})
     store.append_event(run_id, "task_started", task_name="s[b]", payload={"mode": "source_table", **groups})
@@ -204,7 +204,7 @@ def test_the_page_renders_a_section_per_table_and_task(app, store, client) -> No
 
     units = re.findall(r'data-section data-unit="([^"]+)"', html)
     assert units == ["s[a]", "s[b]", "after"]
-    assert '<span class="sec-h__path">bronze / s /</span>' in html
+    assert '<span class="sec-h__path">raw_ingest / s /</span>' in html
     assert re.search(r'<span class="sec-h__name">b</span>', html)
     # The warned table's heading: how it ran, how much it printed, a pill.
     log = html[html.index('id="console"') :]

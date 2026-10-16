@@ -23,23 +23,23 @@ def _rows(conn: duckdb.DuckDBPyConnection, view: str) -> list[tuple]:
 
 
 def test_csv_values_are_text_with_source_file(tmp_path: Path) -> None:
-    f = _file(tmp_path, "Module1/foodtotals_2024-01-24.csv", "RecallID,Kcal\n1,200\n")
+    f = _file(tmp_path, "Batch1/orders_2024-01-24.csv", "OrderID,Amount\n1,200\n")
     conn = duckdb.connect()
-    view = create_table_view(conn, "asa24", "foodtotals", [f])
-    assert view == 'raw."asa24_foodtotals"'
+    view = create_table_view(conn, "sales", "orders", [f])
+    assert view == 'raw."sales_orders"'
     rel = conn.sql(f"SELECT * FROM {view}")
-    assert rel.columns == ["RecallID", "Kcal", "_source_file"]
+    assert rel.columns == ["OrderID", "Amount", "_source_file"]
     assert {str(t) for t in rel.types} == {"VARCHAR"}
-    assert rel.fetchall() == [("1", "200", "Module1/foodtotals_2024-01-24.csv")]
+    assert rel.fetchall() == [("1", "200", "Batch1/orders_2024-01-24.csv")]
 
 
 def test_union_by_name_is_case_insensitive_and_fills_missing(tmp_path: Path) -> None:
-    a = _file(tmp_path, "m1/t.csv", "RecallID,Kcal\n1,200\n")
-    b = _file(tmp_path, "m2/t.csv", "recallid,kcal,Prot\n2,300,10\n")
+    a = _file(tmp_path, "m1/t.csv", "OrderID,Amount\n1,200\n")
+    b = _file(tmp_path, "m2/t.csv", "orderid,amount,Tax\n2,300,10\n")
     conn = duckdb.connect()
     view = create_table_view(conn, "s", "t", [b, a])  # order given does not matter
     rel = conn.sql(f"SELECT * FROM {view} ORDER BY _source_file")
-    assert rel.columns == ["RecallID", "Kcal", "_source_file", "Prot"]
+    assert rel.columns == ["OrderID", "Amount", "_source_file", "Tax"]
     assert rel.fetchall() == [("1", "200", "m1/t.csv", None), ("2", "300", "m2/t.csv", "10")]
 
 

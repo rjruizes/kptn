@@ -26,11 +26,11 @@ def _spec(**kwargs):
 
 
 def test_directory_means_visible_files_inside(tmp_path: Path) -> None:
-    _touch(tmp_path, "Module1/foodtotals_2024-01-24.csv")
-    _touch(tmp_path, "Module1/.DS_Store")
-    _touch(tmp_path, "Module1/nested/deep.csv")
-    files = resolve_files("s", _spec(files=str(tmp_path / "Module1")), {})
-    assert [f.rel for f in files] == ["Module1/foodtotals_2024-01-24.csv"]
+    _touch(tmp_path, "Batch1/orders_2024-01-24.csv")
+    _touch(tmp_path, "Batch1/.DS_Store")
+    _touch(tmp_path, "Batch1/nested/deep.csv")
+    files = resolve_files("s", _spec(files=str(tmp_path / "Batch1")), {})
+    assert [f.rel for f in files] == ["Batch1/orders_2024-01-24.csv"]
 
 
 def test_glob_base_is_the_non_glob_prefix(tmp_path: Path) -> None:
@@ -41,15 +41,15 @@ def test_glob_base_is_the_non_glob_prefix(tmp_path: Path) -> None:
 
 
 def test_single_file_base_is_its_folder(tmp_path: Path) -> None:
-    p = _touch(tmp_path, "dhq3/dhq3_codes.csv")
+    p = _touch(tmp_path, "survey/survey_codes.csv")
     files = resolve_files("s", _spec(files=str(p)), {})
-    assert [f.rel for f in files] == ["dhq3/dhq3_codes.csv"]
+    assert [f.rel for f in files] == ["survey/survey_codes.csv"]
 
 
 def test_callable_files_receive_config_by_name(tmp_path: Path) -> None:
-    _touch(tmp_path, "Module1/a.csv")
-    spec = _spec(files=lambda config: config["asa24"]["in"])
-    files = resolve_files("s", spec, {"config": {"asa24": {"in": [str(tmp_path / "Module1")]}}, "engine": object()})
+    _touch(tmp_path, "Batch1/a.csv")
+    spec = _spec(files=lambda config: config["sales"]["in"])
+    files = resolve_files("s", spec, {"config": {"sales": {"in": [str(tmp_path / "Batch1")]}}, "engine": object()})
     assert [f.name for f in files] == ["a.csv"]
 
 
@@ -93,9 +93,9 @@ def test_result_is_sorted_regardless_of_pattern_order(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("dhq3_codes", "dhq3_codes"),
-        ("Module 1 Data Delivery Subject MOCK", "module_1_data_delivery_subject_mock"),
-        ("SUPPLEMENTSTOTALS", "supplementstotals"),
+        ("survey_codes", "survey_codes"),
+        ("Batch 1 Export Report MOCK", "batch_1_export_report_mock"),
+        ("DAILYTOTALS", "dailytotals"),
         ("--a--b--", "a_b"),
     ],
 )
@@ -117,10 +117,10 @@ def test_table_defaults_to_stem_and_normalizes_callables(tmp_path: Path) -> None
 
 
 def test_same_stem_in_different_folders_groups_together(tmp_path: Path) -> None:
-    _touch(tmp_path, "m2/ndsr.csv")
-    _touch(tmp_path, "m1/ndsr.csv")
+    _touch(tmp_path, "m2/refunds.csv")
+    _touch(tmp_path, "m1/refunds.csv")
     _touch(tmp_path, "m1/codes.csv")
     spec = _spec(files=[str(tmp_path / "m1"), str(tmp_path / "m2")])
     groups = group_by_table(spec, resolve_files("s", spec, {}))
-    assert list(groups) == ["codes", "ndsr"]
-    assert [f.rel for f in groups["ndsr"]] == ["m1/ndsr.csv", "m2/ndsr.csv"]
+    assert list(groups) == ["codes", "refunds"]
+    assert [f.rel for f in groups["refunds"]] == ["m1/refunds.csv", "m2/refunds.csv"]

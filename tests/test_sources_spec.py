@@ -13,22 +13,22 @@ from tests.fakes import FakeStateStore
 
 
 def test_source_returns_handle_with_spec() -> None:
-    dhq3 = kptn.source("dhq3", files="in/dhq3")
-    assert dhq3.__name__ == "dhq3"
-    assert isinstance(dhq3.__kptn__, SourceSpec)
-    assert dhq3.__kptn__.files == "in/dhq3"
-    assert dhq3.__kptn__.table is None and dhq3.__kptn__.read is None
+    survey = kptn.source("survey", files="in/survey")
+    assert survey.__name__ == "survey"
+    assert isinstance(survey.__kptn__, SourceSpec)
+    assert survey.__kptn__.files == "in/survey"
+    assert survey.__kptn__.table is None and survey.__kptn__.read is None
 
 
 def test_source_records_where_it_was_declared() -> None:
-    dhq3 = kptn.source("dhq3", files="in/dhq3")
-    assert dhq3.__kptn__.declared_at is not None
-    filename, lineno = dhq3.__kptn__.declared_at
+    survey = kptn.source("survey", files="in/survey")
+    assert survey.__kptn__.declared_at is not None
+    filename, lineno = survey.__kptn__.declared_at
     assert filename.endswith("test_sources_spec.py")
     assert lineno > 0
 
 
-@pytest.mark.parametrize("bad", ["Asa24", "1x", "a-b", "", "a b"])
+@pytest.mark.parametrize("bad", ["Sales", "1x", "a-b", "", "a b"])
 def test_source_rejects_bad_names(bad: str) -> None:
     with pytest.raises(ValueError, match="name"):
         kptn.source(bad, files="in")
@@ -56,8 +56,8 @@ def test_source_composes_into_a_source_node() -> None:
 def test_stage_selection_prunes_sources_by_name() -> None:
     a = kptn.source("a", files="in/a")
     b = kptn.source("b", files="in/b")
-    pipeline = Pipeline("p", kptn.Stage("bronze", a, b))
-    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"bronze": ["a"]})})
+    pipeline = Pipeline("p", kptn.Stage("raw_ingest", a, b))
+    config = KptnConfig(profiles={"ci": ProfileSpec(stage_selections={"raw_ingest": ["a"]})})
     resolved = ProfileResolver(config).compile(pipeline, "ci")
     names = {n.name for n in resolved.graph.nodes}
     assert "a" in names and "b" not in names
@@ -66,8 +66,8 @@ def test_stage_selection_prunes_sources_by_name() -> None:
 def test_source_views_names_after_stage_and_lists_sources() -> None:
     a = kptn.source("a", files="in/a")
     b = kptn.source("b", files="in/b")
-    views = kptn.source_views(kptn.Stage("bronze", b, a))
-    assert views.__name__ == "bronze_views"
+    views = kptn.source_views(kptn.Stage("raw_ingest", b, a))
+    assert views.__name__ == "raw_ingest_views"
     assert isinstance(views.__kptn__, SourceViewsSpec)
     assert views.__kptn__.sources == ("a", "b")
 
@@ -77,16 +77,16 @@ def test_source_views_requires_sources() -> None:
     def t() -> None: ...
 
     with pytest.raises(ValueError, match="kptn.source"):
-        kptn.source_views(kptn.Stage("bronze", t))
+        kptn.source_views(kptn.Stage("raw_ingest", t))
     with pytest.raises(TypeError):
         kptn.source_views(t)  # ty: ignore[invalid-argument-type]
 
 
 def test_source_views_composes_into_its_node() -> None:
     a = kptn.source("a", files="in/a")
-    stage = kptn.Stage("bronze", a)
+    stage = kptn.Stage("raw_ingest", a)
     graph = stage >> kptn.source_views(stage)
-    assert any(isinstance(n, SourceViewsNode) and n.name == "bronze_views" for n in graph.nodes)
+    assert any(isinstance(n, SourceViewsNode) and n.name == "raw_ingest_views" for n in graph.nodes)
 
 
 def test_is_stale_treats_source_nodes_as_non_task() -> None:

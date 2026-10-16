@@ -28,9 +28,9 @@ class Entry:
 
 ENTRIES = [
     Entry("init_database"),
-    Entry("asa24", "source", ("bronze",)),
-    Entry("dhq3", "source", ("bronze",)),
-    Entry("bronze_views", "views"),
+    Entry("sales", "source", ("raw_ingest",)),
+    Entry("survey", "source", ("raw_ingest",)),
+    Entry("raw_ingest_views", "views"),
     Entry("load_a", groups=("datasets", "module_a")),
     Entry("qc_a", groups=("datasets", "module_a")),
     Entry("load_b", groups=("datasets", "module_b")),
@@ -69,53 +69,53 @@ def _units(view: dict[str, Any]) -> list[tuple[str, str]]:
 def test_steps_follow_the_pipeline_with_stages_as_trees() -> None:
     views = _views(RunOutline(ENTRIES))
 
-    assert list(views) == ["init_database", "bronze", "bronze_views", "datasets", "report"]
+    assert list(views) == ["init_database", "raw_ingest", "raw_ingest_views", "datasets", "report"]
     # A lone task is one line in the rail.
     assert views["report"]["unit"]["unit"] == "report"
     assert views["report"]["branches"] == []
     # A stage is a heading over a branch per source or module.
-    assert [b["label"] for b in views["bronze"]["branches"]] == ["asa24", "dhq3"]
+    assert [b["label"] for b in views["raw_ingest"]["branches"]] == ["sales", "survey"]
     assert [b["label"] for b in views["datasets"]["branches"]] == ["module_a", "module_b"]
     assert [u["unit"] for u in views["datasets"]["branches"][0]["units"]] == ["load_a", "qc_a"]
     assert views["datasets"]["units"] == "load_a qc_a load_b"
-    assert views["bronze"]["ingest"] and views["bronze_views"]["ingest"]
+    assert views["raw_ingest"]["ingest"] and views["raw_ingest_views"]["ingest"]
     assert not views["datasets"]["ingest"]
     # Nothing has run. A source's tables are not known yet, so it lists none.
     assert {view["state"] for view in views.values()} == {"waiting"}
-    assert views["bronze"]["branches"][0]["units"] == []
-    assert views["bronze"]["count"] == 0
+    assert views["raw_ingest"]["branches"][0]["units"] == []
+    assert views["raw_ingest"]["count"] == 0
 
 
 def test_a_sources_tables_are_listed_as_they_are_reported() -> None:
     outline = RunOutline(ENTRIES)
-    outline.apply(_event(1, "task_started", "asa24", mode="source", count=2, groups=["bronze"]))
-    outline.apply(_event(2, "task_skipped", "asa24[items]", mode="source_table"))
-    outline.apply(_event(3, "task_started", "asa24[totals]", mode="source_table"))
-    bronze = _views(outline)["bronze"]
+    outline.apply(_event(1, "task_started", "sales", mode="source", count=2, groups=["raw_ingest"]))
+    outline.apply(_event(2, "task_skipped", "sales[items]", mode="source_table"))
+    outline.apply(_event(3, "task_started", "sales[totals]", mode="source_table"))
+    raw_ingest = _views(outline)["raw_ingest"]
 
-    assert [(u["unit"], u["label"], u["state"]) for u in bronze["branches"][0]["units"]] == [
-        ("asa24[items]", "items", "cached"),
-        ("asa24[totals]", "totals", "running"),
+    assert [(u["unit"], u["label"], u["state"]) for u in raw_ingest["branches"][0]["units"]] == [
+        ("sales[items]", "items", "cached"),
+        ("sales[totals]", "totals", "running"),
     ]
-    assert bronze["state"] == "running" and bronze["count"] == 2
+    assert raw_ingest["state"] == "running" and raw_ingest["count"] == 2
 
     outline.apply(
-        _event(4, "task_finished", "asa24[totals]", mode="source_table", status="succeeded", duration_seconds=0.25)
+        _event(4, "task_finished", "sales[totals]", mode="source_table", status="succeeded", duration_seconds=0.25)
     )
     # Its tables are done, but the source itself has not finished.
-    assert _views(outline)["bronze"]["branches"][0]["state"] == "running"
-    outline.apply(_event(5, "task_finished", "asa24", mode="source", status="succeeded", cached=False))
-    bronze = _views(outline)["bronze"]
-    assert bronze["branches"][0]["state"] == "succeeded"
-    assert bronze["branches"][0]["units"][1]["duration"] == "0.2s"
+    assert _views(outline)["raw_ingest"]["branches"][0]["state"] == "running"
+    outline.apply(_event(5, "task_finished", "sales", mode="source", status="succeeded", cached=False))
+    raw_ingest = _views(outline)["raw_ingest"]
+    assert raw_ingest["branches"][0]["state"] == "succeeded"
+    assert raw_ingest["branches"][0]["units"][1]["duration"] == "0.2s"
 
 
 def test_a_fully_cached_source_reads_cached() -> None:
     outline = RunOutline(ENTRIES)
-    outline.apply(_event(1, "task_started", "dhq3", mode="source", count=1, groups=["bronze"]))
-    outline.apply(_event(2, "task_skipped", "dhq3[codes]", mode="source_table"))
-    outline.apply(_event(3, "task_finished", "dhq3", mode="source", status="succeeded", cached=True))
-    assert _views(outline)["bronze"]["branches"][1]["state"] == "cached"
+    outline.apply(_event(1, "task_started", "survey", mode="source", count=1, groups=["raw_ingest"]))
+    outline.apply(_event(2, "task_skipped", "survey[codes]", mode="source_table"))
+    outline.apply(_event(3, "task_finished", "survey", mode="source", status="succeeded", cached=True))
+    assert _views(outline)["raw_ingest"]["branches"][1]["state"] == "cached"
 
 
 def test_a_finished_task_shows_its_duration_however_short() -> None:
@@ -165,13 +165,13 @@ def test_a_source_that_fails_before_any_table_is_listed_itself() -> None:
     outline = build_outline(
         ENTRIES,
         [
-            _event(1, "task_started", "asa24", mode="source", count=0, groups=["bronze"]),
-            _event(2, "task_finished", "asa24", mode="source", status="failed", error="no files"),
+            _event(1, "task_started", "sales", mode="source", count=0, groups=["raw_ingest"]),
+            _event(2, "task_finished", "sales", mode="source", status="failed", error="no files"),
             _event(3, "run_finished", status="failed"),
         ],
     )
-    assert _units(_views(outline)["bronze"]) == [("asa24", "failed")]
-    assert outline.selected() == "asa24"
+    assert _units(_views(outline)["raw_ingest"]) == [("sales", "failed")]
+    assert outline.selected() == "sales"
 
 
 def test_a_finished_run_opens_on_its_first_failure() -> None:
@@ -193,14 +193,14 @@ def test_a_finished_run_opens_on_its_first_failure() -> None:
 
 def test_a_warning_marks_its_task_and_redraws_its_step() -> None:
     outline = RunOutline(ENTRIES)
-    outline.apply(_event(1, "task_started", "dhq3", mode="source", count=1, groups=["bronze"]))
-    outline.apply(_event(2, "task_started", "dhq3[responses]", mode="source_table"))
-    step = outline.apply(_event(3, "warning", "dhq3[responses]", message="No checks"))
-    assert step is not None and step.name == "bronze"
-    bronze = _views(outline)["bronze"]
-    assert bronze["branches"][1]["units"][0]["warned"] and bronze["warned"]
+    outline.apply(_event(1, "task_started", "survey", mode="source", count=1, groups=["raw_ingest"]))
+    outline.apply(_event(2, "task_started", "survey[responses]", mode="source_table"))
+    step = outline.apply(_event(3, "warning", "survey[responses]", message="No checks"))
+    assert step is not None and step.name == "raw_ingest"
+    raw_ingest = _views(outline)["raw_ingest"]
+    assert raw_ingest["branches"][1]["units"][0]["warned"] and raw_ingest["warned"]
     # A second warning changes nothing to redraw.
-    assert outline.apply(_event(4, "warning", "dhq3[responses]", message="again")) is None
+    assert outline.apply(_event(4, "warning", "survey[responses]", message="again")) is None
 
 
 # -- the page and the stream -----------------------------------------------
@@ -220,8 +220,8 @@ def _run(store, root, *, fail: bool = False) -> str:
     record = store.create_run(RunRequest(project_root=root, pipeline="fixture"))
     run_id = record.run_id
     store.append_event(run_id, "run_started")
-    store.append_event(run_id, "task_started", task_name="s", payload={"mode": "source", "count": 1, "groups": ["bronze"]})
-    store.append_event(run_id, "task_started", task_name="s[t]", payload={"mode": "source_table", "groups": ["bronze"]})
+    store.append_event(run_id, "task_started", task_name="s", payload={"mode": "source", "count": 1, "groups": ["raw_ingest"]})
+    store.append_event(run_id, "task_started", task_name="s[t]", payload={"mode": "source_table", "groups": ["raw_ingest"]})
     for name, mode in (("s[t]", "source_table"), ("s", "source")):
         store.append_event(
             run_id,
@@ -254,7 +254,7 @@ def test_the_run_page_has_the_rail_beside_the_log(app, client) -> None:
     assert '<b data-counter="ran">1</b>' in rail
     # The log's section for the table, under its path.
     assert 'data-unit="s[t]"' in html[html.index('id="console"') :]
-    assert '<span class="sec-h__path">bronze / s /</span>' in html
+    assert '<span class="sec-h__path">raw_ingest / s /</span>' in html
 
 
 def test_a_failed_run_opens_on_the_failure(app, client) -> None:

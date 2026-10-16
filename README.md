@@ -247,20 +247,22 @@ A source reads raw files into the pipeline once per version of those files. Decl
 ```python
 import kptn
 
-dhq3 = kptn.source("dhq3", files=lambda config: config["dhq3"]["in"])
+survey = kptn.source("survey", files="data/survey")
 
-asa24 = kptn.source(
-    "asa24",
-    files=lambda config: config["asa24"]["in"],
-    table=lambda f: f.name.rsplit("_", 1)[0],   # foodtotals_2024-01-24.csv feeds foodtotals
+# data/sales holds one export per day: orders_2024-01-24.csv, orders_2024-01-25.csv, ...
+# Each file would be its own table by default; dropping the date puts them all in "orders".
+sales = kptn.source(
+    "sales",
+    files="data/sales",
+    table=lambda f: f.name.rsplit("_", 1)[0],
 )
 
-bronze = kptn.Stage("bronze", dhq3, asa24)
+raw_ingest = kptn.Stage("raw_ingest", survey, sales)
 pipeline = kptn.Pipeline(
     "main",
     kptn.config(duckdb=(get_engine, "engine"), config=get_config)
-    >> kptn.parallel(init_database, bronze)
-    >> kptn.source_views(bronze)
+    >> raw_ingest
+    >> kptn.source_views(raw_ingest)
     >> transform,
 )
 ```
@@ -270,7 +272,7 @@ pipeline = kptn.Pipeline(
 | Reading | By extension: `.csv`, `.tsv`, `.txt`, `.json`, `.jsonl`, `.ndjson`, `.parquet`. Pass `read=` for anything else, such as Excel. |
 | Values | Every column stored as text; column names kept as in the file. Transform downstream. |
 | Tables | One per file stem, unless `table=` says otherwise. Files feeding one table are combined by column name. |
-| Provenance | A `_source_file` column, such as `Module1/foodtotals_2024-01-24.csv`. |
+| Provenance | A `_source_file` column, such as `sales/orders_2024-01-24.csv`. |
 | Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written. A failure stops the run. |
 | Storage | `_bronze/<source>/<table>.parquet`. |
 | Views | `raw.<source>_<table>`, created by `kptn.source_views`. |

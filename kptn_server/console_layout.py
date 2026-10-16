@@ -2,7 +2,7 @@
 
 The run log is one continuous scroll of *sections*, one per unit of work --
 a task, a source's table, a mapped task's item -- each headed with where it
-sits in the pipeline (``bronze / asa24 /``), how it ran, and how it ended.
+sits in the pipeline (``raw_ingest / sales /``), how it ran, and how it ended.
 Between and around them are the run's own lines: its start, its end, and any
 output no task owns. The layout is decided here, once, and both surfaces use
 it: the run page feeds a run's whole history through :class:`ConsoleLayout`
@@ -74,7 +74,7 @@ class Section:
     """One unit of work's part of the log: a heading, then its lines."""
 
     id: str
-    #: The task's name as events carry it: ``report``, ``asa24[foodtotals]``.
+    #: The task's name as events carry it: ``report``, ``sales[orders]``.
     key: str
     #: The stages, pipelines and source around it, outermost first.
     path: tuple[str, ...] = ()

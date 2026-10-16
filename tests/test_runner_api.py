@@ -335,7 +335,7 @@ def test_run_wraps_duckdb_factory_with_bronze_search_path() -> None:
     import duckdb
 
     source = kptn.source("s", files="in")
-    stage = kptn.Stage("bronze", source)
+    stage = kptn.Stage("raw_ingest", source)
     graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> stage >> kptn.source_views(stage)
 
     factory = _run_and_get_factory(graph)
