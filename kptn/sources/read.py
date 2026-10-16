@@ -1,4 +1,4 @@
-"""Reading a table's files by convention: text values, original names, provenance."""
+"""Reading a table's files by convention: text values, lowercase names, provenance."""
 
 from __future__ import annotations
 
@@ -57,6 +57,9 @@ def _read_custom(
 
 
 def _text_select(rel: duckdb.DuckDBPyRelation, file: SourceFile, temp_view: str) -> str:
+    # Names are lowercased so a table's columns do not depend on which file's
+    # spelling sorts first. DuckDB already renames names that differ only by
+    # case (``Foo,foo`` reads as ``Foo, foo_1``), so nothing collides.
     if any(c.lower() == SOURCE_FILE_COLUMN for c in rel.columns):
         raise ValueError(f"{file.path} already has a column named {SOURCE_FILE_COLUMN}.")
     exprs: list[str] = []
@@ -69,7 +72,7 @@ def _text_select(rel: duckdb.DuckDBPyRelation, file: SourceFile, temp_view: str)
             expr = f"CAST(to_json({col}) AS VARCHAR)"
         else:
             expr = f"CAST({col} AS VARCHAR)"
-        exprs.append(f"{expr} AS {col}")
+        exprs.append(f"{expr} AS {_ident(column.lower())}")
     exprs.append(f"{_sql_str(file.rel)} AS {SOURCE_FILE_COLUMN}")
     return f"SELECT {', '.join(exprs)} FROM {temp_view}"
 

@@ -103,7 +103,7 @@ def source(
 
     Only *name* and *files* are required; everything else follows conventions.
     Files are read by extension (CSV, TSV, JSON, Parquet), every value is stored
-    as text, column names are kept as in the file, each row gets a
+    as text, column names are lowercased, each row gets a
     ``_source_file`` column, and each table is validated by
     ``checks/<name>/<table>.yml`` when that file exists.
 

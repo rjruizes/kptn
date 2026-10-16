@@ -8,6 +8,8 @@ import pytest
 
 from kptn.exceptions import TaskError
 from kptn.sources.checks import check_path, run_checks
+from kptn.sources.files import SourceFile
+from kptn.sources.read import create_table_view
 
 
 def _conn_with_view() -> duckdb.DuckDBPyConnection:
@@ -51,6 +53,24 @@ def test_passing_checks_return_true(tmp_path: Path) -> None:
         "      when required column missing: [orderid, amount]\n",
     )
     assert run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path) is True
+
+
+def test_checks_name_columns_in_lowercase_whatever_the_header(tmp_path: Path) -> None:
+    pytest.importorskip("soda.scan")
+    data = tmp_path / "data" / "orders.csv"
+    data.parent.mkdir()
+    data.write_text("OrderID,AMOUNT\n1,200\n")
+    conn = duckdb.connect()
+    create_table_view(conn, "sales", "orders", [SourceFile(data, data.parent)])
+    _write_check(
+        tmp_path,
+        "checks for sales_orders:\n"
+        "- schema:\n"
+        "    fail:\n"
+        "      when required column missing: [orderid, amount]\n"
+        "- missing_count(orderid) = 0\n",
+    )
+    assert run_checks(conn, source="sales", table="orders", root=tmp_path) is True
 
 
 def test_failing_checks_raise(tmp_path: Path) -> None:

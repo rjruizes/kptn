@@ -28,19 +28,38 @@ def test_csv_values_are_text_with_source_file(tmp_path: Path) -> None:
     view = create_table_view(conn, "sales", "orders", [f])
     assert view == 'raw."sales_orders"'
     rel = conn.sql(f"SELECT * FROM {view}")
-    assert rel.columns == ["OrderID", "Amount", "_source_file"]
+    assert rel.columns == ["orderid", "amount", "_source_file"]
     assert {str(t) for t in rel.types} == {"VARCHAR"}
     assert rel.fetchall() == [("1", "200", "Batch1/orders_2024-01-24.csv")]
 
 
-def test_union_by_name_is_case_insensitive_and_fills_missing(tmp_path: Path) -> None:
+def test_union_by_name_lowercases_and_fills_missing(tmp_path: Path) -> None:
     a = _file(tmp_path, "m1/t.csv", "OrderID,Amount\n1,200\n")
     b = _file(tmp_path, "m2/t.csv", "orderid,amount,Tax\n2,300,10\n")
     conn = duckdb.connect()
     view = create_table_view(conn, "s", "t", [b, a])  # order given does not matter
     rel = conn.sql(f"SELECT * FROM {view} ORDER BY _source_file")
-    assert rel.columns == ["OrderID", "Amount", "_source_file", "Tax"]
+    assert rel.columns == ["orderid", "amount", "_source_file", "tax"]
     assert rel.fetchall() == [("1", "200", "m1/t.csv", None), ("2", "300", "m2/t.csv", "10")]
+
+
+@pytest.mark.parametrize("first", ["m1", "m2"])
+def test_spellings_of_a_column_feed_one_lowercase_column(tmp_path: Path, first: str) -> None:
+    second = "m2" if first == "m1" else "m1"
+    a = _file(tmp_path, f"{first}/t.csv", "id,mealTime\n1,08:00\n")
+    b = _file(tmp_path, f"{second}/t.csv", "id,MEALTIME\n2,12:30\n")
+    conn = duckdb.connect()
+    rel = conn.sql(f"SELECT * FROM {create_table_view(conn, 's', 't', [a, b])} ORDER BY id")
+    assert rel.columns == ["id", "mealtime", "_source_file"]
+    assert rel.fetchall() == [("1", "08:00", f"{first}/t.csv"), ("2", "12:30", f"{second}/t.csv")]
+
+
+def test_names_differing_only_by_case_in_one_file_stay_apart(tmp_path: Path) -> None:
+    f = _file(tmp_path, "d/x.csv", "Foo,foo\n1,2\n")
+    conn = duckdb.connect()
+    rel = conn.sql(f"SELECT * FROM {create_table_view(conn, 's', 'x', [f])}")
+    assert rel.columns == ["foo", "foo_1", "_source_file"]
+    assert rel.fetchall() == [("1", "2", "d/x.csv")]
 
 
 def test_tsv(tmp_path: Path) -> None:

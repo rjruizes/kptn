@@ -22,7 +22,7 @@ from kptn.sources.spec import SourceSpec
 
 #: Bumped whenever a reading convention changes what a source writes, so every
 #: table rebuilds. The pipeline's code hash cannot see kptn's own conventions.
-SOURCE_FORMAT_VERSION = "1"
+SOURCE_FORMAT_VERSION = "2"
 
 #: Where built tables live, relative to the working directory.
 BRONZE_DIR = Path("_bronze")

@@ -270,10 +270,10 @@ pipeline = kptn.Pipeline(
 | Convention | |
 |---|---|
 | Reading | By extension: `.csv`, `.tsv`, `.txt`, `.json`, `.jsonl`, `.ndjson`, `.parquet`. Pass `read=` for anything else, such as Excel. |
-| Values | Every column stored as text; column names kept as in the file. Transform downstream. |
+| Values | Every column stored as text, under its name in lowercase, so files that spell a column differently (`mealTime`, `MEALTIME`) feed one `mealtime` column. Transform downstream. |
 | Tables | One per file stem, unless `table=` says otherwise. Files feeding one table are combined by column name. |
 | Provenance | A `_source_file` column, such as `sales/orders_2024-01-24.csv`. |
-| Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written. A failure stops the run. |
+| Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written, naming the table as its view does without the schema (`checks for sales_orders:`) and its columns in lowercase. A failure stops the run. |
 | Storage | `_bronze/<source>/<table>.parquet`. |
 | Views | `raw.<source>_<table>`, created by `kptn.source_views`. |
 
