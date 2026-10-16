@@ -388,7 +388,7 @@ def console_event(
         "lines": len(shown),
         # How long a finished task took, for its section's heading.
         "duration": _duration(event),
-        # What the shared cache did for a source table, for its heading.
+        # What the shared bronze did for a source table, for its heading.
         "shared": str(event.payload.get("shared") or "")
         if event.kind == EventKind.TASK_FINISHED.value
         else "",

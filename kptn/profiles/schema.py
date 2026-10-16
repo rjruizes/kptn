@@ -15,10 +15,12 @@ class KptnSettings(BaseModel):
     db_path: str | None = None
     cache_namespace: str | None = None
     #: Where built source tables are shared between working directories,
-    #: relative to the project root. Unset: no sharing.
-    shared_cache: str | None = None
+    #: relative to the project root. Unset, or not an existing directory:
+    #: no sharing.
+    shared_bronze: str | None = None
     #: Where recorded runs keep their logs, one subdirectory per working
-    #: directory, relative to the project root. Unset: ``.kptn/runs``.
+    #: directory, relative to the project root. Unset, or not an existing
+    #: directory: ``.kptn/runs``.
     shared_logs: str | None = None
 
 

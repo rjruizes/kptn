@@ -46,7 +46,7 @@ from kptn.sources.build import (
     remove_stale_tables,
     state_value,
 )
-from kptn.sources.shared import SharedCache, link
+from kptn.sources.shared import SharedBronze, link
 from kptn.sources.views import apply_search_path, register_views
 from kptn.state_store.protocol import StateStoreBackend
 
@@ -368,7 +368,7 @@ def _execute_source(
     force: bool,
     no_cache: bool,
     groups: list[str] | None,
-    shared: SharedCache | None = None,
+    shared: SharedBronze | None = None,
 ) -> bool:
     """Bring every table of *node* up to date. True if any table changed.
 
@@ -377,8 +377,7 @@ def _execute_source(
     re-read of unchanged files.
 
     With *shared*, a table that is not current is linked from the shared
-    cache when its key is there, and otherwise built into the cache and
-    linked. ``force`` and ``no_cache`` build a local file and never publish.
+    bronze when its key is there, and otherwise built into it and linked. ``force`` and ``no_cache`` build a local file and never publish.
     """
     try:
         plans = plan_tables(node.name, node.spec, config_kwargs, root=root)
@@ -454,7 +453,7 @@ def execute(
     force: bool = False,
     extra_kwargs: "dict[str, Any] | None" = None,
     emitter: EventEmitter | None = None,
-    shared: SharedCache | None = None,
+    shared: SharedBronze | None = None,
 ) -> "Any | None":
     """Execute the resolved pipeline graph.
 
@@ -485,7 +484,7 @@ def execute(
             Optional structured event emitter. When omitted, execution emits the
             existing console output through the default console sink.
         shared:
-            The shared cache source tables are restored from and published
+            The shared bronze source tables are restored from and published
             to; ``None`` builds every table in the working directory. Ignored
             when *force* or *no_cache* is set.
 

@@ -23,6 +23,8 @@ def _project(tmp_path: Path, name: str = "alice_main", yaml: str | None = SHARED
     project.mkdir(parents=True)
     if yaml is not None:
         (project / "kptn.yaml").write_text(yaml)
+    if yaml == SHARED_LOGS_YAML:
+        (tmp_path / "r7" / "_kptn_logs").mkdir(exist_ok=True)  # set up, as on the server
     return project
 
 
@@ -83,6 +85,7 @@ def test_the_index_follows_the_newest_run_after_the_setting_changes(tmp_path: Pa
     store = _store(project)
     before = _finished_run(store, project)
     (project / "kptn.yaml").write_text(SHARED_LOGS_YAML)
+    (tmp_path / "r7" / "_kptn_logs").mkdir()
     after = _finished_run(store, project)
 
     assert before.log_path.parent == project.resolve() / ".kptn" / "runs"
@@ -103,7 +106,7 @@ def test_ensure_index_writes_beside_the_newest_run(tmp_path: Path) -> None:
 def test_ensure_index_with_no_runs_writes_nothing(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _store(project).ensure_index(project.resolve())
-    assert not (tmp_path / "r7" / "_kptn_logs").exists()
+    assert list((tmp_path / "r7" / "_kptn_logs").iterdir()) == []
 
 
 # -- one history across a directory's lifetimes --------------------------------

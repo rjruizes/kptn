@@ -70,7 +70,7 @@ from kptn.inspection import InspectionItem, PipelineInspection, inspect_pipeline
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.runner.checkpoint import TaskStateReader
 from kptn.runner.plan import PlanAction, PlanEntry, build_plan, config_values_for_plan
-from kptn.sources.shared import resolve_shared_cache
+from kptn.sources.shared import resolve_shared_bronze
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
 from kptn_server.context import ui
@@ -269,12 +269,12 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
             # than shown as "files depend on config". Read in the project's
             # directory (the slot's), where a config reading a relative path
             # finds it; ``duckdb`` is left out, so no database is opened.
-            # A table the shared cache has is shown as a restore, as
+            # A table the shared bronze has is shown as a restore, as
             # ``kptn plan`` shows it.
             planning = {
                 "config_values": config_values_for_plan(project.pipeline),
                 "root": project.root,
-                "shared": resolve_shared_cache(project.config.settings.shared_cache, project.root),
+                "shared": resolve_shared_bronze(project.config.settings.shared_bronze, project.root),
             }
             if uses_duckdb(project):
                 entries, note = _plan_from_database(project, current.store, resolved, selected, planning)

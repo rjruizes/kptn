@@ -107,7 +107,7 @@ def test_console_prints_restore_and_share_lines() -> None:
     emitter.emit(EventKind.TASK_FINISHED, task_name="s[c]", mode="source_table", status="succeeded", shared="linked")
     lines = out.getvalue().splitlines()
     assert len(lines) == 4
-    assert lines[0].startswith("[RESTORE] ") and lines[0].endswith("s[a] — from shared cache")
+    assert lines[0].startswith("[RESTORE] ") and lines[0].endswith("s[a] — from shared bronze")
     assert lines[1].startswith("[RUN] ") and lines[1].endswith("s[b]")
     assert lines[2].startswith("[SHARE] ") and lines[2].endswith("s[b] — published")
     assert lines[3].startswith("[SHARE] ") and lines[3].endswith("s[c] — linked to an identical build")

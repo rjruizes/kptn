@@ -16,7 +16,7 @@ from kptn.runner.events import EventEmitter, EventKind, EventSink
 from kptn.runner.plan import config_values_for_plan
 from kptn.runner.plan import plan as _plan
 from kptn.sources.build import BRONZE_DIR
-from kptn.sources.shared import resolve_shared_cache, shared_cache_for
+from kptn.sources.shared import missing_shared_bronze, resolve_shared_bronze, shared_bronze_for
 from kptn.sources.views import with_search_path
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
@@ -150,8 +150,10 @@ def run(
         config = KptnConfig()  # sensible defaults; state store won't be used
 
     # Built source tables are shared between working directories when
-    # kptn.yaml names a cache and KPTN_SHARED_CACHE is not "off".
-    shared = resolve_shared_cache(config.settings.shared_cache, cwd)
+    # kptn.yaml names a shared bronze that exists and KPTN_SHARED_BRONZE is
+    # not "off".
+    shared = resolve_shared_bronze(config.settings.shared_bronze, cwd)
+    shared_notice = missing_shared_bronze(config.settings.shared_bronze, cwd)
 
     if profile is not None:
         resolved = ProfileResolver(config).compile(pipeline, profile)
@@ -191,6 +193,10 @@ def run(
         sink,
     )
     emitter.emit(EventKind.RUN_STARTED)
+    if shared_notice is not None:
+        # Printed, not emitted: a run started from the UI captures it into
+        # the run's log, and it is the normal state of a laptop, not a warning.
+        print(shared_notice, flush=True)
 
     try:
         result = execute(
@@ -233,5 +239,5 @@ def plan(
         resolved,
         state_store,
         config_values=config_values_for_plan(pipeline),
-        shared=shared_cache_for(Path.cwd()),
+        shared=shared_bronze_for(Path.cwd()),
     )

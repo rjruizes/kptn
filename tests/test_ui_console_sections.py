@@ -319,9 +319,9 @@ def test_a_shared_table_says_so_in_its_heading(app, store, client) -> None:
     log = log[log.index('id="console"') :]
     a = log[log.index('data-unit="s[a]"') : log.index('data-unit="s[b]"')]
     b = log[log.index('data-unit="s[b]"') :]
-    assert "ingest · from shared cache · 1.0s · " in a
+    assert "ingest · from shared bronze · 1.0s · " in a
     assert "ingest · published · 1.0s · " in b
 
     frames = _payloads(client.get(f"/runs/{run_id}/events").text)
     finished = next(f for f in frames if f["task"] == "s[a]" and f["kind"] == "task_finished")
-    assert "from shared cache" in finished["outcome"]["html"]
+    assert "from shared bronze" in finished["outcome"]["html"]

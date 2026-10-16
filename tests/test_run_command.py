@@ -136,21 +136,21 @@ def test_run_command_translates_project_config_errors(
     assert expected_message in result.stderr
 
 
-@pytest.mark.parametrize(("args", "expected"), [([], "on"), (["--no-shared-cache"], "off")])
-def test_run_command_no_shared_cache_turns_sharing_off(
+@pytest.mark.parametrize(("args", "expected"), [([], "on"), (["--no-shared-bronze"], "off")])
+def test_run_command_no_shared_bronze_turns_sharing_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], expected: str
 ) -> None:
-    """--no-shared-cache works through KPTN_SHARED_CACHE, which every run path reads."""
-    from kptn.sources.shared import SHARED_CACHE_ENV
+    """--no-shared-bronze works through KPTN_SHARED_BRONZE, which every run path reads."""
+    from kptn.sources.shared import SHARED_BRONZE_ENV
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv(SHARED_CACHE_ENV, "on")  # restored after the test
+    monkeypatch.setenv(SHARED_BRONZE_ENV, "on")  # restored after the test
     seen: list[str | None] = []
 
     def fake_run(*_args, **_kwargs) -> None:
         import os
 
-        seen.append(os.environ.get(SHARED_CACHE_ENV))
+        seen.append(os.environ.get(SHARED_BRONZE_ENV))
 
     with patch("kptn.cli.commands.load_pipeline", return_value=_make_pipeline()), \
          patch("kptn.cli.commands._run_pipeline", side_effect=fake_run):

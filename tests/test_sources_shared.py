@@ -18,64 +18,93 @@ from kptn.sources.shared import (
     DIR_MODE,
     ENTRY_LABEL,
     FILE_MODE,
-    SHARED_CACHE_ENV,
-    SharedCache,
+    SHARED_BRONZE_ENV,
+    SharedBronze,
     link,
-    resolve_shared_cache,
-    shared_cache_for,
+    missing_shared_bronze,
+    resolve_shared_bronze,
+    shared_bronze_for,
 )
 
 
 @pytest.fixture(autouse=True)
 def _no_ambient_setting(monkeypatch) -> None:
-    monkeypatch.delenv(SHARED_CACHE_ENV, raising=False)
+    monkeypatch.delenv(SHARED_BRONZE_ENV, raising=False)
 
 
 def test_no_setting_means_no_sharing(tmp_path: Path) -> None:
-    assert resolve_shared_cache(None, tmp_path) is None
+    assert resolve_shared_bronze(None, tmp_path) is None
 
 
 def test_relative_setting_resolves_against_project_root(tmp_path: Path) -> None:
     project = tmp_path / "r6" / "alice_main"
     project.mkdir(parents=True)
-    cache = resolve_shared_cache("../_kptn_cache", project)
-    assert cache == SharedCache((tmp_path / "r6" / "_kptn_cache").resolve())
+    (tmp_path / "r6" / "_kptn_bronze").mkdir()
+    cache = resolve_shared_bronze("../_kptn_bronze", project)
+    assert cache == SharedBronze((tmp_path / "r6" / "_kptn_bronze").resolve())
 
 
 def test_absolute_setting_is_kept(tmp_path: Path) -> None:
-    assert resolve_shared_cache(str(tmp_path / "c"), Path("/elsewhere")) == SharedCache(
+    (tmp_path / "c").mkdir()
+    assert resolve_shared_bronze(str(tmp_path / "c"), Path("/elsewhere")) == SharedBronze(
         (tmp_path / "c").resolve()
     )
 
 
+def test_missing_directory_means_no_sharing(tmp_path: Path) -> None:
+    assert resolve_shared_bronze("../_kptn_bronze", tmp_path) is None
+    assert not (tmp_path.parent / "_kptn_bronze").exists()
+
+
+def test_missing_directory_is_reported(tmp_path: Path) -> None:
+    assert missing_shared_bronze("../_kptn_bronze", tmp_path) == (
+        "[SHARE] off — ../_kptn_bronze does not exist, so tables are built here"
+    )
+
+
+@pytest.mark.parametrize(
+    ("setting", "environ"),
+    [(None, {}), ("c", {}), ("missing", {SHARED_BRONZE_ENV: "off"})],
+    ids=["no setting", "directory exists", "turned off"],
+)
+def test_nothing_is_reported_otherwise(
+    tmp_path: Path, setting: str | None, environ: dict[str, str]
+) -> None:
+    (tmp_path / "c").mkdir()
+    assert missing_shared_bronze(setting, tmp_path, environ=environ) is None
+
+
 @pytest.mark.parametrize("value", ["off", "OFF", " off "])
 def test_env_off_turns_sharing_off(tmp_path: Path, value: str) -> None:
-    assert resolve_shared_cache("c", tmp_path, environ={SHARED_CACHE_ENV: value}) is None
+    (tmp_path / "c").mkdir()
+    assert resolve_shared_bronze("c", tmp_path, environ={SHARED_BRONZE_ENV: value}) is None
 
 
 @pytest.mark.parametrize("value", ["", "on"])
 def test_env_on_or_empty_defers_to_setting(tmp_path: Path, value: str) -> None:
-    assert resolve_shared_cache("c", tmp_path, environ={SHARED_CACHE_ENV: value}) is not None
+    (tmp_path / "c").mkdir()
+    assert resolve_shared_bronze("c", tmp_path, environ={SHARED_BRONZE_ENV: value}) is not None
 
 
 def test_env_typo_is_an_error(tmp_path: Path) -> None:
-    with pytest.raises(ProfileError, match="KPTN_SHARED_CACHE"):
-        resolve_shared_cache("c", tmp_path, environ={SHARED_CACHE_ENV: "of"})
+    with pytest.raises(ProfileError, match="KPTN_SHARED_BRONZE"):
+        resolve_shared_bronze("c", tmp_path, environ={SHARED_BRONZE_ENV: "of"})
 
 
 def test_env_is_read_from_the_process(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv(SHARED_CACHE_ENV, "off")
-    assert resolve_shared_cache("c", tmp_path) is None
+    monkeypatch.setenv(SHARED_BRONZE_ENV, "off")
+    assert resolve_shared_bronze("c", tmp_path) is None
 
 
 def test_setting_loads_from_kptn_yaml(tmp_path: Path) -> None:
-    (tmp_path / "kptn.yaml").write_text("settings:\n  shared_cache: ../_kptn_cache\n")
-    assert ProfileLoader.load(tmp_path / "kptn.yaml").settings.shared_cache == "../_kptn_cache"
-    assert shared_cache_for(tmp_path) == SharedCache((tmp_path.parent / "_kptn_cache").resolve())
+    (tmp_path / "kptn.yaml").write_text("settings:\n  shared_bronze: ../_kptn_bronze\n")
+    (tmp_path.parent / "_kptn_bronze").mkdir()
+    assert ProfileLoader.load(tmp_path / "kptn.yaml").settings.shared_bronze == "../_kptn_bronze"
+    assert shared_bronze_for(tmp_path) == SharedBronze((tmp_path.parent / "_kptn_bronze").resolve())
 
 
-def test_shared_cache_for_without_kptn_yaml(tmp_path: Path) -> None:
-    assert shared_cache_for(tmp_path) is None
+def test_shared_bronze_for_without_kptn_yaml(tmp_path: Path) -> None:
+    assert shared_bronze_for(tmp_path) is None
 
 
 # -- lookup, publish and link ------------------------------------------------
@@ -110,18 +139,24 @@ def _mode(p: Path) -> int:
     return stat.S_IMODE(p.stat().st_mode)
 
 
-def _tmp_entries(cache: SharedCache) -> list[Path]:
+def _shared(root: Path) -> SharedBronze:
+    """A shared bronze whose directory was set up, as kptn requires."""
+    root.mkdir()
+    return SharedBronze(root)
+
+
+def _tmp_entries(cache: SharedBronze) -> list[Path]:
     return list((cache.root / ".tmp").iterdir())
 
 
 def test_lookup_misses_an_empty_cache(tmp_path: Path) -> None:
     root = _project(tmp_path / "w")
-    assert SharedCache(tmp_path / "cache").lookup(_plan(root)) is None
+    assert SharedBronze(tmp_path / "cache").lookup(_plan(root)) is None
 
 
 def test_publish_creates_entry_and_label(tmp_path: Path) -> None:
     root = _project(tmp_path / "w")
-    cache = SharedCache(tmp_path / "cache")
+    cache = _shared(tmp_path / "cache")
     plan = _plan(root)
     with pytest.warns(UserWarning):  # no check file
         target, outcome = cache.publish(plan, _spec(root), root=root)
@@ -148,7 +183,7 @@ def test_label_names_the_check_file(tmp_path: Path) -> None:
     check = root / "checks" / "s" / "a.yml"
     check.parent.mkdir(parents=True)
     check.write_text("checks for s_a:\n  - row_count > 0\n")
-    cache = SharedCache(tmp_path / "cache")
+    cache = _shared(tmp_path / "cache")
     plan = _plan(root)
     with patch("kptn.sources.build.run_checks", return_value=True):
         cache.publish(plan, _spec(root), root=root)
@@ -158,12 +193,12 @@ def test_label_names_the_check_file(tmp_path: Path) -> None:
 
 def test_publish_sets_group_modes_whatever_the_umask(tmp_path: Path, strict_umask) -> None:
     root = _project(tmp_path / "w")
-    cache = SharedCache(tmp_path / "cache")
+    cache = _shared(tmp_path / "cache")
     plan = _plan(root)
     with pytest.warns(UserWarning):
         cache.publish(plan, _spec(root), root=root)
     entry = cache.entry(plan)
-    for d in (cache.root, cache.root / ".tmp", entry.parent.parent, entry.parent, entry):
+    for d in (cache.root / ".tmp", entry.parent.parent, entry.parent, entry):
         # Some systems drop the setgid bit when the owner is not in the
         # directory's group; the rest of the mode must hold everywhere.
         assert _mode(d) & 0o775 == 0o775, d
@@ -175,7 +210,7 @@ def test_publish_sets_group_modes_whatever_the_umask(tmp_path: Path, strict_umas
 
 def test_existing_root_keeps_its_mode(tmp_path: Path) -> None:
     root = _project(tmp_path / "w")
-    cache = SharedCache(tmp_path / "cache")
+    cache = SharedBronze(tmp_path / "cache")
     cache.root.mkdir(mode=0o755)
     os.chmod(cache.root, 0o755)
     with pytest.warns(UserWarning):
@@ -183,17 +218,17 @@ def test_existing_root_keeps_its_mode(tmp_path: Path) -> None:
     assert _mode(cache.root) == 0o755
 
 
-def test_missing_parent_of_root_is_an_error(tmp_path: Path) -> None:
+def test_root_removed_after_the_run_started_is_an_error(tmp_path: Path) -> None:
     root = _project(tmp_path / "w")
-    cache = SharedCache(tmp_path / "no" / "such" / "cache")
-    with pytest.raises(TaskError, match="shared cache"):
+    cache = SharedBronze(tmp_path / "cache")
+    with pytest.raises(TaskError, match="no longer exists"):
         cache.publish(_plan(root), _spec(root), root=root)
-    assert not (tmp_path / "no").exists()
+    assert not cache.root.exists()
 
 
 def test_failing_build_publishes_nothing(tmp_path: Path) -> None:
     root = _project(tmp_path / "w")
-    cache = SharedCache(tmp_path / "cache")
+    cache = _shared(tmp_path / "cache")
     plan = _plan(root)
     with patch("kptn.sources.shared.build_table", side_effect=RuntimeError("check failed")):
         with pytest.raises(RuntimeError):
@@ -207,7 +242,7 @@ def test_second_publish_of_a_key_links_to_the_first(tmp_path: Path) -> None:
     b = tmp_path / "bob" / "feature"
     shutil.copytree(a, b)  # same sizes and modification times, so the same key
     assert _plan(a).key == _plan(b).key
-    cache = SharedCache(tmp_path / "cache")
+    cache = _shared(tmp_path / "cache")
     with pytest.warns(UserWarning):
         first, o1 = cache.publish(_plan(a), _spec(a), root=a)
         second, o2 = cache.publish(_plan(b), _spec(b), root=b)
@@ -220,7 +255,7 @@ def test_second_publish_of_a_key_links_to_the_first(tmp_path: Path) -> None:
 def test_rename_error_after_success_still_links(tmp_path: Path) -> None:
     """An NFS client may retry a rename whose reply was lost, then report an error."""
     root = _project(tmp_path / "w")
-    cache = SharedCache(tmp_path / "cache")
+    cache = _shared(tmp_path / "cache")
     real = os.rename
 
     def lost_reply(src, dst):
@@ -234,7 +269,7 @@ def test_rename_error_after_success_still_links(tmp_path: Path) -> None:
 
 def test_rename_error_without_entry_is_raised(tmp_path: Path) -> None:
     root = _project(tmp_path / "w")
-    cache = SharedCache(tmp_path / "cache")
+    cache = _shared(tmp_path / "cache")
     with patch("kptn.sources.shared.os.rename", side_effect=PermissionError("denied")):
         with pytest.raises(PermissionError), pytest.warns(UserWarning):
             cache.publish(_plan(root), _spec(root), root=root)

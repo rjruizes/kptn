@@ -312,7 +312,7 @@ def test_plan_uses_shared_resolution() -> None:
 
     with patch("kptn.runner.api.resolve_pipeline", return_value=(resolved, state_store)) as mock_resolve, \
          patch("kptn.runner.api._plan") as mock_plan, \
-         patch("kptn.runner.api.shared_cache_for", return_value=None) as mock_shared:
+         patch("kptn.runner.api.shared_bronze_for", return_value=None) as mock_shared:
         plan(pipeline, profile="dev")
 
     mock_resolve.assert_called_once_with(pipeline, Path.cwd(), "dev")

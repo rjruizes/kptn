@@ -23,7 +23,7 @@ from kptn.graph.nodes import (
 from kptn.graph.topo import topo_sort
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.sources.build import is_current, plan_tables
-from kptn.sources.shared import SharedCache
+from kptn.sources.shared import SharedBronze
 from kptn.state_store.protocol import StateStoreBackend
 
 _PLAN_NON_EXEC = (ParallelNode, StageNode, NoopNode, PipelineNode, ConfigNode)
@@ -161,7 +161,7 @@ class _PrefetchedHashes:
 
 
 #: Why a table that is not current will be restored rather than built.
-SHARED_REASON = "in shared cache"
+SHARED_REASON = "in shared bronze"
 
 
 def config_values_for_plan(graph: Any) -> dict[str, Any] | None:
@@ -188,12 +188,12 @@ def _plan_source(
     resolved: ResolvedGraph,
     config_values: Mapping[str, Any] | None,
     root: Path,
-    shared: SharedCache | None = None,
+    shared: SharedBronze | None = None,
 ) -> list[PlanEntry]:
     """One entry per table of *node*, or one entry for the source when its
     tables cannot be known without running anything.
 
-    A table the shared cache already has still runs -- restoring it changes
+    A table the shared bronze already has still runs -- restoring it changes
     the local file and reruns what reads it -- but says it will not be built.
     """
     if config_values is None and callable(node.spec.files):
@@ -226,7 +226,7 @@ def build_plan(
     *,
     config_values: Mapping[str, Any] | None = None,
     root: Path | None = None,
-    shared: SharedCache | None = None,
+    shared: SharedBronze | None = None,
 ) -> list[PlanEntry]:
     reader: StateStoreBackend | HashReader | _PrefetchedHashes = state_store
     if callable(getattr(state_store, "read_hashes", None)):
@@ -340,6 +340,6 @@ def plan(
     state_store: StateStoreBackend,
     *,
     config_values: Mapping[str, Any] | None = None,
-    shared: SharedCache | None = None,
+    shared: SharedBronze | None = None,
 ) -> None:
     render_plan(build_plan(resolved, state_store, config_values=config_values, shared=shared))

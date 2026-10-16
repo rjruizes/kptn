@@ -256,18 +256,30 @@ def test_default_user_falls_back_to_user(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_run_log_dir_follows_shared_logs(tmp_path: Path) -> None:
     workdir = make_workdir(tmp_path, "r7", f"{USER}_main")
     (workdir / "kptn.yaml").write_text("settings:\n  shared_logs: ../_kptn_logs\n")
+    (tmp_path / "r7" / "_kptn_logs").mkdir()
 
     (entry,) = ProjectRegistry(tmp_path, USER).scan()
 
     assert entry.run_log_dir == (tmp_path / "r7" / "_kptn_logs" / f"{USER}_main").resolve()
     assert entry.run_log_error is None
-    assert not (tmp_path / "r7" / "_kptn_logs").exists()  # the registry creates nothing
+    assert not entry.run_log_dir.exists()  # the registry creates nothing
+
+
+def test_missing_shared_logs_leave_runs_in_dot_kptn(tmp_path: Path) -> None:
+    workdir = make_workdir(tmp_path, "r7", f"{USER}_main")
+    (workdir / "kptn.yaml").write_text("settings:\n  shared_logs: ../_kptn_logs\n")
+
+    (entry,) = ProjectRegistry(tmp_path, USER).scan()
+
+    assert entry.run_log_dir == workdir.resolve() / ".kptn" / "runs"
+    assert entry.run_log_error is None
 
 
 def test_shared_logs_outside_the_projects_root_are_not_read(tmp_path: Path) -> None:
     root = tmp_path / "projects"
     workdir = make_workdir(root, "r7", f"{USER}_main")
     (workdir / "kptn.yaml").write_text(f"settings:\n  shared_logs: {tmp_path / 'elsewhere'}\n")
+    (tmp_path / "elsewhere").mkdir()
 
     (entry,) = ProjectRegistry(root, USER).scan()
 

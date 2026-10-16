@@ -15,7 +15,7 @@ from kptn.profiles.resolved import ResolvedGraph
 from kptn.runner.events import EventEmitter, EventKind
 from kptn.runner.executor import execute
 from kptn.sources.build import plan_tables
-from kptn.sources.shared import SharedCache
+from kptn.sources.shared import SharedBronze
 from tests.fakes import FakeStateStore
 
 
@@ -172,7 +172,7 @@ def test_files_from_config(project: Path) -> None:
     assert (project / "_bronze/s/a.parquet").exists()
 
 
-# -- the shared cache --------------------------------------------------------
+# -- the shared bronze --------------------------------------------------------
 
 
 def _finished(sink: RecordingSink, name: str):
@@ -185,7 +185,8 @@ def _graph(node: SourceNode) -> Graph:
 
 
 def test_miss_publishes_and_links(project: Path) -> None:
-    cache = SharedCache(project / "cache")
+    (project / "cache").mkdir()
+    cache = SharedBronze(project / "cache")
     sink = _run(_graph(_source_node(project)), FakeStateStore(), project, shared=cache)
     for table in ("a", "b"):
         parquet = project / "_bronze" / "s" / f"{table}.parquet"
@@ -194,7 +195,8 @@ def test_miss_publishes_and_links(project: Path) -> None:
 
 
 def test_hit_restores_without_building(project: Path) -> None:
-    cache = SharedCache(project / "cache")
+    (project / "cache").mkdir()
+    cache = SharedBronze(project / "cache")
     node = _source_node(project)
     _run(_graph(node), FakeStateStore(), project, shared=cache)
     shutil.rmtree(project / "_bronze")  # another working directory, in effect
@@ -213,7 +215,8 @@ def test_hit_restores_without_building(project: Path) -> None:
 
 
 def test_restored_table_is_current_next_run(project: Path) -> None:
-    cache = SharedCache(project / "cache")
+    (project / "cache").mkdir()
+    cache = SharedBronze(project / "cache")
     node = _source_node(project)
     _run(_graph(node), FakeStateStore(), project, shared=cache)
     shutil.rmtree(project / "_bronze")
@@ -225,7 +228,8 @@ def test_restored_table_is_current_next_run(project: Path) -> None:
 
 @pytest.mark.parametrize("flag", ["force", "no_cache"])
 def test_force_and_no_cache_build_locally(project: Path, flag: str) -> None:
-    cache = SharedCache(project / "cache")
+    (project / "cache").mkdir()
+    cache = SharedBronze(project / "cache")
     node = _source_node(project)
     _run(_graph(node), FakeStateStore(), project, shared=cache)
     [plan_a, _] = plan_tables("s", node.spec, {}, root=project)
@@ -240,7 +244,8 @@ def test_force_and_no_cache_build_locally(project: Path, flag: str) -> None:
 
 
 def test_dangling_link_rebuilds_and_republishes(project: Path) -> None:
-    cache = SharedCache(project / "cache")
+    (project / "cache").mkdir()
+    cache = SharedBronze(project / "cache")
     node = _source_node(project)
     store = FakeStateStore()
     _run(_graph(node), store, project, shared=cache)
@@ -252,7 +257,8 @@ def test_dangling_link_rebuilds_and_republishes(project: Path) -> None:
 
 
 def test_failed_publish_raises_and_records_nothing(project: Path) -> None:
-    cache = SharedCache(project / "cache")
+    (project / "cache").mkdir()
+    cache = SharedBronze(project / "cache")
     store = FakeStateStore()
     with patch("kptn.sources.shared.build_table", side_effect=RuntimeError("check failed")):
         with pytest.raises(TaskError, match="check failed"):
@@ -261,7 +267,7 @@ def test_failed_publish_raises_and_records_nothing(project: Path) -> None:
     assert not (project / "_bronze" / "s" / "a.parquet").exists()
 
 
-def test_without_a_shared_cache_tables_are_local_files(project: Path) -> None:
+def test_without_a_shared_bronze_tables_are_local_files(project: Path) -> None:
     sink = _run(_graph(_source_node(project)), FakeStateStore(), project)
     assert not (project / "_bronze" / "s" / "a.parquet").is_symlink()
     assert "shared" not in _finished(sink, "s[a]").payload

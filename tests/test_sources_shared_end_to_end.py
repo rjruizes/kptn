@@ -10,7 +10,7 @@ import pytest
 
 import kptn
 from kptn.runner.events import EventKind
-from kptn.sources.shared import SHARED_CACHE_ENV
+from kptn.sources.shared import SHARED_BRONZE_ENV
 
 
 class Recorder:
@@ -27,7 +27,7 @@ class Recorder:
 
 def _make_project(root: Path) -> None:
     (root / "in" / "a").mkdir(parents=True)
-    (root / "kptn.yaml").write_text("settings:\n  db: duckdb\n  shared_cache: ../_kptn_cache\n")
+    (root / "kptn.yaml").write_text("settings:\n  db: duckdb\n  shared_bronze: ../_kptn_bronze\n")
     (root / "in" / "a" / "t.csv").write_text("x\n1\n")
 
 
@@ -57,12 +57,14 @@ def _run(pipeline: kptn.Pipeline, **kwargs) -> Recorder:
 
 @pytest.fixture
 def release(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
-    monkeypatch.delenv(SHARED_CACHE_ENV, raising=False)
+    monkeypatch.delenv(SHARED_BRONZE_ENV, raising=False)
     alice = tmp_path / "r6" / "alice_main"
     _make_project(alice)
     bob = tmp_path / "r6" / "bob_feature"
     shutil.copytree(alice, bob)  # copy2 keeps sizes and modification times
-    return tmp_path / "r6" / "_kptn_cache", alice, bob
+    cache = tmp_path / "r6" / "_kptn_bronze"
+    cache.mkdir()  # set up once, as on the server
+    return cache, alice, bob
 
 
 def test_second_working_directory_restores_the_first_ones_build(release, monkeypatch) -> None:
@@ -84,13 +86,26 @@ def test_second_working_directory_restores_the_first_ones_build(release, monkeyp
 def test_env_off_builds_locally(release, monkeypatch) -> None:
     cache, alice, _ = release
     monkeypatch.chdir(alice)
-    monkeypatch.setenv(SHARED_CACHE_ENV, "off")
+    monkeypatch.setenv(SHARED_BRONZE_ENV, "off")
+    pipeline, seen = _pipeline(alice)
+    with pytest.warns(UserWarning):
+        rec = _run(pipeline)
+    assert rec.shared("a[t]") is None and seen == [1]
+    assert not (alice / "_bronze/a/t.parquet").is_symlink()
+    assert list(cache.iterdir()) == []
+
+
+def test_missing_shared_bronze_builds_locally_and_says_so(release, monkeypatch, capsys) -> None:
+    cache, alice, _ = release
+    cache.rmdir()  # a laptop, where it was never set up
+    monkeypatch.chdir(alice)
     pipeline, seen = _pipeline(alice)
     with pytest.warns(UserWarning):
         rec = _run(pipeline)
     assert rec.shared("a[t]") is None and seen == [1]
     assert not (alice / "_bronze/a/t.parquet").is_symlink()
     assert not cache.exists()
+    assert "[SHARE] off — ../_kptn_bronze does not exist" in capsys.readouterr().out
 
 
 def test_force_builds_locally_over_a_link(release, monkeypatch) -> None:

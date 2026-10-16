@@ -1,6 +1,6 @@
-"""The shared cache: built source tables kept by content key and linked into ``_bronze/``.
+"""The shared bronze: built source tables kept by content key and linked into ``_bronze/``.
 
-Layout, under the root named by ``settings.shared_cache``::
+Layout, under the root named by ``settings.shared_bronze``::
 
     .tmp/<id>/                       a publish in progress, renamed into place when complete
     <source>/<table>/<key>/
@@ -8,7 +8,7 @@ Layout, under the root named by ``settings.shared_cache``::
         <table>.parquet
 
 An entry is immutable and complete whenever it exists. Several Unix accounts
-share one cache over NFS, so everything kptn creates here gets explicit
+share one directory over NFS, so everything kptn creates here gets explicit
 group-writable modes, and a failed rename is trusted only if the entry is then
 missing (an NFS client can retry a rename whose reply was lost and report an
 error although the first attempt succeeded).
@@ -34,12 +34,12 @@ from kptn.exceptions import ProfileError, TaskError
 from kptn.sources.build import SOURCE_FORMAT_VERSION, TablePlan, build_table
 from kptn.sources.spec import SourceSpec
 
-#: ``off`` turns sharing off for a whole session; ``kptn run --no-shared-cache`` sets it.
-SHARED_CACHE_ENV = "KPTN_SHARED_CACHE"
+#: ``off`` turns sharing off for a whole session; ``kptn run --no-shared-bronze`` sets it.
+SHARED_BRONZE_ENV = "KPTN_SHARED_BRONZE"
 
-#: Explicit modes for everything kptn creates in the cache. Accounts in one
+#: Explicit modes for everything kptn creates in the shared bronze. Accounts in one
 #: group share it, and the usual umask of 022 would leave entries unwritable
-#: by the group; the setgid bit makes new entries inherit the cache's group.
+#: by the group; the setgid bit makes new entries inherit the directory's group.
 DIR_MODE = 0o2775
 FILE_MODE = 0o664
 
@@ -50,7 +50,7 @@ Outcome = Literal["published", "linked"]
 
 
 @dataclass(frozen=True)
-class SharedCache:
+class SharedBronze:
     root: Path
 
     def entry(self, plan: TablePlan) -> Path:
@@ -63,13 +63,13 @@ class SharedCache:
         return parquet if parquet.is_file() else None
 
     def publish(self, plan: TablePlan, spec: SourceSpec, *, root: Path) -> tuple[Path, Outcome]:
-        """Build *plan*'s table into the cache. Returns the entry's parquet and
+        """Build *plan*'s table into the shared bronze. Returns the entry's parquet and
         whether this call made the entry or found another's.
 
         A table that fails to build or validate publishes nothing.
 
         Raises:
-            TaskError: the cache root's parent directory does not exist.
+            TaskError: the shared bronze directory no longer exists.
         """
         tmp = self._tmp_dir()
         try:
@@ -96,14 +96,15 @@ class SharedCache:
             shutil.rmtree(tmp, ignore_errors=True)  # already gone after a rename
 
     def _tmp_dir(self) -> Path:
+        # The root is never created here: whoever sets it up gives it the
+        # pipeline group, and its existence is what turns sharing on.
         try:
-            _mkdir(self.root)
+            _mkdir(self.root / _TMP)
         except FileNotFoundError as exc:
             raise TaskError(
-                f"shared cache {str(self.root)!r}: its parent directory does not exist. "
-                "Check settings.shared_cache in kptn.yaml."
+                f"shared bronze {str(self.root)!r} no longer exists. It was there "
+                "when the run started; was it removed or unmounted?"
             ) from exc
-        _mkdir(self.root / _TMP)
         tmp = self.root / _TMP / uuid4().hex
         _mkdir(tmp)
         return tmp
@@ -172,36 +173,60 @@ def _label(plan: TablePlan, parquet: Path, root: Path) -> dict[str, object]:
     }
 
 
-def resolve_shared_cache(
+def resolve_shared_bronze(
     setting: str | None,
     project_root: Path,
     *,
     environ: Mapping[str, str] | None = None,
-) -> SharedCache | None:
-    """The cache *setting* names, or None when sharing is off.
+) -> SharedBronze | None:
+    """The shared bronze *setting* names, or None when sharing is off.
 
     A relative *setting* resolves against *project_root*, the directory
-    holding ``kptn.yaml``.
+    holding ``kptn.yaml``. Sharing is on only where that directory exists:
+    one ``kptn.yaml`` serves a server whose shared bronze was set up and a
+    laptop where it never is.
 
     Raises:
-        ProfileError: ``KPTN_SHARED_CACHE`` is set to something other than
+        ProfileError: ``KPTN_SHARED_BRONZE`` is set to something other than
             ``on`` or ``off``.
     """
-    raw = (os.environ if environ is None else environ).get(SHARED_CACHE_ENV, "")
+    raw = (os.environ if environ is None else environ).get(SHARED_BRONZE_ENV, "")
     value = raw.strip().lower()
     if value not in ("", "on", "off"):
-        raise ProfileError(f"{SHARED_CACHE_ENV}={raw!r}: expected 'on' or 'off'")
+        raise ProfileError(f"{SHARED_BRONZE_ENV}={raw!r}: expected 'on' or 'off'")
     if setting is None or value == "off":
         return None
+    root = _named_root(setting, project_root)
+    return SharedBronze(root) if root.is_dir() else None
+
+
+def missing_shared_bronze(
+    setting: str | None,
+    project_root: Path,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """What to tell a run whose ``kptn.yaml`` names a shared bronze that does
+    not exist, or None when there is nothing to say: no setting, sharing
+    turned off on purpose, or the directory is there."""
+    value = (os.environ if environ is None else environ).get(SHARED_BRONZE_ENV, "")
+    if setting is None or value.strip().lower() == "off":
+        return None
+    if _named_root(setting, project_root).is_dir():
+        return None
+    return f"[SHARE] off — {setting} does not exist, so tables are built here"
+
+
+def _named_root(setting: str, project_root: Path) -> Path:
     root = Path(setting).expanduser()
     if not root.is_absolute():
         root = project_root / root
-    return SharedCache(root.resolve())
+    return root.resolve()
 
 
-def shared_cache_for(project_root: Path) -> SharedCache | None:
-    """The shared cache of the project at *project_root*, from its ``kptn.yaml``."""
+def shared_bronze_for(project_root: Path) -> SharedBronze | None:
+    """The shared bronze of the project at *project_root*, from its ``kptn.yaml``."""
     from kptn.profiles.loader import ProfileLoader
 
     settings = ProfileLoader.load(project_root / "kptn.yaml").settings
-    return resolve_shared_cache(settings.shared_cache, project_root)
+    return resolve_shared_bronze(settings.shared_bronze, project_root)

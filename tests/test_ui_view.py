@@ -346,6 +346,7 @@ def test_a_live_runs_stream_tails_the_file_until_the_run_ends(
 def _share_logs(project: Path, setting: str = "../_kptn_logs") -> None:
     config = project / "kptn.yaml"
     config.write_text(config.read_text().replace("settings:\n", f"settings:\n  shared_logs: {setting}\n", 1))
+    (project / setting).mkdir(exist_ok=True)  # set up, as on the server
 
 
 def test_their_runs_are_read_from_their_shared_logs(projects_root: Path, theirs: Path) -> None:
@@ -365,7 +366,6 @@ def test_shared_logs_outside_the_projects_root_are_not_read(
     projects_root: Path, theirs: Path, tmp_path: Path
 ) -> None:
     _share_logs(theirs, str(tmp_path / "elsewhere"))
-    (tmp_path / "elsewhere").mkdir()
     record = publish_run(theirs)
     client = TestClient(create_multi_app(projects_root, USER))
 

@@ -143,7 +143,7 @@ def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path, dest: Path | N
     ``plan.parquet``. Returns whether checks ran.
 
     ``os.replace`` onto a symlink replaces the link, never its target, so a
-    local build leaves a shared-cache entry untouched.
+    local build leaves a shared-bronze entry untouched.
     """
     dest = plan.parquet if dest is None else dest
     dest.parent.mkdir(parents=True, exist_ok=True)

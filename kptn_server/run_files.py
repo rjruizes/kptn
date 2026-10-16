@@ -1,8 +1,9 @@
 """The run files a colleague's server can read.
 
 Two kinds of file, both under ``<project>/.kptn/runs/`` -- or, when
-``kptn.yaml`` sets ``shared_logs``, under ``<shared_logs>/<working directory
-name>/``, where they outlive the working directory (see :func:`runs_dir_for`):
+``kptn.yaml`` sets ``shared_logs`` and that directory exists, under
+``<shared_logs>/<working directory name>/``, where they outlive the working
+directory (see :func:`runs_dir_for`):
 
 ``<run_id>.jsonl``
     Every event of one run, one JSON object per line, appended in sequence
@@ -81,9 +82,8 @@ _TASK_OUTCOMES = ("succeeded", "failed")
 LOCAL_RUNS_DIR = Path(".kptn") / "runs"
 
 #: Explicit modes for shared run logs, whatever the umask. Every account
-#: creates its own subdirectory in the root, so the root is group-writable;
-#: only the owner writes inside their own.
-LOG_ROOT_MODE = 0o2775
+#: creates its own subdirectory in the root, which whoever set it up made
+#: group-writable; only the owner writes inside their own.
 LOG_DIR_MODE = 0o2755
 LOG_FILE_MODE = 0o644
 
@@ -175,7 +175,7 @@ def shared_logs_root(project_root: Path, setting: str | None) -> Path | None:
     """The shared logs root *setting* names, resolved; None when unset.
 
     Relative to *project_root*, the directory holding ``kptn.yaml``, as
-    ``shared_cache`` is. Touches nothing beyond ``resolve()``.
+    ``shared_bronze`` is. Touches nothing beyond ``resolve()``.
     """
     if setting is None:
         return None
@@ -188,10 +188,12 @@ def shared_logs_root(project_root: Path, setting: str | None) -> Path | None:
 def runs_dir_of(project_root: Path, setting: str | None) -> Path:
     """Where *project_root*'s run files go under the ``shared_logs`` *setting*.
 
+    The shared logs directory is used only where it exists: one ``kptn.yaml``
+    serves a server where it was set up and a laptop where it never is.
     For a reader: creates nothing, unlike :func:`runs_dir_for`.
     """
     shared = shared_logs_root(project_root, setting)
-    if shared is None:
+    if shared is None or not shared.is_dir():
         return project_root / LOCAL_RUNS_DIR
     return shared / project_root.name
 
@@ -200,37 +202,37 @@ def runs_dir_for(project_root: Path) -> Path:
     """Where the next recorded run of *project_root* writes its files.
 
     ``<shared_logs>/<working directory name>`` when ``kptn.yaml`` sets
-    ``shared_logs``, else ``.kptn/runs``; created either way. Of a shared
-    root only the last component is created, so a typo in a parent fails
-    here instead of building a tree in the wrong place.
+    ``shared_logs`` and that directory exists, else ``.kptn/runs``; created
+    either way. The shared root itself is never created: whoever sets it up
+    gives it the pipeline group, and its existence is what moves the logs.
 
     A ``kptn.yaml`` that does not load falls back to ``.kptn/runs``: the run
     fails on that same error when it loads its profile, and that failure is
     logged where its owner can read it.
-
-    Raises:
-        ProfileError: ``settings.shared_logs`` names a directory whose
-            parent does not exist.
     """
-    try:
-        setting = ProfileLoader.load(project_root / "kptn.yaml").settings.shared_logs
-    except ProfileError:
-        setting = None
-    shared = shared_logs_root(project_root, setting)
-    if shared is None:
-        runs = project_root / LOCAL_RUNS_DIR
+    runs = runs_dir_of(project_root, _shared_logs_setting(project_root))
+    if runs == project_root / LOCAL_RUNS_DIR:
         runs.mkdir(parents=True, exist_ok=True)
-        return runs
-    try:
-        _mkdir(shared, LOG_ROOT_MODE)
-    except FileNotFoundError as exc:
-        raise ProfileError(
-            f"settings.shared_logs {str(shared)!r}: its parent directory does not exist. "
-            "Check settings.shared_logs in kptn.yaml."
-        ) from exc
-    runs = shared / project_root.name
-    _mkdir(runs, LOG_DIR_MODE)
+    else:
+        _mkdir(runs, LOG_DIR_MODE)
     return runs
+
+
+def missing_shared_logs(project_root: Path) -> str | None:
+    """What to tell a recorded run whose ``kptn.yaml`` names a shared logs
+    directory that does not exist, or None when there is nothing to say."""
+    setting = _shared_logs_setting(project_root)
+    shared = shared_logs_root(project_root, setting)
+    if shared is None or shared.is_dir():
+        return None
+    return f"[LOGS] {setting} does not exist, so this run's log stays in {LOCAL_RUNS_DIR}"
+
+
+def _shared_logs_setting(project_root: Path) -> str | None:
+    try:
+        return ProfileLoader.load(project_root / "kptn.yaml").settings.shared_logs
+    except ProfileError:
+        return None
 
 
 def _mkdir(path: Path, mode: int) -> None:
@@ -639,7 +641,6 @@ __all__ = [
     "LOCAL_RUNS_DIR",
     "LOG_DIR_MODE",
     "LOG_FILE_MODE",
-    "LOG_ROOT_MODE",
     "RUN_FILE_SUFFIX",
     "RUN_ID_RE",
     "RunFileError",
@@ -647,6 +648,7 @@ __all__ = [
     "build_index",
     "counters",
     "encode_event",
+    "missing_shared_logs",
     "published_runs_dir",
     "read_events",
     "read_index",

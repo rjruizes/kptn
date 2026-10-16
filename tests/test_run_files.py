@@ -17,7 +17,6 @@ from types import MappingProxyType
 
 import pytest
 
-from kptn.exceptions import ProfileError
 from kptn.runner.events import EventKind, RunEvent
 from kptn_server import run_files
 from kptn_server.capture import RunStoreSink
@@ -436,8 +435,16 @@ def test_without_shared_logs_runs_stay_in_dot_kptn(tmp_path: Path) -> None:
     assert (project / ".kptn" / "runs").is_dir()
 
 
+def _shared_logs(release: Path) -> Path:
+    """The release's shared logs directory, set up as on the server."""
+    logs = release / "_kptn_logs"
+    logs.mkdir(parents=True)
+    return logs
+
+
 def test_shared_logs_is_relative_to_the_project_and_named_by_directory(tmp_path: Path) -> None:
     project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    _shared_logs(tmp_path / "r7")
     expected = (tmp_path / "r7" / "_kptn_logs" / "alice_main").resolve()
     assert run_files.runs_dir_for(project) == expected
     assert expected.is_dir()
@@ -446,6 +453,7 @@ def test_shared_logs_is_relative_to_the_project_and_named_by_directory(tmp_path:
 
 def test_shared_logs_modes_whatever_the_umask(tmp_path: Path) -> None:
     project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    _shared_logs(tmp_path / "r7")
     old = os.umask(0o077)
     try:
         runs = run_files.runs_dir_for(project)
@@ -453,15 +461,24 @@ def test_shared_logs_modes_whatever_the_umask(tmp_path: Path) -> None:
         os.umask(old)
     # The setgid bit is dropped by some systems when the owner is not in the
     # directory's group; the rest of the mode must hold everywhere.
-    assert _mode(runs.parent) & 0o777 == run_files.LOG_ROOT_MODE & 0o777
     assert _mode(runs) & 0o777 == run_files.LOG_DIR_MODE & 0o777
 
 
-def test_missing_parent_of_shared_logs_is_an_error(tmp_path: Path) -> None:
-    project = _workdir(tmp_path / "r7" / "alice_main", "settings:\n  shared_logs: ../no/such/logs\n")
-    with pytest.raises(ProfileError, match="shared_logs"):
-        run_files.runs_dir_for(project)
-    assert not (tmp_path / "r7" / "no").exists()
+def test_missing_shared_logs_keeps_runs_in_dot_kptn(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    assert run_files.runs_dir_of(project, "../_kptn_logs") == project / ".kptn" / "runs"
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "runs"
+    assert not (tmp_path / "r7" / "_kptn_logs").exists()
+    assert run_files.missing_shared_logs(project) == (
+        "[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/runs"
+    )
+
+
+def test_nothing_is_reported_when_shared_logs_exist_or_are_unset(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    _shared_logs(tmp_path / "r7")
+    assert run_files.missing_shared_logs(project) is None
+    assert run_files.missing_shared_logs(_workdir(tmp_path / "r7" / "bob_main", None)) is None
 
 
 def test_unreadable_kptn_yaml_falls_back_to_dot_kptn(tmp_path: Path) -> None:

@@ -143,6 +143,7 @@ def test_kptn_run_writes_its_log_to_shared_logs(ui_project_cwd: Path) -> None:
     config.write_text(
         config.read_text().replace("settings:\n", "settings:\n  shared_logs: ../_kptn_logs\n", 1)
     )
+    (ui_project_cwd.parent / "_kptn_logs").mkdir()
 
     result = CliRunner().invoke(app, ["run"])
 
@@ -153,3 +154,20 @@ def test_kptn_run_writes_its_log_to_shared_logs(ui_project_cwd: Path) -> None:
     assert "ordinary output\n" in run_file_text(run.log_path)
     assert (logs / "index.json").is_file()
     assert not list((ui_project_cwd / ".kptn").glob("runs/*.jsonl"))
+
+
+def test_kptn_run_says_when_shared_logs_do_not_exist(ui_project_cwd: Path) -> None:
+    config = ui_project_cwd / "kptn.yaml"
+    config.write_text(
+        config.read_text().replace("settings:\n", "settings:\n  shared_logs: ../_kptn_logs\n", 1)
+    )
+
+    result = CliRunner().invoke(app, ["run"])
+
+    assert result.exit_code == 0, result.output
+    _store, (run,) = recorded_runs(ui_project_cwd)
+    notice = "[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/runs"
+    assert run.log_path.parent == ui_project_cwd.resolve() / ".kptn" / "runs"
+    assert notice in result.output
+    assert notice in run_file_text(run.log_path)
+    assert not (ui_project_cwd.parent / "_kptn_logs").exists()

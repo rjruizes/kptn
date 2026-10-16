@@ -279,46 +279,50 @@ pipeline = kptn.Pipeline(
 
 Each table is cached on its own files, check file and the source's code. A change upstream, such as a rebuilt schema, does not re-read unchanged files.
 
-### Shared cache
+### Shared bronze
 
-Working directories that read the same files can share built tables. Name a cache in `kptn.yaml`, relative to the project:
+Working directories that read the same files can share built tables. Name a shared bronze directory in `kptn.yaml`, relative to the project, and create it where you want sharing:
 
 ```yaml
 settings:
-  shared_cache: ../../r6/_kptn_cache
+  shared_bronze: ../_bronze
 ```
 
-A table built in one working directory is published there under a key made from its files' paths, sizes and modification times, its check file, the source's code and kptn's reading conventions. Any working directory that computes the same key links to it instead of reading the files again: `_bronze/<source>/<table>.parquet` becomes a symlink into the cache. A restored table counts as a change, so what reads it reruns.
+kptn shares only through a directory that exists, and never creates it. One committed `kptn.yaml` therefore serves the server, where the directory was set up, and every laptop, where it never is and each working directory builds its own tables. A run that finds the setting but not the directory says so: `[SHARE] off — ../_bronze does not exist, so tables are built here`. To share between checkouts on a laptop, `mkdir ../_bronze`.
 
-The console says which happened: `[RESTORE] … — from shared cache`, or `[SHARE] … — published` after a build (`— linked to an identical build` when another run published the same key first). `kptn plan` and the UI's plan page show "in shared cache" for a table the next run would restore.
+A table built in one working directory is published there under a key made from its files' paths, sizes and modification times, its check file, the source's code and kptn's reading conventions. Any working directory that computes the same key links to it instead of reading the files again: `_bronze/<source>/<table>.parquet` becomes a symlink into the shared bronze. A restored table counts as a change, so what reads it reruns.
+
+The console says which happened: `[RESTORE] … — from shared bronze`, or `[SHARE] … — published` after a build (`— linked to an identical build` when another run published the same key first). `kptn plan` and the UI's plan page show "in shared bronze" for a table the next run would restore.
 
 | To | |
 |---|---|
-| Build here without sharing, for one run | `kptn run --no-shared-cache` |
-| … for a whole session | `export KPTN_SHARED_CACHE=off` |
-| Rebuild here and ignore the cache | `kptn run --force` (and `no_cache=True`) builds a local file, never publishes |
-| Remove a bad entry | Delete `<cache>/<source>/<table>/<key>/`. Every working directory linked to it rebuilds on its next run. |
+| Build here without sharing, for one run | `kptn run --no-shared-bronze` |
+| … for a whole session | `export KPTN_SHARED_BRONZE=off` |
+| Rebuild here and ignore the shared bronze | `kptn run --force` (and `no_cache=True`) builds a local file, never publishes |
+| Remove a bad entry | Delete `<shared_bronze>/<source>/<table>/<key>/`. Every working directory linked to it rebuilds on its next run. |
 
-The cache holds `entry.json` and one parquet file per entry, and nothing else. `entry.json` records the key's parts, every input file with its size and modification time, the row count and columns, and who built it, where, when and with which kptn; kptn never reads it. `.tmp/` holds publishes in progress, or left by a crashed run, and can be cleared when no run is active. Entries are never pruned; remove a release's cache with its release.
+The shared bronze holds `entry.json` and one parquet file per entry, and nothing else. `entry.json` records the key's parts, every input file with its size and modification time, the row count and columns, and who built it, where, when and with which kptn; kptn never reads it. `.tmp/` holds publishes in progress, or left by a crashed run, and can be cleared when no run is active. Entries are never pruned; remove a release's shared bronze with its release.
 
-**Several accounts on one share.** Every account that runs the pipeline must read every entry and create new ones. Put them all in one Unix group, with the same group ID on every machine or pod that mounts the share, and create the cache before the first run:
+**Several accounts on one share.** Every account that runs the pipeline must read every entry and create new ones. Put them all in one Unix group, with the same group ID on every machine or pod that mounts the share, and create the shared bronze directory:
 
 ```shell
-mkdir ../../r6/_kptn_cache
-chgrp <pipeline-group> ../../r6/_kptn_cache
-chmod 2775 ../../r6/_kptn_cache
+mkdir ../_bronze
+chgrp <pipeline-group> ../_bronze
+chmod 2775 ../_bronze
 ```
 
-kptn creates everything inside it with modes `2775` (directories) and `0664` (files), whatever each user's umask. On a laptop nothing needs setting up: kptn creates the cache directory itself if its parent exists. kptn's state store and the pipeline database stay in each working directory; only built parquet files are shared.
+kptn creates everything inside it with modes `2775` (directories) and `0664` (files), whatever each user's umask. kptn's state store and the pipeline database stay in each working directory; only built parquet files are shared.
 
 ### Shared logs
 
-A working directory's run history normally lives in its `.kptn/runs/`, and goes when the directory is deleted. To keep it, name a shared logs directory in `kptn.yaml`, relative to the project:
+A working directory's run history normally lives in its `.kptn/runs/`, and goes when the directory is deleted. To keep it, name a shared logs directory in `kptn.yaml`, relative to the project, and create it where you want the logs kept:
 
 ```yaml
 settings:
   shared_logs: ../_kptn_logs
 ```
+
+As with the shared bronze, kptn uses the directory only where it exists and never creates it, so a laptop without one keeps its runs in `.kptn/runs/`. A recorded run that finds the setting but not the directory says so in its log: `[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/runs`.
 
 Recorded runs, from `kptn run` or started in `kptn ui`, then write their `<run_id>.jsonl` and the project's `index.json` to `../_kptn_logs/<working directory name>/` from the start. Delete `r7/alice_main/` and its history stays in `r7/_kptn_logs/alice_main/`. Only the logs move: `.kptn/ui.db` and kptn's state store stay in the working directory and go with it. `kptn run --no-record` and `kptn.run()` from a notebook keep no log, with or without the setting.
 
@@ -333,7 +337,7 @@ A directory recreated under the same name keeps one history. Its new `ui.db` num
 | Bring along runs recorded before the setting | `cp -p .kptn/runs/*.jsonl ../_kptn_logs/<name>/` — until then, colleagues see them listed without a log |
 | Forget a directory's history | Delete `_kptn_logs/<name>/` |
 
-**Several accounts on one share.** Use the pipeline group from the shared cache and create the directory before the first run:
+**Several accounts on one share.** Use the pipeline group from the shared bronze and create the directory:
 
 ```shell
 mkdir _kptn_logs
@@ -341,7 +345,7 @@ chgrp <pipeline-group> _kptn_logs
 chmod 2775 _kptn_logs
 ```
 
-kptn creates each working directory's subdirectory with mode `2755` and its files with `0644`, whatever the umask: everyone can read every history, and only its owner writes it. On a laptop kptn creates the directory itself if its parent exists.
+kptn creates each working directory's subdirectory with mode `2755` and its files with `0644`, whatever the umask: everyone can read every history, and only its owner writes it.
 
 ### Caching and Re-runs
 
@@ -405,7 +409,7 @@ The `kptn` CLI discovers your pipeline from `[tool.kptn] pipeline = "..."` in `p
 
 ```shell
 kptn plan [--profile PROFILE]          # preview what will run or be skipped
-kptn run  [--profile PROFILE] [--force] [--no-record] [--no-shared-cache] # execute the pipeline
+kptn run  [--profile PROFILE] [--force] [--no-record] [--no-shared-bronze] # execute the pipeline
 kptn ui   [--port PORT] [--no-open]     # serve the pipeline UI for this project
 ```
 

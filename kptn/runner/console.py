@@ -5,7 +5,7 @@ from typing import TextIO
 
 from kptn.runner.events import EventKind, RunEvent
 
-#: What a succeeded table's publish to the shared cache did, in the console's words.
+#: What a succeeded table's publish to the shared bronze did, in the console's words.
 _SHARE_WORDS = {"published": "published", "linked": "linked to an identical build"}
 
 
@@ -23,7 +23,7 @@ class ConsoleEventSink:
             mode = event.payload.get("mode", "run")
             if mode == "source_table" and event.payload.get("shared") == "restored":
                 print(
-                    self._timestamped("[RESTORE]", event, " — from shared cache"),
+                    self._timestamped("[RESTORE]", event, " — from shared bronze"),
                     file=self.out,
                     flush=True,
                 )
