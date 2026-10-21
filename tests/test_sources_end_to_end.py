@@ -49,7 +49,7 @@ def project(tmp_path: Path, monkeypatch):
 
     @kptn.task(outputs=[])
     def consumer(engine) -> None:
-        seen.append(engine.sql('SELECT count(*) FROM raw."a_t"').fetchone()[0])
+        seen.append(engine.sql('SELECT count(*) FROM raw_a."t"').fetchone()[0])
 
     a = kptn.source("a", files="in/a")
     b = kptn.source("b", files="in/b")
@@ -57,8 +57,8 @@ def project(tmp_path: Path, monkeypatch):
     pipeline = kptn.Pipeline(
         "p",
         kptn.config(duckdb=(get_engine, "engine"))
-        >> kptn.parallel(init_database, raw_ingest)
-        >> kptn.source_views(raw_ingest)
+        >> init_database
+        >> raw_ingest
         >> consumer,
     )
     return tmp_path, pipeline, seen
@@ -76,7 +76,7 @@ def test_first_run_builds_and_consumer_reads_views(project) -> None:
         rec = _run(pipeline)
     assert sorted(p.name for p in (root / "_bronze" / "a").iterdir()) == ["t.parquet", "u.parquet"]
     assert seen == [1]
-    assert "raw_ingest_views" in rec.names(EventKind.TASK_STARTED)
+    assert "consumer" in rec.names(EventKind.TASK_STARTED)
 
 
 def test_second_run_is_fully_cached(project) -> None:
@@ -136,7 +136,7 @@ def test_failing_check_stops_the_run_and_keeps_old_data(project) -> None:
     _write(
         root,
         "checks/a/t.yml",
-        "checks for a_t:\n- schema:\n    fail:\n      when required column missing: [not_there]\n",
+        "checks for t:\n- schema:\n    fail:\n      when required column missing: [not_there]\n",
     )
     with pytest.raises(TaskError, match="a.t"):
         _run(pipeline)

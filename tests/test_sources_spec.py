@@ -4,11 +4,11 @@ import pytest
 
 import kptn
 from kptn.change_detector.detector import is_stale
-from kptn.graph.nodes import SourceNode, SourceViewsNode
+from kptn.graph.nodes import SourceNode
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.resolver import ProfileResolver
 from kptn.profiles.schema import KptnConfig, ProfileSpec
-from kptn.sources.spec import SourceSpec, SourceViewsSpec
+from kptn.sources.spec import SourceSpec
 from tests.fakes import FakeStateStore
 
 
@@ -61,32 +61,6 @@ def test_stage_selection_prunes_sources_by_name() -> None:
     resolved = ProfileResolver(config).compile(pipeline, "ci")
     names = {n.name for n in resolved.graph.nodes}
     assert "a" in names and "b" not in names
-
-
-def test_source_views_names_after_stage_and_lists_sources() -> None:
-    a = kptn.source("a", files="in/a")
-    b = kptn.source("b", files="in/b")
-    views = kptn.source_views(kptn.Stage("raw_ingest", b, a))
-    assert views.__name__ == "raw_ingest_views"
-    assert isinstance(views.__kptn__, SourceViewsSpec)
-    assert views.__kptn__.sources == ("a", "b")
-
-
-def test_source_views_requires_sources() -> None:
-    @kptn.task(outputs=[])
-    def t() -> None: ...
-
-    with pytest.raises(ValueError, match="kptn.source"):
-        kptn.source_views(kptn.Stage("raw_ingest", t))
-    with pytest.raises(TypeError):
-        kptn.source_views(t)  # ty: ignore[invalid-argument-type]
-
-
-def test_source_views_composes_into_its_node() -> None:
-    a = kptn.source("a", files="in/a")
-    stage = kptn.Stage("raw_ingest", a)
-    graph = stage >> kptn.source_views(stage)
-    assert any(isinstance(n, SourceViewsNode) and n.name == "raw_ingest_views" for n in graph.nodes)
 
 
 def test_is_stale_treats_source_nodes_as_non_task() -> None:

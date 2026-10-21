@@ -9,7 +9,9 @@ import duckdb
 from kptn.sources.files import SourceFile
 
 SOURCE_FILE_COLUMN = "_source_file"
-RAW_SCHEMA = "raw"
+#: Each source's views live in their own schema, ``raw_<source>``, so two
+#: sources can never claim the same view name.
+RAW_SCHEMA_PREFIX = "raw_"
 
 _NESTED_TYPE_IDS = frozenset({"struct", "list", "map", "array", "union"})
 
@@ -22,9 +24,15 @@ def _ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def schema_name(source: str) -> str:
+    """The schema holding a source's views: ``raw_<source>``. Source names are
+    lowercase identifiers, so it needs no quoting."""
+    return f"{RAW_SCHEMA_PREFIX}{source}"
+
+
 def view_name(source: str, table: str) -> str:
-    """The qualified view name for a source table: ``raw."<source>_<table>"``."""
-    return f"{RAW_SCHEMA}.{_ident(f'{source}_{table}')}"
+    """The qualified view name for a source table: ``raw_<source>."<table>"``."""
+    return f"{schema_name(source)}.{_ident(table)}"
 
 
 def _read_builtin(conn: duckdb.DuckDBPyConnection, file: SourceFile) -> duckdb.DuckDBPyRelation:
@@ -84,14 +92,14 @@ def create_table_view(
     files: list[SourceFile],
     read: Callable[[str], Any] | None = None,
 ) -> str:
-    """Create ``raw."<source>_<table>"`` over *files* and return its name.
+    """Create ``raw_<source>."<table>"`` over *files* and return its name.
 
     Files are combined in ``_source_file`` order with ``UNION ALL BY NAME``, so
     the result does not depend on the order *files* arrive in.
     """
     if not files:
         raise ValueError(f"Table {source}.{table} has no files.")
-    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {RAW_SCHEMA}")
+    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name(source)}")
     selects: list[str] = []
     for i, file in enumerate(sorted(files, key=lambda f: f.rel)):
         rel = _read_custom(conn, file, read) if read is not None else _read_builtin(conn, file)

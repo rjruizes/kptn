@@ -115,6 +115,31 @@ def test_upstream_dirtiness_does_not_rebuild_a_source(project: Path) -> None:
     assert _names(sink, EventKind.TASK_SKIPPED) == ["s[a]", "s[b]"]
 
 
+def test_upstream_change_passes_through_a_cached_source(project: Path) -> None:
+    """A rebuilt schema reruns what reads the source, without re-reading files.
+
+    The plan holds the same rule (``tests/test_sources_plan.py``); this keeps
+    ``kptn run`` from drifting away from it.
+    """
+    store = FakeStateStore()
+    upstream = _task_node("init_database")
+    node = _source_node(project)
+    downstream = _task_node("consumer")
+    graph = Graph(
+        nodes=[upstream, node, downstream], edges=[(upstream, node), (node, downstream)]
+    )
+    _run(graph, store, project)
+
+    def only_upstream_stale(task, *_args) -> tuple[bool, str]:
+        # Stale everywhere would rerun consumer for its own sake and prove nothing.
+        return (True, "code changed") if task.name == "init_database" else (False, "cached")
+
+    with patch("kptn.runner.executor.is_stale", side_effect=only_upstream_stale):
+        sink = _run(graph, store, project, expect_warning=False)
+    assert _names(sink, EventKind.TASK_SKIPPED) == ["s[a]", "s[b]"]
+    assert "consumer" in _names(sink, EventKind.TASK_STARTED)
+
+
 def test_downstream_reruns_only_when_a_table_changes(project: Path) -> None:
     store = FakeStateStore()
     node = _source_node(project)

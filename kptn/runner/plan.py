@@ -17,7 +17,6 @@ from kptn.graph.nodes import (
     ParallelNode,
     PipelineNode,
     SourceNode,
-    SourceViewsNode,
     StageNode,
 )
 from kptn.graph.topo import topo_sort
@@ -248,19 +247,14 @@ def build_plan(
         if node.name in resolved.bypassed_names:
             continue
         if isinstance(node, SourceNode):
-            # Upstream dirtiness is ignored: a source is judged on its own files.
+            # A source's tables are judged on their own files; upstream
+            # dirtiness only passes through, as it does in the executor.
             source_entries = _plan_source(
                 node, reader, resolved, config_values, root or Path.cwd(), shared
             )
-            if any(e.action is PlanAction.RUN for e in source_entries):
+            if upstream_dirty or any(e.action is PlanAction.RUN for e in source_entries):
                 dirty.add(node.name)
             entries.extend(source_entries)
-            continue
-        if isinstance(node, SourceViewsNode):
-            # Recreating views changes no data: it passes dirtiness on, never starts it.
-            if upstream_dirty:
-                dirty.add(node.name)
-            entries.append(PlanEntry(node.name, PlanAction.RUN, reason="always runs"))
             continue
         if isinstance(node, MapNode):
             provider = node.over.split(".")[0]

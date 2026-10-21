@@ -257,13 +257,13 @@ sales = kptn.source(
     table=lambda f: f.name.rsplit("_", 1)[0],
 )
 
-raw_ingest = kptn.Stage("raw_ingest", survey, sales)
+# Each source goes right before the tasks that read its views, and after
+# anything that rebuilds the database's schemas.
 pipeline = kptn.Pipeline(
     "main",
     kptn.config(duckdb=(get_engine, "engine"), config=get_config)
-    >> raw_ingest
-    >> kptn.source_views(raw_ingest)
-    >> transform,
+    >> init_database
+    >> kptn.parallel(survey >> load_survey, sales >> load_sales),
 )
 ```
 
@@ -273,11 +273,11 @@ pipeline = kptn.Pipeline(
 | Values | Every column stored as text, under its name in lowercase, so files that spell a column differently (`mealTime`, `MEALTIME`) feed one `mealtime` column. Transform downstream. |
 | Tables | One per file stem, unless `table=` says otherwise. Files feeding one table are combined by column name. |
 | Provenance | A `_source_file` column, such as `sales/orders_2024-01-24.csv`. |
-| Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written, naming the table as its view does without the schema (`checks for sales_orders:`) and its columns in lowercase. A failure stops the run. |
+| Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written, naming the table alone (`checks for orders:`) and its columns in lowercase. A failure stops the run. |
 | Storage | `_bronze/<source>/<table>.parquet`. |
-| Views | `raw.<source>_<table>`, created by `kptn.source_views`. |
+| Views | `raw_<source>.<table>`, such as `raw_sales.orders`: one schema per source, created by the source itself on every run, cached or not, when `kptn.config` names a DuckDB connection. Views of tables the source no longer has are dropped. |
 
-Each table is cached on its own files, check file and the source's code. A change upstream, such as a rebuilt schema, does not re-read unchanged files.
+Each table is cached on its own files, check file and the source's code. A change upstream, such as a rebuilt schema, does not re-read unchanged files, but it still reruns what comes after the source. A table that is built or restored reruns only what comes after its source, so keep each source in the branch that reads it rather than at the top of the pipeline. Keep it there for profiles too: a source a profile leaves out does not run, so after a schema rebuild its views are gone, and the tasks that read them must be left out with it.
 
 ### Shared bronze
 
@@ -379,8 +379,7 @@ kptn plan
 | `kptn.sql_task(path, outputs, optional=None, duckdb_checkpoint=False, requires=None)` | Register a SQL file as a task |
 | `kptn.r_task(path, outputs, compute=None, optional=None, duckdb_checkpoint=False, requires=None)` | Register an R script as a task |
 | `kptn.noop()` | Placeholder / synchronization node |
-| `kptn.source(name, files, *, table=None, read=None)` | Read raw files into `_bronze/<name>/`, one text-only parquet per table |
-| `kptn.source_views(stage)` | Create `raw.<source>_<table>` views for the sources in a stage |
+| `kptn.source(name, files, *, table=None, read=None)` | Read raw files into `_bronze/<name>/`, one text-only parquet per table, served as `raw_<name>.<table>` views |
 
 ### Graph Composition
 

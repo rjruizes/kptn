@@ -54,7 +54,7 @@ _RUNNERS = {
     "r": "r",
     "source_table": "ingest",
     "map_item": "map",
-    "views": "views",
+    "views": "views",  # kptn.source_views, in older stored runs
     "source": "ingest",
     "map": "map",
 }

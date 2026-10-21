@@ -14,7 +14,6 @@ from kptn.graph.nodes import (
     PipelineNode,
     RTaskNode,
     SourceNode,
-    SourceViewsNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -30,7 +29,7 @@ class _ReadableStateStore(Protocol):
 logger = logging.getLogger(__name__)
 
 _NON_TASK_NODES = (
-    ParallelNode, StageNode, NoopNode, ConfigNode, PipelineNode, MapNode, SourceNode, SourceViewsNode,
+    ParallelNode, StageNode, NoopNode, ConfigNode, PipelineNode, MapNode, SourceNode,
 )
 
 

@@ -25,7 +25,6 @@ from kptn.graph.nodes import (
     PipelineNode,
     RTaskNode,
     SourceNode,
-    SourceViewsNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -38,7 +37,7 @@ from kptn.profiles.schema import KptnConfig
 
 # Nodes that represent a unit of actual work (or a dynamic fan-out of work),
 # as opposed to structural sentinels (Stage/Parallel/Pipeline/Noop/Config).
-_EXECUTABLE_NODE_TYPES = (TaskNode, SqlTaskNode, RTaskNode, MapNode, SourceNode, SourceViewsNode)
+_EXECUTABLE_NODE_TYPES = (TaskNode, SqlTaskNode, RTaskNode, MapNode, SourceNode)
 
 _KIND_NAMES: dict[type, str] = {
     TaskNode: "python",
@@ -46,7 +45,6 @@ _KIND_NAMES: dict[type, str] = {
     RTaskNode: "r",
     MapNode: "map",
     SourceNode: "source",
-    SourceViewsNode: "views",
     ParallelNode: "parallel",
     StageNode: "stage",
     PipelineNode: "pipeline",
@@ -149,16 +147,15 @@ def _split_docs(
 def _spec_for(node: AnyNode) -> Any | None:
     """Return the spec backing a node, if any.
 
-    ``TaskNode``/``SqlTaskNode``/``RTaskNode`` and the source nodes
-    (``SourceNode``/``SourceViewsNode``) all carry their spec directly
-    as ``node.spec`` (the same attribute ``kptn/runner/executor.py`` reads,
+    ``TaskNode``/``SqlTaskNode``/``RTaskNode`` and ``SourceNode`` all carry
+    their spec directly as ``node.spec`` (the same attribute ``kptn/runner/executor.py`` reads,
     e.g. ``node.spec.outputs``) — the pre-wrap ``__kptn__`` attribute only
     exists on the decorator-produced handles (``_KptnCallable``,
     ``_SqlTaskHandle``, ``_RTaskHandle``), not on the node objects
     themselves. ``MapNode`` is the exception: it stores the original
     __kptn__-tagged callable in ``node.task``.
     """
-    if isinstance(node, (TaskNode, SqlTaskNode, RTaskNode, SourceNode, SourceViewsNode)):
+    if isinstance(node, (TaskNode, SqlTaskNode, RTaskNode, SourceNode)):
         return node.spec
     if isinstance(node, MapNode):
         return getattr(node.task, "__kptn__", None)
@@ -349,7 +346,7 @@ def inspect_pipeline(
                 docs_error=docs_error,
                 predecessors=tuple(predecessors[id(node)]),
                 successors=tuple(successors[id(node)]),
-                ingest=isinstance(node, (SourceNode, SourceViewsNode))
+                ingest=isinstance(node, SourceNode)
                 or (isinstance(node, StageNode) and bool(node.members & source_names)),
             )
         )

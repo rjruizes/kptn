@@ -1091,7 +1091,7 @@ def test_ingest_steps_carry_an_icon(tmp_path: Path) -> None:
             'raw_ingest = kptn.Stage("raw_ingest", raw)\n'
             'silver = kptn.Stage("silver", transform)\n'
             'pipeline = kptn.Pipeline(\n'
-            '    "sources", raw_ingest >> kptn.source_views(raw_ingest) >> silver\n'
+            '    "sources", raw_ingest >> silver\n'
             ')\n'
         ),
     )
@@ -1102,11 +1102,10 @@ def test_ingest_steps_carry_an_icon(tmp_path: Path) -> None:
     def row(name: str) -> str:
         return page.split(f'data-task="{name}"')[1].split("</tr>")[0]
 
-    for marked in ("raw", "raw_ingest_views", "raw_ingest"):
+    for marked in ("raw", "raw_ingest"):
         assert "<svg" in row(marked), marked
     for plain in ("transform", "silver"):
         assert "<svg" not in row(plain), plain
 
     assert 'class="kind__icon"' in client.get("/walkthrough/task/raw").text
-    assert 'class="kind__icon"' in client.get("/walkthrough/task/raw_ingest_views").text
     assert 'class="kind__icon"' not in client.get("/walkthrough/task/transform").text

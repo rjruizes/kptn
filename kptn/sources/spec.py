@@ -1,8 +1,9 @@
-"""``kptn.source`` and ``kptn.source_views``: declarations, not execution.
+"""``kptn.source``: a declaration, not execution.
 
 A source names raw input files. kptn reads them by convention into one
-text-only parquet file per table under ``_bronze/<source>/``; see
-``kptn.sources.build`` for the work and the executor for when it runs.
+text-only parquet file per table under ``_bronze/<source>/`` and serves each
+as the view ``raw_<source>.<table>``; see ``kptn.sources.build`` for the work
+and the executor for when it runs.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Callable, Union
 
 from kptn.graph.decorators import DocMetadata
 
@@ -56,29 +57,10 @@ class SourceSpec:
         self.doc = DocMetadata(self.description, _describe_files(self.files), self.docs)
 
 
-@dataclass
-class SourceViewsSpec:
-    sources: tuple[str, ...]
-    description: str | None = None
-    outputs: list[str] = field(default_factory=list)
-    optional: str | None = None
-    requires: list[Any] | None = None
-    duckdb_checkpoint: bool = False
-    docs: str | None = None
-    doc: DocMetadata = field(init=False, repr=False)
+class SourceHandle:
+    """What ``kptn.source`` returns: composable with ``>>``."""
 
-    def __post_init__(self) -> None:
-        inputs = tuple(f"_bronze/{s}/*.parquet" for s in self.sources)
-        self.doc = DocMetadata(self.description, inputs, self.docs)
-
-
-SpecT = TypeVar("SpecT", "SourceSpec", "SourceViewsSpec")
-
-
-class SourceHandle(Generic[SpecT]):
-    """What ``kptn.source`` and ``kptn.source_views`` return: composable with ``>>``."""
-
-    def __init__(self, name: str, spec: SpecT) -> None:
+    def __init__(self, name: str, spec: SourceSpec) -> None:
         self.__name__ = name
         self.__kptn__ = spec
 
@@ -88,8 +70,7 @@ class SourceHandle(Generic[SpecT]):
         return Graph._from_node(self) >> other
 
     def __repr__(self) -> str:
-        kind = "source" if isinstance(self.__kptn__, SourceSpec) else "source views"
-        return f"<kptn {kind} '{self.__name__}'>"
+        return f"<kptn source '{self.__name__}'>"
 
 
 def source(
@@ -98,7 +79,7 @@ def source(
     *,
     table: TableArg | None = None,
     read: ReadFn | None = None,
-) -> SourceHandle[SourceSpec]:
+) -> SourceHandle:
     """Declare raw input files that kptn reads into ``_bronze/<name>/``.
 
     Only *name* and *files* are required; everything else follows conventions.
@@ -106,6 +87,13 @@ def source(
     as text, column names are lowercased, each row gets a
     ``_source_file`` column, and each table is validated by
     ``checks/<name>/<table>.yml`` when that file exists.
+
+    When ``kptn.config`` names a DuckDB connection, each run also serves every
+    table as the view ``raw_<name>.<table>``, whether or not it was rebuilt.
+    Place the source right before the tasks that read those views, and after
+    any task that rebuilds your database schemas. A source a profile leaves
+    out does not run, so after a schema rebuild it has no views; deselect the
+    tasks that read them with it.
 
     Args:
         name: The source's name: its node name, its folder under ``_bronze/``
@@ -138,30 +126,6 @@ def source(
         table=table,
         read=read,
         declared_at=(caller.f_code.co_filename, caller.f_lineno),
-        description=f"Reads raw files into _bronze/{name}/.",
-    )
-    return SourceHandle(name, spec)
-
-
-def source_views(stage: Graph) -> SourceHandle[SourceViewsSpec]:
-    """Create ``raw.<source>_<table>`` views for every source in *stage*.
-
-    Pass the graph returned by ``kptn.Stage(...)`` (or ``kptn.parallel(...)``)
-    holding your sources, and place the result after both the stage and any
-    task that rebuilds your database schemas.
-    """
-    from kptn.graph.graph import Graph
-    from kptn.graph.nodes import SourceNode, StageNode
-
-    if not isinstance(stage, Graph):
-        raise TypeError("kptn.source_views takes the graph returned by kptn.Stage(...).")
-    names = tuple(sorted({n.name for n in stage.nodes if isinstance(n, SourceNode)}))
-    if not names:
-        raise ValueError("kptn.source_views needs a graph containing kptn.source(...) nodes.")
-    stage_node = next((n for n in stage.nodes if isinstance(n, StageNode)), None)
-    name = f"{stage_node.name}_views" if stage_node is not None else "source_views"
-    spec = SourceViewsSpec(
-        sources=names,
-        description="Creates raw.<source>_<table> views for: " + ", ".join(names) + ".",
+        description=f"Reads raw files into _bronze/{name}/ and serves them as raw_{name}.<table>.",
     )
     return SourceHandle(name, spec)

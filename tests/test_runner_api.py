@@ -336,7 +336,7 @@ def test_run_wraps_duckdb_factory_with_bronze_search_path() -> None:
 
     source = kptn.source("s", files="in")
     stage = kptn.Stage("raw_ingest", source)
-    graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> stage >> kptn.source_views(stage)
+    graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> stage
 
     factory = _run_and_get_factory(graph)
 
@@ -345,10 +345,12 @@ def test_run_wraps_duckdb_factory_with_bronze_search_path() -> None:
     assert str((Path.cwd() / "_bronze").resolve()) in setting.split(",")
 
 
-def test_run_leaves_duckdb_factory_alone_without_source_views() -> None:
+def test_run_leaves_duckdb_factory_alone_without_sources() -> None:
     import duckdb
 
-    source = kptn.source("s", files="in")
-    graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> source
+    @kptn.task(outputs=[])
+    def t() -> None: ...
+
+    graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> t
 
     assert _run_and_get_factory(graph) is duckdb.connect

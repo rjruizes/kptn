@@ -28,6 +28,7 @@ from kptn_server.run_store import StoredEvent
 _ITEM_MODES = frozenset({"source_table", "map_item"})
 
 #: Kinds that are part of data ingest, which the sidebar marks with an icon.
+#: "views" is the kptn.source_views step, which only older stored runs have.
 _INGEST_KINDS = frozenset({"source", "views"})
 
 #: What each state says beside a step's name.

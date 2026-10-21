@@ -18,7 +18,6 @@ from kptn.graph.nodes import (
     PipelineNode,
     RTaskNode,
     SourceNode,
-    SourceViewsNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -369,12 +368,17 @@ def _execute_source(
     no_cache: bool,
     groups: list[str] | None,
     shared: SharedBronze | None = None,
+    duckdb_factory: "Callable[[], Any] | None" = None,
 ) -> bool:
-    """Bring every table of *node* up to date. True if any table changed.
+    """Bring every table of *node* up to date, then serve each as a
+    ``raw_<source>.<table>`` view on *duckdb_factory*'s connection. True if
+    any table changed.
 
     A source is judged only on its own files, check files and code; upstream
     dirtiness is deliberately ignored, so a rebuilt schema does not force a
-    re-read of unchanged files.
+    re-read of unchanged files. Its views are recreated on every run, cached
+    or not, so a schema rebuilt upstream gets them back; that changes no
+    data, so it never dirties downstream by itself.
 
     With *shared*, a table that is not current is linked from the shared
     bronze when its key is there, and otherwise built into it and linked. ``force`` and ``no_cache`` build a local file and never publish.
@@ -434,6 +438,19 @@ def _execute_source(
             started_at=table_started, shared=outcome,
         )
         changed = True
+
+    if duckdb_factory is not None:
+        try:
+            with emitter.task_scope(node.name):
+                conn = duckdb_factory()
+                apply_search_path(conn, root / BRONZE_DIR)  # direct execute() callers too
+                register_views(conn, root / BRONZE_DIR, node.name)
+        except Exception as exc:
+            _emit_task_finished(
+                emitter, node.name, mode="source", status="failed",
+                started_at=started_at, error=str(exc),
+            )
+            raise TaskError(f"Source '{node.name}': {exc}") from exc
 
     _emit_task_finished(
         emitter, node.name, mode="source", status="succeeded", started_at=started_at, cached=not changed
@@ -643,9 +660,11 @@ def execute(
                 dirty_names.add(node.name)
             continue
 
-        # SourceNode — table by table; upstream dirtiness is ignored (see helper)
+        # SourceNode — table by table. Upstream dirtiness never rebuilds a
+        # table (see helper), but it passes through: the views it recreates
+        # may sit in a schema an upstream task just rebuilt.
         if isinstance(node, SourceNode):
-            if _execute_source(
+            changed = _execute_source(
                 node,
                 resolved=resolved,
                 state_store=state_store,
@@ -656,34 +675,9 @@ def execute(
                 no_cache=no_cache,
                 groups=group_paths.get(node.name),
                 shared=shared,
-            ):
-                dirty_names.add(node.name)
-            continue
-
-        # SourceViewsNode — metadata only, so it always runs
-        if isinstance(node, SourceViewsNode):
-            groups = group_paths.get(node.name)
-            if duckdb_factory is None:
-                raise TaskError(
-                    f"'{node.name}': kptn.source_views needs a DuckDB connection; "
-                    "add duckdb=(factory, alias) to kptn.config(...)."
-                )
-            started_at = _emit_task_started(emitter, node.name, mode="views", groups=groups)
-            bronze_root = Path(cwd) / BRONZE_DIR
-            try:
-                with emitter.task_scope(node.name):
-                    conn = duckdb_factory()
-                    apply_search_path(conn, bronze_root)  # direct execute() callers too
-                    register_views(conn, bronze_root, node.spec.sources)
-            except Exception as exc:
-                _emit_task_finished(
-                    emitter, node.name, mode="views", status="failed",
-                    started_at=started_at, error=str(exc),
-                )
-                raise TaskError(f"'{node.name}': {exc}") from exc
-            _emit_task_finished(emitter, node.name, mode="views", status="succeeded", started_at=started_at)
-            # Recreating views changes no data, so it never dirties downstream by itself.
-            if upstream_dirty:
+                duckdb_factory=duckdb_factory,
+            )
+            if changed or upstream_dirty:
                 dirty_names.add(node.name)
             continue
 

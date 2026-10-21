@@ -9,7 +9,7 @@ from typing import Any
 import duckdb
 
 from kptn.exceptions import TaskError
-from kptn.sources.read import RAW_SCHEMA
+from kptn.sources.read import schema_name
 
 CHECKS_DIR = Path("checks")
 
@@ -33,7 +33,10 @@ def run_checks(
     root: Path,
     declared_at: tuple[str, int] | None = None,
 ) -> bool:
-    """Run the table's check file against ``raw.<source>_<table>`` on *conn*.
+    """Run the table's check file against ``raw_<source>.<table>`` on *conn*.
+
+    Soda looks tables up in the source's schema, so a check file names the
+    table alone: ``checks for <table>:``.
 
     *declared_at* is where ``kptn.source(...)`` was called; a missing-check
     warning points there rather than into kptn.
@@ -64,7 +67,7 @@ def run_checks(
     scan.set_scan_definition_name(f"{source}_{table}")
     scan.set_data_source_name("duckdb")
     scan.add_duckdb_connection(conn)
-    _scan_in_schema(scan, RAW_SCHEMA)
+    _scan_in_schema(scan, schema_name(source))
     scan.add_sodacl_yaml_file(str(path))
     scan.execute()
     if scan.has_check_fails() or scan.has_error_logs():

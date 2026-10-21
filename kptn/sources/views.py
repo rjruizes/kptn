@@ -1,13 +1,12 @@
-"""Exposing built source tables as ``raw.<source>_<table>`` views."""
+"""Exposing built source tables as ``raw_<source>.<table>`` views."""
 
 from __future__ import annotations
 
 import functools
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Callable
 
-from kptn.sources.read import RAW_SCHEMA, view_name
+from kptn.sources.read import schema_name, view_name
 
 
 def _sql_str(value: str) -> str:
@@ -43,17 +42,32 @@ def with_search_path(factory: Callable[..., Any], bronze_root: Path) -> Callable
     return wrapped
 
 
-def register_views(conn: Any, bronze_root: Path, sources: Iterable[str]) -> list[str]:
-    """Create or replace a view for every built table of *sources*."""
-    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {RAW_SCHEMA}")
+def register_views(conn: Any, bronze_root: Path, source: str) -> list[str]:
+    """Make ``raw_<source>`` hold exactly one view per built table of *source*.
+
+    Views of tables the source no longer has are dropped, whichever run
+    removed their files. The schema is the source's alone, so nothing else
+    in it is a view kptn did not make; other kinds of object are left alone.
+    Returns the views created.
+    """
+    schema = schema_name(source)
+    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+    folder = Path(bronze_root) / source
+    tables = sorted(p.stem for p in folder.glob("*.parquet")) if folder.is_dir() else []
+    # fetchall, not fetchone: a partly fetched result on a shared connection
+    # can wedge a later CHECKPOINT on DuckDB 1.4.
+    existing = conn.execute(
+        "SELECT view_name FROM duckdb_views() "
+        "WHERE database_name = current_database() AND schema_name = ? AND NOT internal",
+        [schema],
+    ).fetchall()
+    for (stale,) in existing:
+        if stale not in tables:
+            conn.execute(f"DROP VIEW {view_name(source, stale)}")
     created: list[str] = []
-    for source in sources:
-        folder = Path(bronze_root) / source
-        if not folder.is_dir():
-            continue
-        for parquet in sorted(folder.glob("*.parquet")):
-            name = view_name(source, parquet.stem)
-            relative = _sql_str(f"{source}/{parquet.name}")
-            conn.execute(f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM read_parquet({relative})")
-            created.append(name)
+    for table in tables:
+        name = view_name(source, table)
+        relative = _sql_str(f"{source}/{table}.parquet")
+        conn.execute(f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM read_parquet({relative})")
+        created.append(name)
     return created

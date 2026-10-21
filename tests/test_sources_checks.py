@@ -14,8 +14,8 @@ from kptn.sources.read import create_table_view
 
 def _conn_with_view() -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect()
-    conn.execute("CREATE SCHEMA raw")
-    conn.execute("CREATE VIEW raw.sales_orders AS SELECT '1' AS orderid, '200' AS amount")
+    conn.execute("CREATE SCHEMA raw_sales")
+    conn.execute("CREATE VIEW raw_sales.orders AS SELECT '1' AS orderid, '200' AS amount")
     return conn
 
 
@@ -36,7 +36,7 @@ def test_missing_check_file_warns_and_returns_false(tmp_path: Path) -> None:
 
 
 def test_check_file_without_soda_is_an_error(tmp_path: Path, monkeypatch) -> None:
-    _write_check(tmp_path, "checks for sales_orders:\n- row_count > 0\n")
+    _write_check(tmp_path, "checks for orders:\n- row_count > 0\n")
     monkeypatch.setitem(sys.modules, "soda", None)
     monkeypatch.setitem(sys.modules, "soda.scan", None)
     with pytest.raises(TaskError, match=r"kptn\[soda\]"):
@@ -47,7 +47,7 @@ def test_passing_checks_return_true(tmp_path: Path) -> None:
     pytest.importorskip("soda.scan")
     _write_check(
         tmp_path,
-        "checks for sales_orders:\n"
+        "checks for orders:\n"
         "- schema:\n"
         "    fail:\n"
         "      when required column missing: [orderid, amount]\n",
@@ -64,7 +64,7 @@ def test_checks_name_columns_in_lowercase_whatever_the_header(tmp_path: Path) ->
     create_table_view(conn, "sales", "orders", [SourceFile(data, data.parent)])
     _write_check(
         tmp_path,
-        "checks for sales_orders:\n"
+        "checks for orders:\n"
         "- schema:\n"
         "    fail:\n"
         "      when required column missing: [orderid, amount]\n"
@@ -77,7 +77,7 @@ def test_failing_checks_raise(tmp_path: Path) -> None:
     pytest.importorskip("soda.scan")
     _write_check(
         tmp_path,
-        "checks for sales_orders:\n"
+        "checks for orders:\n"
         "- schema:\n"
         "    fail:\n"
         "      when required column missing: [orderid, not_there]\n",

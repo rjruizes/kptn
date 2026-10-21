@@ -182,7 +182,7 @@ def test_label_names_the_check_file(tmp_path: Path) -> None:
     root = _project(tmp_path / "w")
     check = root / "checks" / "s" / "a.yml"
     check.parent.mkdir(parents=True)
-    check.write_text("checks for s_a:\n  - row_count > 0\n")
+    check.write_text("checks for a:\n  - row_count > 0\n")
     cache = _shared(tmp_path / "cache")
     plan = _plan(root)
     with patch("kptn.sources.build.run_checks", return_value=True):

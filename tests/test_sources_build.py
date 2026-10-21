@@ -106,7 +106,7 @@ def test_check_file_content_is_part_of_the_input_hash(tmp_path: Path) -> None:
     before = {p.table: p.key for p in _plans(root)}
     check = root / "checks" / "sales" / "refunds.yml"
     check.parent.mkdir(parents=True)
-    check.write_text("checks for sales_refunds:\n- row_count > 0\n")
+    check.write_text("checks for refunds:\n- row_count > 0\n")
     with_check = {p.table: p.key for p in _plans(root)}
     assert with_check["refunds"] != before["refunds"]
     assert with_check["orders"] == before["orders"]

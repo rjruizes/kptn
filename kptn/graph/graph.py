@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Union
 
-from kptn.graph.nodes import TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode, ConfigNode, SourceNode, SourceViewsNode, AnyNode
+from kptn.graph.nodes import TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode, ConfigNode, SourceNode, AnyNode
 from kptn.graph.decorators import SqlTaskSpec, RTaskSpec
 
 
 def _to_task_node(obj: Any) -> AnyNode:
     """Auto-wrap a kptn-tagged handle or node into the correct node type."""
-    if isinstance(obj, (TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode, ConfigNode, SourceNode, SourceViewsNode)):
+    if isinstance(obj, (TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode, ConfigNode, SourceNode)):
         return obj
     if not hasattr(obj, "__kptn__"):
         raise TypeError(
@@ -21,13 +21,11 @@ def _to_task_node(obj: Any) -> AnyNode:
             "before composing with >>."
         )
     # Local import: kptn.sources.spec imports kptn.graph.decorators.
-    from kptn.sources.spec import SourceSpec, SourceViewsSpec
+    from kptn.sources.spec import SourceSpec
 
     spec = obj.__kptn__
     if isinstance(spec, SourceSpec):
         return SourceNode(spec=spec, name=obj.__name__)
-    if isinstance(spec, SourceViewsSpec):
-        return SourceViewsNode(spec=spec, name=obj.__name__)
     if isinstance(spec, SqlTaskSpec):
         return SqlTaskNode(path=spec.path, spec=spec, name=obj.__name__)
     elif isinstance(spec, RTaskSpec):

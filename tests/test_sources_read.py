@@ -26,7 +26,7 @@ def test_csv_values_are_text_with_source_file(tmp_path: Path) -> None:
     f = _file(tmp_path, "Batch1/orders_2024-01-24.csv", "OrderID,Amount\n1,200\n")
     conn = duckdb.connect()
     view = create_table_view(conn, "sales", "orders", [f])
-    assert view == 'raw."sales_orders"'
+    assert view == 'raw_sales."orders"'
     rel = conn.sql(f"SELECT * FROM {view}")
     assert rel.columns == ["orderid", "amount", "_source_file"]
     assert {str(t) for t in rel.types} == {"VARCHAR"}

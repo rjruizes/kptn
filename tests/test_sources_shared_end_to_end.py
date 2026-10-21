@@ -39,12 +39,12 @@ def _pipeline(root: Path) -> tuple[kptn.Pipeline, list[int]]:
 
     @kptn.task(outputs=[])
     def consumer(engine) -> None:
-        seen.append(engine.sql('SELECT count(*) FROM raw."a_t"').fetchone()[0])
+        seen.append(engine.sql('SELECT count(*) FROM raw_a."t"').fetchone()[0])
 
     raw_ingest = kptn.Stage("raw_ingest", kptn.source("a", files="in/a"))
     pipeline = kptn.Pipeline(
         "p",
-        kptn.config(duckdb=(get_engine, "engine")) >> raw_ingest >> kptn.source_views(raw_ingest) >> consumer,
+        kptn.config(duckdb=(get_engine, "engine")) >> raw_ingest >> consumer,
     )
     return pipeline, seen
 

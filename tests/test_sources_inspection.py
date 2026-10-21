@@ -13,7 +13,7 @@ from kptn.runner.events import EventEmitter, EventKind
 def _pipeline():
     a = kptn.source("sales", files="in/sales")
     raw_ingest = kptn.Stage("raw_ingest", a)
-    return kptn.Pipeline("p", raw_ingest >> kptn.source_views(raw_ingest))
+    return kptn.Pipeline("p", raw_ingest)
 
 
 def test_inspection_shows_sources_as_tasks(tmp_path: Path) -> None:
@@ -24,9 +24,6 @@ def test_inspection_shows_sources_as_tasks(tmp_path: Path) -> None:
     assert src.inputs == ("in/sales",)
     assert src.source_path is not None and src.source_path.name == "test_sources_inspection.py"
     assert src.source_line is not None
-    views = by_name["raw_ingest_views"]
-    assert (views.kind, views.executable) == ("views", True)
-    assert views.inputs == ("_bronze/sales/*.parquet",)
 
 
 def test_inspection_marks_the_ingest_steps(tmp_path: Path) -> None:
@@ -36,11 +33,11 @@ def test_inspection_marks_the_ingest_steps(tmp_path: Path) -> None:
     a = kptn.source("sales", files="in/sales")
     raw_ingest = kptn.Stage("raw_ingest", a)
     other = kptn.Stage("silver", transform)
-    pipeline = kptn.Pipeline("p", raw_ingest >> kptn.source_views(raw_ingest) >> other)
+    pipeline = kptn.Pipeline("p", raw_ingest >> other)
 
     inspection = inspect_pipeline(pipeline, KptnConfig(), None, tmp_path)
     ingest = {i.name for i in inspection.items if i.ingest}
-    assert ingest == {"raw_ingest", "sales", "raw_ingest_views"}
+    assert ingest == {"raw_ingest", "sales"}
 
 
 def test_console_prints_source_line() -> None:
@@ -54,7 +51,7 @@ def test_console_prints_source_line() -> None:
 def test_ui_task_kinds_include_sources() -> None:
     from kptn_server.routes.inspect import TASK_KINDS
 
-    assert {"source", "views"} <= TASK_KINDS
+    assert "source" in TASK_KINDS
 
 
 def test_console_source_line_says_one_table() -> None:
@@ -81,8 +78,8 @@ def test_pipeline_outline_lists_steps_with_their_groups(tmp_path: Path) -> None:
     module = kptn.Pipeline("load_module", load)  # ty: ignore[invalid-argument-type]
     pipeline = kptn.Pipeline(
         "p",
-        kptn.parallel(init_database, raw_ingest)
-        >> kptn.source_views(raw_ingest)
+        init_database
+        >> raw_ingest
         >> kptn.Stage("datasets", module)
         >> report,
     )
@@ -91,7 +88,6 @@ def test_pipeline_outline_lists_steps_with_their_groups(tmp_path: Path) -> None:
     assert [(e.name, e.kind, e.groups) for e in outline] == [
         ("init_database", "python", ()),
         ("sales", "source", ("raw_ingest",)),
-        ("raw_ingest_views", "views", ()),
         ("load", "python", ("datasets", "load_module")),
         ("report", "python", ()),
     ]

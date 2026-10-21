@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Callable, Union
 
 if TYPE_CHECKING:
     from kptn.graph.decorators import TaskSpec, SqlTaskSpec, RTaskSpec
-    from kptn.sources.spec import SourceSpec, SourceViewsSpec
+    from kptn.sources.spec import SourceSpec
 
 
 @dataclass
@@ -78,14 +78,8 @@ class SourceNode:
     name: str                   # = the source's name, also its _bronze/ folder
 
 
-@dataclass
-class SourceViewsNode:
-    spec: "SourceViewsSpec"
-    name: str                   # e.g. "raw_ingest_views" for kptn.source_views(Stage("raw_ingest", ...))
-
-
 # Union of all node types present after Epic 1 Stories 1.1–1.7.
 AnyNode = Union[
     TaskNode, SqlTaskNode, RTaskNode, ParallelNode, StageNode, NoopNode, MapNode, PipelineNode, ConfigNode,
-    SourceNode, SourceViewsNode,
+    SourceNode,
 ]

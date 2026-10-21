@@ -110,7 +110,7 @@ DOCS_REJECTION_ADVICE = (
 #: Node kinds that represent a unit of work and therefore have a detail page.
 #: The rest -- pipeline, stage, parallel, noop, config -- are structure, and
 #: render as headings rather than steps.
-TASK_KINDS = frozenset({"python", "sql", "r", "map", "source", "views"})
+TASK_KINDS = frozenset({"python", "sql", "r", "map", "source"})
 
 #: The retained lineage and table-preview endpoints (see the module docstring).
 LINEAGE_PATH = "/lineage-page"

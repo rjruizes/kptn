@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from kptn.graph.nodes import ConfigNode, SourceViewsNode
+from kptn.graph.nodes import ConfigNode, SourceNode
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.loader import ProfileLoader
 from kptn.profiles.resolved import ResolvedGraph
@@ -168,7 +168,7 @@ def run(
 
     duckdb_factory, duckdb_alias = _find_duckdb_factory(pipeline)
     if duckdb_factory is not None and any(
-        isinstance(n, SourceViewsNode) for n in pipeline.nodes
+        isinstance(n, SourceNode) for n in pipeline.nodes
     ):
         # Every connection, including the one tasks receive by alias, must
         # resolve the views' _bronze-relative paths.
