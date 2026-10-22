@@ -221,7 +221,7 @@ def test_the_plan_reads_task_state_from_the_pipelines_database(app, store, clien
 
     assert _actions(html) == {"init_database": "SKIP", "report": "SKIP"}
     assert "Task state read from pipeline.db." in html
-    assert not (project / ".kptn" / "kptn.db").exists(), "the plan made a state file"
+    assert not (project / ".kptn" / "state" / "kptn.db").exists(), "the plan made a state file"
 
 
 def test_without_the_database_the_plan_reads_the_checkpoint_it_restores(

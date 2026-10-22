@@ -179,7 +179,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--db",
         required=True,
         type=Path,
-        help="Path to the UI run store (normally <project>/.kptn/ui.db).",
+        help="Path to the UI run store (normally <project>/.kptn/state/ui.db).",
     )
     parser.add_argument(
         "--run-id",

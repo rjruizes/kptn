@@ -342,7 +342,7 @@ def test_run_wraps_duckdb_factory_with_bronze_search_path() -> None:
 
     conn = factory()
     setting = conn.execute("SELECT current_setting('file_search_path')").fetchall()[0][0]
-    assert str((Path.cwd() / "_bronze").resolve()) in setting.split(",")
+    assert str((Path.cwd() / ".kptn" / "_bronze").resolve()) in setting.split(",")
 
 
 def test_run_leaves_duckdb_factory_alone_without_sources() -> None:

@@ -204,7 +204,7 @@ def test_plan_view_does_not_create_the_projects_state_store(
     project that has never run leaves a database behind -- and, because the
     configured path is relative, possibly not even inside the project.
     """
-    state_db = ui_project / ".kptn" / "kptn.db"
+    state_db = ui_project / ".kptn" / "state" / "kptn.db"
     assert not state_db.exists()
 
     assert client.get("/plan?profile=success").status_code == 200
@@ -226,7 +226,7 @@ def test_plan_view_reads_an_existing_state_store(
     from kptn.state_store.sqlite import SqliteBackend
 
     project = create_app(ui_project).state.project
-    store = SqliteBackend(path=str(ui_project / ".kptn" / "kptn.db"))
+    store = SqliteBackend(path=str(ui_project / ".kptn" / "state" / "kptn.db"))
     for node in project.pipeline.nodes:
         if isinstance(node, TaskNode) and node.name in ("setup_task", "noisy_task"):
             store.write_hash(".kptn/kptn.db", "fixture", node.name, _hash_code(node))

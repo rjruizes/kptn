@@ -80,7 +80,7 @@ def test_second_working_directory_restores_the_first_ones_build(release, monkeyp
     rec = _run(pipeline)
     assert rec.shared("a[t]") == "restored"
     assert seen == [1]  # the view reads through the symlink
-    assert (bob / "_bronze/a/t.parquet").resolve().is_relative_to(cache.resolve())
+    assert (bob / ".kptn/_bronze/a/t.parquet").resolve().is_relative_to(cache.resolve())
 
 
 def test_env_off_builds_locally(release, monkeypatch) -> None:
@@ -91,7 +91,7 @@ def test_env_off_builds_locally(release, monkeypatch) -> None:
     with pytest.warns(UserWarning):
         rec = _run(pipeline)
     assert rec.shared("a[t]") is None and seen == [1]
-    assert not (alice / "_bronze/a/t.parquet").is_symlink()
+    assert not (alice / ".kptn/_bronze/a/t.parquet").is_symlink()
     assert list(cache.iterdir()) == []
 
 
@@ -103,7 +103,7 @@ def test_missing_shared_bronze_builds_locally_and_says_so(release, monkeypatch, 
     with pytest.warns(UserWarning):
         rec = _run(pipeline)
     assert rec.shared("a[t]") is None and seen == [1]
-    assert not (alice / "_bronze/a/t.parquet").is_symlink()
+    assert not (alice / ".kptn/_bronze/a/t.parquet").is_symlink()
     assert not cache.exists()
     assert "[SHARE] off — ../_kptn_bronze does not exist" in capsys.readouterr().out
 
@@ -114,10 +114,10 @@ def test_force_builds_locally_over_a_link(release, monkeypatch) -> None:
     pipeline, _ = _pipeline(alice)
     with pytest.warns(UserWarning):
         _run(pipeline)
-    assert (alice / "_bronze/a/t.parquet").is_symlink()
+    assert (alice / ".kptn/_bronze/a/t.parquet").is_symlink()
     pipeline, seen = _pipeline(alice)
     with pytest.warns(UserWarning):
         rec = _run(pipeline, force=True)
     assert rec.shared("a[t]") is None and seen == [1]
-    assert not (alice / "_bronze/a/t.parquet").is_symlink()
+    assert not (alice / ".kptn/_bronze/a/t.parquet").is_symlink()
     assert len(list((cache / "a" / "t").iterdir())) == 1  # nothing new published

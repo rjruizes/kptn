@@ -20,7 +20,7 @@ class KptnSettings(BaseModel):
     shared_bronze: str | None = None
     #: Where recorded runs keep their logs, one subdirectory per working
     #: directory, relative to the project root. Unset, or not an existing
-    #: directory: ``.kptn/runs``.
+    #: directory: ``.kptn/state/runs``.
     shared_logs: str | None = None
 
 

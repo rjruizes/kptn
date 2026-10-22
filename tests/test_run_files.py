@@ -42,11 +42,11 @@ from kptn_server.run_store import (
 def _store_and_run(tmp_path: Path):
     project = tmp_path / "project"
     project.mkdir()
-    store = RunStore(project / ".kptn" / "ui.db")
+    store = RunStore(project / ".kptn" / "state" / "ui.db")
     record = store.create_run(
         RunRequest(project_root=project, pipeline="two_tasks", profile="dev")
     )
-    return store, record, project.resolve() / ".kptn" / "runs"
+    return store, record, project.resolve() / ".kptn" / "state" / "runs"
 
 
 def _two_tasks(store: RunStore, run_id: str) -> None:
@@ -331,12 +331,12 @@ def test_an_index_reached_through_a_symlink_is_refused(tmp_path: Path) -> None:
 
 def test_a_runs_directory_reached_through_a_symlink_is_refused(tmp_path: Path) -> None:
     root = tmp_path / "project"
-    (root / ".kptn").mkdir(parents=True)
+    (root / ".kptn" / "state").mkdir(parents=True)
     (tmp_path / "elsewhere").mkdir()
-    (root / ".kptn" / "runs").symlink_to(tmp_path / "elsewhere")
+    (root / ".kptn" / "state" / "runs").symlink_to(tmp_path / "elsewhere")
 
     with pytest.raises(RunFileError):
-        run_files.published_runs_dir(root.resolve() / ".kptn" / "runs")
+        run_files.published_runs_dir(root.resolve() / ".kptn" / "state" / "runs")
 
 
 def test_an_oversized_index_is_refused(tmp_path: Path, monkeypatch) -> None:
@@ -431,8 +431,8 @@ SHARED_LOGS_YAML = "settings:\n  shared_logs: ../_kptn_logs\n"
 
 def test_without_shared_logs_runs_stay_in_dot_kptn(tmp_path: Path) -> None:
     project = _workdir(tmp_path / "r7" / "alice_main", None)
-    assert run_files.runs_dir_for(project) == project / ".kptn" / "runs"
-    assert (project / ".kptn" / "runs").is_dir()
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "state" / "runs"
+    assert (project / ".kptn" / "state" / "runs").is_dir()
 
 
 def _shared_logs(release: Path) -> Path:
@@ -466,11 +466,11 @@ def test_shared_logs_modes_whatever_the_umask(tmp_path: Path) -> None:
 
 def test_missing_shared_logs_keeps_runs_in_dot_kptn(tmp_path: Path) -> None:
     project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
-    assert run_files.runs_dir_of(project, "../_kptn_logs") == project / ".kptn" / "runs"
-    assert run_files.runs_dir_for(project) == project / ".kptn" / "runs"
+    assert run_files.runs_dir_of(project, "../_kptn_logs") == project / ".kptn" / "state" / "runs"
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "state" / "runs"
     assert not (tmp_path / "r7" / "_kptn_logs").exists()
     assert run_files.missing_shared_logs(project) == (
-        "[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/runs"
+        "[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/state/runs"
     )
 
 
@@ -483,7 +483,7 @@ def test_nothing_is_reported_when_shared_logs_exist_or_are_unset(tmp_path: Path)
 
 def test_unreadable_kptn_yaml_falls_back_to_dot_kptn(tmp_path: Path) -> None:
     project = _workdir(tmp_path / "r7" / "alice_main", "settings: [unclosed\n")
-    assert run_files.runs_dir_for(project) == project / ".kptn" / "runs"
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "state" / "runs"
 
 
 def test_shared_logs_root_does_not_touch_the_filesystem(tmp_path: Path) -> None:

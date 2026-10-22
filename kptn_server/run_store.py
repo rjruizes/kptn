@@ -2,7 +2,7 @@
 
 A detached worker process appends run lifecycle events here; the FastAPI UI
 reads the same database. All UI state lives on disk under
-``<project_root>/.kptn/ui.db`` and ``<project_root>/.kptn/runs/`` so a run
+``<project_root>/.kptn/state/ui.db`` and ``<project_root>/.kptn/state/runs/`` so a run
 survives a browser, notebook server, or FastAPI restart -- nothing is kept in process
 memory.
 
@@ -1127,7 +1127,7 @@ class RunStore:
     def publish_index(self, project_root: Path | str, *, force: bool = True) -> None:
         """Rewrite the project's ``index.json`` from this database.
 
-        It goes beside the newest run's file -- ``.kptn/runs/`` or the shared
+        It goes beside the newest run's file -- ``.kptn/state/runs/`` or the shared
         logs directory, whichever that run was recorded to -- so a change to
         ``settings.shared_logs`` takes effect from the next run, and this,
         called every few seconds, never rereads ``kptn.yaml``. A project with

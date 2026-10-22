@@ -319,7 +319,7 @@ def test_a_run_survives_the_server_that_started_it(
         #    restart below prove nothing at all. The UI's own history lives in
         #    `.kptn/ui.db` and is deliberately *not* touched here; the history
         #    assertions further down are what show the two are independent.
-        task_state_db = ui_project / ".kptn" / "kptn.db"
+        task_state_db = ui_project / ".kptn" / "state" / "kptn.db"
         assert task_state_db.is_file(), "the finished run recorded no task state"
         task_state_db.unlink()
 

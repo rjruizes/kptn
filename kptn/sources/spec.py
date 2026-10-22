@@ -1,7 +1,7 @@
 """``kptn.source``: a declaration, not execution.
 
 A source names raw input files. kptn reads them by convention into one
-text-only parquet file per table under ``_bronze/<source>/`` and serves each
+text-only parquet file per table under ``.kptn/_bronze/<source>/`` and serves each
 as the view ``raw_<source>.<table>``; see ``kptn.sources.build`` for the work
 and the executor for when it runs.
 """
@@ -80,7 +80,7 @@ def source(
     table: TableArg | None = None,
     read: ReadFn | None = None,
 ) -> SourceHandle:
-    """Declare raw input files that kptn reads into ``_bronze/<name>/``.
+    """Declare raw input files that kptn reads into ``.kptn/_bronze/<name>/``.
 
     Only *name* and *files* are required; everything else follows conventions.
     Files are read by extension (CSV, TSV, JSON, Parquet), every value is stored
@@ -96,7 +96,7 @@ def source(
     tasks that read them with it.
 
     Args:
-        name: The source's name: its node name, its folder under ``_bronze/``
+        name: The source's name: its node name, its folder under ``.kptn/_bronze/``
             and its view prefix. Lowercase letters, digits and underscores.
         files: Files, directories, or globs, or a callable receiving config
             values by name (like a task's parameters) and returning them. A
@@ -126,6 +126,6 @@ def source(
         table=table,
         read=read,
         declared_at=(caller.f_code.co_filename, caller.f_lineno),
-        description=f"Reads raw files into _bronze/{name}/ and serves them as raw_{name}.<table>.",
+        description=f"Reads raw files into .kptn/_bronze/{name}/ and serves them as raw_{name}.<table>.",
     )
     return SourceHandle(name, spec)

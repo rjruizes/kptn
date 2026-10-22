@@ -58,6 +58,7 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 import kptn
+from kptn.layout import migrate_layout
 from kptn_server.assets import STATIC_DIR, VersionedStaticFiles, asset_version
 from kptn_server.context import RequestUI, RequestUIMiddleware
 from kptn_server.origin import enforce_same_origin
@@ -477,6 +478,8 @@ def create_multi_app(
         assert entry.database_path is not None  # every live entry has one
         store = app.state.stores.get(entry.slug)
         if store is None:
+            for notice in migrate_layout(entry.root):
+                print(notice, flush=True)
             store = RunStore(entry.database_path)
             store.ensure_index(entry.root)
             app.state.stores[entry.slug] = store

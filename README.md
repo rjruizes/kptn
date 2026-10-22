@@ -274,7 +274,7 @@ pipeline = kptn.Pipeline(
 | Tables | One per file stem, unless `table=` says otherwise. Files feeding one table are combined by column name. |
 | Provenance | A `_source_file` column, such as `sales/orders_2024-01-24.csv`. |
 | Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written, naming the table alone (`checks for orders:`) and its columns in lowercase. A failure stops the run. |
-| Storage | `_bronze/<source>/<table>.parquet`. |
+| Storage | `.kptn/_bronze/<source>/<table>.parquet`. |
 | Views | `raw_<source>.<table>`, such as `raw_sales.orders`: one schema per source, created by the source itself on every run, cached or not, when `kptn.config` names a DuckDB connection. Views of tables the source no longer has are dropped. |
 
 Each table is cached on its own files, check file and the source's code. A change upstream, such as a rebuilt schema, does not re-read unchanged files, but it still reruns what comes after the source. A table that is built or restored reruns only what comes after its source, so keep each source in the branch that reads it rather than at the top of the pipeline. Keep it there for profiles too: a source a profile leaves out does not run, so after a schema rebuild its views are gone, and the tasks that read them must be left out with it.
@@ -290,7 +290,7 @@ settings:
 
 kptn shares only through a directory that exists, and never creates it. One committed `kptn.yaml` therefore serves the server, where the directory was set up, and every laptop, where it never is and each working directory builds its own tables. A run that finds the setting but not the directory says so: `[SHARE] off — ../_bronze does not exist, so tables are built here`. To share between checkouts on a laptop, `mkdir ../_bronze`.
 
-A table built in one working directory is published there under a key made from its files' paths, sizes and modification times, its check file, the source's code and kptn's reading conventions. Any working directory that computes the same key links to it instead of reading the files again: `_bronze/<source>/<table>.parquet` becomes a symlink into the shared bronze. A restored table counts as a change, so what reads it reruns.
+A table built in one working directory is published there under a key made from its files' paths, sizes and modification times, its check file, the source's code and kptn's reading conventions. Any working directory that computes the same key links to it instead of reading the files again: `.kptn/_bronze/<source>/<table>.parquet` becomes a symlink into the shared bronze. A restored table counts as a change, so what reads it reruns.
 
 The console says which happened: `[RESTORE] … — from shared bronze`, or `[SHARE] … — published` after a build (`— linked to an identical build` when another run published the same key first). `kptn plan` and the UI's plan page show "in shared bronze" for a table the next run would restore.
 
@@ -315,16 +315,16 @@ kptn creates everything inside it with modes `2775` (directories) and `0664` (fi
 
 ### Shared logs
 
-A working directory's run history normally lives in its `.kptn/runs/`, and goes when the directory is deleted. To keep it, name a shared logs directory in `kptn.yaml`, relative to the project, and create it where you want the logs kept:
+A working directory's run history normally lives in its `.kptn/state/runs/`, and goes when the directory is deleted. To keep it, name a shared logs directory in `kptn.yaml`, relative to the project, and create it where you want the logs kept:
 
 ```yaml
 settings:
   shared_logs: ../_kptn_logs
 ```
 
-As with the shared bronze, kptn uses the directory only where it exists and never creates it, so a laptop without one keeps its runs in `.kptn/runs/`. A recorded run that finds the setting but not the directory says so in its log: `[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/runs`.
+As with the shared bronze, kptn uses the directory only where it exists and never creates it, so a laptop without one keeps its runs in `.kptn/state/runs/`. A recorded run that finds the setting but not the directory says so in its log: `[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/state/runs`.
 
-Recorded runs, from `kptn run` or started in `kptn ui`, then write their `<run_id>.jsonl` and the project's `index.json` to `../_kptn_logs/<working directory name>/` from the start. Delete `r7/alice_main/` and its history stays in `r7/_kptn_logs/alice_main/`. Only the logs move: `.kptn/ui.db` and kptn's state store stay in the working directory and go with it. `kptn run --no-record` and `kptn.run()` from a notebook keep no log, with or without the setting.
+Recorded runs, from `kptn run` or started in `kptn ui`, then write their `<run_id>.jsonl` and the project's `index.json` to `../_kptn_logs/<working directory name>/` from the start. Delete `r7/alice_main/` and its history stays in `r7/_kptn_logs/alice_main/`. Only the logs move: `.kptn/state/ui.db` and kptn's state store stay in the working directory and go with it. `kptn run --no-record` and `kptn.run()` from a notebook keep no log, with or without the setting.
 
 Keep one logs directory per release, beside the working directories: a subdirectory is named by its working directory alone, so two releases sharing one would mix the histories of same-named directories.
 
@@ -334,7 +334,7 @@ A directory recreated under the same name keeps one history. Its new `ui.db` num
 
 | To | |
 |---|---|
-| Bring along runs recorded before the setting | `cp -p .kptn/runs/*.jsonl ../_kptn_logs/<name>/` — until then, colleagues see them listed without a log |
+| Bring along runs recorded before the setting | `cp -p .kptn/state/runs/*.jsonl ../_kptn_logs/<name>/` — until then, colleagues see them listed without a log |
 | Forget a directory's history | Delete `_kptn_logs/<name>/` |
 
 **Several accounts on one share.** Use the pipeline group from the shared bronze and create the directory:
@@ -367,6 +367,19 @@ To preview what would run without executing:
 kptn plan
 ```
 
+### What kptn keeps in a working directory
+
+Everything kptn makes goes in `.kptn/`, in two directories:
+
+| Path | Contents |
+|------|----------|
+| `.kptn/state/` | Bookkeeping: the task-state database (`kptn.db`, unless `settings.db_path` names another), the UI's run history (`ui.db`) and its run files (`runs/`) |
+| `.kptn/_bronze/` | Built source tables, `<source>/<table>.parquet` |
+
+Deleting `.kptn/` starts the working directory over: every task and table rebuilds on the next run, and the run history goes with it.
+
+Earlier versions kept the bookkeeping loose in `.kptn/` and the tables in `_bronze/` at the top of the working directory. The first `kptn run`, `kptn plan`, `kptn.run()` or `kptn ui` moves them, prints a `[LAYOUT] moved …` line for each, and keeps every task's cache. Where a new copy already exists, the old one is left in place and each run says so: `[LAYOUT] _bronze/ is no longer used: kptn uses .kptn/_bronze/. Delete _bronze/.` A `_bronze/` line in `.gitignore` can go: `.kptn/` covers it.
+
 ---
 
 ## API Reference
@@ -379,7 +392,7 @@ kptn plan
 | `kptn.sql_task(path, outputs, optional=None, duckdb_checkpoint=False, requires=None)` | Register a SQL file as a task |
 | `kptn.r_task(path, outputs, compute=None, optional=None, duckdb_checkpoint=False, requires=None)` | Register an R script as a task |
 | `kptn.noop()` | Placeholder / synchronization node |
-| `kptn.source(name, files, *, table=None, read=None)` | Read raw files into `_bronze/<name>/`, one text-only parquet per table, served as `raw_<name>.<table>` views |
+| `kptn.source(name, files, *, table=None, read=None)` | Read raw files into `.kptn/_bronze/<name>/`, one text-only parquet per table, served as `raw_<name>.<table>` views |
 
 ### Graph Composition
 
@@ -459,18 +472,18 @@ Two paths inside the project, and nothing else:
 
 | Path | Contents |
 |------|----------|
-| `.kptn/ui.db` | Run history: one row per run, the run lock, and an index of every event |
-| `.kptn/runs/<run_id>.jsonl` | Every event of the run, captured output included, one JSON object per line |
-| `.kptn/runs/index.json` | A summary of the latest 50 runs, rewritten as runs start, progress, and end |
+| `.kptn/state/ui.db` | Run history: one row per run, the run lock, and an index of every event |
+| `.kptn/state/runs/<run_id>.jsonl` | Every event of the run, captured output included, one JSON object per line |
+| `.kptn/state/runs/index.json` | A summary of the latest 50 runs, rewritten as runs start, progress, and end |
 
 The `.jsonl` file *is* the run's log: the console reads output from it, and the
 log download is rendered from it. Runs recorded by an earlier kptn have a
-`.kptn/runs/<run_id>.log` of raw output instead, and are still shown.
+`.kptn/state/runs/<run_id>.log` of raw output instead, and are still shown.
 
 All of it is inside the project on purpose, so run history travels with a checkout
 and is removed by deleting `.kptn/` — unless `settings.shared_logs` moves the
-run files out, so that they outlive the checkout (see [Shared logs](#shared-logs)). `.kptn/ui.db` is separate from kptn's own
-task-state database (`.kptn/kptn.db` by default): clearing UI history never
+run files out, so that they outlive the checkout (see [Shared logs](#shared-logs)). `.kptn/state/ui.db` is separate from kptn's own
+task-state database (`.kptn/state/kptn.db` by default): clearing UI history never
 invalidates the cache, and `kptn run --force` never erases history.
 
 ### Terminal runs are recorded too
@@ -478,7 +491,7 @@ invalidates the cache, and `kptn run --force` never erases history.
 `kptn run` records its run in the same history, so `kptn ui` lists it and
 serves its log exactly as it does for a run it started. The run happens in your
 terminal process as before, with its output on your terminal; the same output
-is also written to `.kptn/runs/<run_id>.jsonl`. Stopping it from the UI ends it as
+is also written to `.kptn/state/runs/<run_id>.jsonl`. Stopping it from the UI ends it as
 Ctrl-C does, and either way it is recorded as stopped. Pass `--no-record` to leave a run out of the
 history. Output a task writes straight to a file descriptor (a subprocess
 inheriting it, a C extension) reaches the terminal but not the log.
@@ -490,14 +503,14 @@ UI is refused with a 409 that names the run holding the lock; `kptn run` exits
 with an error that names it. A run whose process was killed releases the lock
 once its heartbeat is 15 seconds old.
 
-The lock lives in `.kptn/ui.db`. `kptn run --no-record` knows nothing about it
+The lock lives in `.kptn/state/ui.db`. `kptn run --no-record` knows nothing about it
 — it neither takes the lock nor is blocked by one — so it can overlap a
 recorded run and write the same task state.
 
 ### The run survives the server
 
 A run is a **detached child process**, not a request handler. It is launched
-into its own session and writes to `.kptn/ui.db` and its run file directly, so
+into its own session and writes to `.kptn/state/ui.db` and its run file directly, so
 the run keeps going when you:
 
 - close the browser tab, or navigate away, or lose the SSE connection
@@ -584,9 +597,9 @@ since nothing else can show until a project is chosen. Yours open in full, at
 their run history, each run's console (live while it runs), and its log
 download.
 
-Those pages read only `.kptn/runs/index.json` and the runs' `.jsonl` files
+Those pages read only `.kptn/state/runs/index.json` and the runs' `.jsonl` files
 (from the project's shared logs directory, when it sets one).
-They never open another person's `.kptn/ui.db`: each person's server runs in
+They never open another person's `.kptn/state/ui.db`: each person's server runs in
 its own pod, and SQLite's WAL mode is not safe to share between machines over
 a network filesystem. Nor do they import another person's pipeline, so there
 is no Plan, lineage, or walkthrough for their projects, and nothing that

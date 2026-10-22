@@ -179,8 +179,8 @@ def test_state_paths_are_under_dot_kptn(tmp_path: Path) -> None:
     registry = ProjectRegistry(tmp_path, USER)
     (entry,) = registry.scan()
 
-    assert entry.database_path == workdir.resolve() / ".kptn" / "ui.db"
-    assert entry.run_log_dir == workdir.resolve() / ".kptn" / "runs"
+    assert entry.database_path == workdir.resolve() / ".kptn" / "state" / "ui.db"
+    assert entry.run_log_dir == workdir.resolve() / ".kptn" / "state" / "runs"
 
 
 @pytest.mark.parametrize("slug", ["nope", "..", "../..", "r1/rruizesparza_main", "/etc"])
@@ -271,7 +271,7 @@ def test_missing_shared_logs_leave_runs_in_dot_kptn(tmp_path: Path) -> None:
 
     (entry,) = ProjectRegistry(tmp_path, USER).scan()
 
-    assert entry.run_log_dir == workdir.resolve() / ".kptn" / "runs"
+    assert entry.run_log_dir == workdir.resolve() / ".kptn" / "state" / "runs"
     assert entry.run_log_error is None
 
 

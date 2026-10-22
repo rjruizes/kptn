@@ -21,8 +21,10 @@ path and locks on ``Path(root).resolve()``. A context holding an unresolved
 root would let ``project`` and ``project/../project`` look like two different
 projects, defeating that lock, so the root is resolved here once and reused.
 
-*State stays under ``.kptn/``.* UI state is exactly ``.kptn/ui.db`` (run
-history) and ``.kptn/runs/`` (captured worker output). Nothing about the UI
+*State stays under ``.kptn/state/``.* UI state is exactly ``.kptn/state/ui.db``
+(run history) and ``.kptn/state/runs/`` (captured worker output). Loading a
+project first moves an earlier kptn's ``.kptn/ui.db`` and ``.kptn/runs/`` there
+(:func:`kptn.layout.migrate_layout`). Nothing about the UI
 writes anywhere else in the project. The one exception is outside it: with
 ``settings.shared_logs`` set, run files go to the shared logs directory
 instead, so that they outlive the working directory.
@@ -41,6 +43,7 @@ from pathlib import Path
 from kptn.exceptions import KptnError, ProfileError, ProjectConfigError
 from kptn.graph.pipeline import Pipeline
 from kptn.graph.requires import gate_disjunctive
+from kptn.layout import DEFAULT_DB_PATH, DEFAULT_STORAGE_KEY, UI_DATABASE, migrate_layout
 from kptn.profiles.loader import ProfileLoader
 from kptn.profiles.resolved import ResolvedGraph
 from kptn.profiles.resolver import ProfileResolver
@@ -49,7 +52,7 @@ from kptn.project import load_pipeline
 from kptn_server.run_files import LOCAL_RUNS_DIR, runs_dir_of
 
 #: Project-relative location of the durable run store.
-UI_DATABASE_RELATIVE_PATH = Path(".kptn") / "ui.db"
+UI_DATABASE_RELATIVE_PATH = UI_DATABASE
 
 #: Project-relative directory holding one captured log per run, unless
 #: ``settings.shared_logs`` moves them (see :func:`kptn_server.run_files.runs_dir_for`).
@@ -116,6 +119,9 @@ class ProjectContext:
                 "[tool.kptn] pipeline entry."
             )
 
+        for notice in migrate_layout(canonical_root):
+            print(notice, flush=True)
+
         try:
             pipeline = load_pipeline(canonical_root)
         except ProjectConfigError as exc:
@@ -161,9 +167,10 @@ class ProjectContext:
         )
 
 
-#: Where ``kptn`` keeps task state when ``kptn.yaml`` names no ``db_path``.
-#: Mirrors :func:`kptn.state_store.factory.init_state_store`'s own default.
-DEFAULT_STATE_DB_PATH = ".kptn/kptn.db"
+#: Where ``kptn`` keeps task state when ``kptn.yaml`` names no ``db_path``,
+#: and the key it stores that state under.
+DEFAULT_STATE_DB_PATH = DEFAULT_DB_PATH
+DEFAULT_STATE_STORAGE_KEY = DEFAULT_STORAGE_KEY
 
 
 def resolve_graph(project: ProjectContext, profile: str | None) -> ResolvedGraph:
@@ -173,7 +180,8 @@ def resolve_graph(project: ProjectContext, profile: str | None) -> ResolvedGraph
     profile resolver when a profile is named, take the pipeline as-is when it
     is not, and gate disjunctive ``any_of`` requirements either way. The
     ``storage_key`` stays the *configured* (usually relative) ``db_path``
-    string, because that is the key the CLI wrote its hashes under. Shared by
+    string, or :data:`DEFAULT_STATE_STORAGE_KEY` without one, because that
+    is the key the CLI wrote its hashes under. Shared by
     the plan page and the sidebar's state card.
     """
     if profile is not None:
@@ -182,7 +190,7 @@ def resolve_graph(project: ProjectContext, profile: str | None) -> ResolvedGraph
         resolved = ResolvedGraph(
             graph=project.pipeline,
             pipeline=project.pipeline.name,
-            storage_key=project.config.settings.db_path or DEFAULT_STATE_DB_PATH,
+            storage_key=project.config.settings.db_path or DEFAULT_STATE_STORAGE_KEY,
         )
     return ResolvedGraph(
         graph=gate_disjunctive(resolved.graph),
@@ -195,6 +203,7 @@ def resolve_graph(project: ProjectContext, profile: str | None) -> ResolvedGraph
 
 __all__ = [
     "DEFAULT_STATE_DB_PATH",
+    "DEFAULT_STATE_STORAGE_KEY",
     "PROFILE_CONFIG_FILENAME",
     "RUN_LOG_RELATIVE_DIR",
     "UI_DATABASE_RELATIVE_PATH",

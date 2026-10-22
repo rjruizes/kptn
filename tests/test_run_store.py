@@ -39,7 +39,7 @@ def request(project_root: Path, **overrides: object) -> RunRequest:
 
 
 def test_create_run_persists_after_reopen(tmp_path: Path) -> None:
-    db = tmp_path / ".kptn" / "ui.db"
+    db = tmp_path / ".kptn" / "state" / "ui.db"
     first = RunStore(db)
     run = first.create_run(request(tmp_path))
     second = RunStore(db)
@@ -480,7 +480,7 @@ def test_append_event_accepts_mappingproxy_payload(tmp_path: Path) -> None:
 
 
 def test_concurrent_first_creation_does_not_raise(tmp_path: Path) -> None:
-    db_path = tmp_path / ".kptn" / "ui.db"
+    db_path = tmp_path / ".kptn" / "state" / "ui.db"
     errors: list[BaseException] = []
     barrier = threading.Barrier(2)
 

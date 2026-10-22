@@ -198,7 +198,7 @@ def seeded_store(ui_project: Path) -> RunRecord:
     This is what makes the durability guarantee testable: the run exists on
     disk before any application object does, and survives every one of them.
     """
-    store = RunStore(ui_project / ".kptn" / "ui.db")
+    store = RunStore(ui_project / ".kptn" / "state" / "ui.db")
     return _seed_run(store, ui_project)
 
 

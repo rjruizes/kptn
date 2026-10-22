@@ -43,10 +43,9 @@ from kptn.exceptions import ProfileError
 from kptn.profiles.loader import ProfileLoader
 from kptn_server.project import (
     PROFILE_CONFIG_FILENAME,
-    RUN_LOG_RELATIVE_DIR,
     UI_DATABASE_RELATIVE_PATH,
 )
-from kptn_server.run_files import INDEX_FILENAME, runs_dir_of
+from kptn_server.run_files import INDEX_FILENAME, local_runs_dir, runs_dir_of
 
 _MANIFEST_FILENAME = "pyproject.toml"
 
@@ -103,7 +102,7 @@ class ProjectEntry:
     pipeline is ever imported.
 
     ``run_log_dir`` is where the project's runs publish their files:
-    ``.kptn/runs``, or its ``settings.shared_logs`` directory. A shared one
+    ``.kptn/state/runs``, or its ``settings.shared_logs`` directory. A shared one
     outside the projects root is never read -- it is named by somebody
     else's ``kptn.yaml`` and could point anywhere the reader can see -- and
     ``run_log_error`` then says why.
@@ -252,7 +251,7 @@ class ProjectRegistry:
                 entry.run_log_dir.parent
                 for entry in live
                 if entry.run_log_error is None
-                and entry.run_log_dir != entry.root / RUN_LOG_RELATIVE_DIR
+                and entry.run_log_dir != local_runs_dir(entry.root)
             }
         )
         removed: dict[str, ProjectEntry] = {}

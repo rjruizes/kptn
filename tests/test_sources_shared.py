@@ -280,7 +280,7 @@ def test_link_replaces_a_file_or_link_atomically(tmp_path: Path) -> None:
     a, b = tmp_path / "a.parquet", tmp_path / "b.parquet"
     a.write_text("a")
     b.write_text("b")
-    parquet = tmp_path / "_bronze" / "s" / "t.parquet"
+    parquet = tmp_path / ".kptn" / "_bronze" / "s" / "t.parquet"
     parquet.parent.mkdir(parents=True)
     parquet.write_text("local")
     link(parquet, a)

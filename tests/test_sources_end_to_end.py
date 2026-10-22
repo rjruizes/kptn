@@ -74,7 +74,7 @@ def test_first_run_builds_and_consumer_reads_views(project) -> None:
     root, pipeline, seen = project
     with pytest.warns(UserWarning):
         rec = _run(pipeline)
-    assert sorted(p.name for p in (root / "_bronze" / "a").iterdir()) == ["t.parquet", "u.parquet"]
+    assert sorted(p.name for p in (root / ".kptn" / "_bronze" / "a").iterdir()) == ["t.parquet", "u.parquet"]
     assert seen == [1]
     assert "consumer" in rec.names(EventKind.TASK_STARTED)
 
@@ -86,6 +86,20 @@ def test_second_run_is_fully_cached(project) -> None:
     rec = _run(pipeline)
     assert set(rec.names(EventKind.TASK_SKIPPED)) >= {"a[t]", "a[u]", "b[v]", "init_database", "consumer"}
     assert seen == [1]
+
+
+def test_tables_built_by_an_earlier_layout_stay_cached(project) -> None:
+    root, pipeline, seen = project
+    with pytest.warns(UserWarning):
+        _run(pipeline)
+    (root / ".kptn" / "_bronze").rename(root / "_bronze")  # where an earlier kptn built them
+
+    rec = _run(pipeline)
+
+    assert set(rec.names(EventKind.TASK_SKIPPED)) >= {"a[t]", "a[u]", "b[v]", "init_database", "consumer"}
+    assert seen == [1]
+    assert (root / ".kptn" / "_bronze" / "a" / "t.parquet").exists()
+    assert not (root / "_bronze").exists()
 
 
 def test_schema_change_leaves_sources_cached(project) -> None:
@@ -132,7 +146,7 @@ def test_failing_check_stops_the_run_and_keeps_old_data(project) -> None:
     root, pipeline, _ = project
     with pytest.warns(UserWarning):
         _run(pipeline)
-    before = (root / "_bronze" / "a" / "t.parquet").read_bytes()
+    before = (root / ".kptn" / "_bronze" / "a" / "t.parquet").read_bytes()
     _write(
         root,
         "checks/a/t.yml",
@@ -140,4 +154,4 @@ def test_failing_check_stops_the_run_and_keeps_old_data(project) -> None:
     )
     with pytest.raises(TaskError, match="a.t"):
         _run(pipeline)
-    assert (root / "_bronze" / "a" / "t.parquet").read_bytes() == before
+    assert (root / ".kptn" / "_bronze" / "a" / "t.parquet").read_bytes() == before

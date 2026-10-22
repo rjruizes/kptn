@@ -3,10 +3,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from kptn.exceptions import StateStoreError
+from kptn.layout import DEFAULT_DB_PATH
 
 
 class SqliteBackend:
-    def __init__(self, path: str = ".kptn/kptn.db") -> None:
+    def __init__(self, path: str = DEFAULT_DB_PATH) -> None:
         try:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(path)

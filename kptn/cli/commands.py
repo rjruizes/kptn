@@ -13,6 +13,7 @@ import typer
 import kptn
 from kptn.exceptions import ProfileError, ProjectConfigError
 from kptn.graph.pipeline import Pipeline
+from kptn.layout import migrate_layout
 from kptn.project import load_pipeline
 from kptn.runner.api import resolve_pipeline
 from kptn.runner.api import run as _run_pipeline
@@ -52,6 +53,9 @@ def run(
         # process or not, so neither RunRequest nor kptn.run needs a field.
         os.environ[SHARED_BRONZE_ENV] = "off"
     project_root = Path.cwd()
+    # Before the run store opens .kptn/state/ui.db.
+    for notice in migrate_layout(project_root):
+        typer.echo(notice)
     try:
         pipeline = load_pipeline(project_root)
     except ProjectConfigError as e:
@@ -79,7 +83,7 @@ def _run_recorded(
     """Run *pipeline* in this process, recorded as a UI-started run would be.
 
     The run, its events, and its captured output go to the project's run store
-    (``.kptn/ui.db`` and ``.kptn/runs/<run_id>.jsonl``) through the UI worker's
+    (``.kptn/state/ui.db`` and ``.kptn/state/runs/<run_id>.jsonl``) through the UI worker's
     own :func:`~kptn_server.worker.execute_run`, so ``kptn ui`` lists the run
     and serves its log like any other. Output still reaches the terminal.
 

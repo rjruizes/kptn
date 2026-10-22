@@ -33,7 +33,7 @@ def _logs(tmp_path: Path, name: str = "alice_main") -> Path:
 
 
 def _store(project: Path) -> RunStore:
-    return RunStore(project / ".kptn" / "ui.db")
+    return RunStore(project / ".kptn" / "state" / "ui.db")
 
 
 def _finished_run(store: RunStore, project: Path) -> RunRecord:
@@ -58,7 +58,7 @@ def test_run_file_and_index_go_to_shared_logs(tmp_path: Path) -> None:
     assert stat.S_IMODE(record.log_path.stat().st_mode) == LOG_FILE_MODE
     assert stat.S_IMODE((logs / INDEX_FILENAME).stat().st_mode) == LOG_FILE_MODE
     assert [run.run_id for run in read_index(logs)] == [record.run_id]
-    assert not (project / ".kptn" / "runs").exists()
+    assert not (project / ".kptn" / "state" / "runs").exists()
 
 
 def test_logs_survive_deleting_the_working_directory(tmp_path: Path) -> None:
@@ -76,7 +76,7 @@ def test_logs_survive_deleting_the_working_directory(tmp_path: Path) -> None:
 def test_without_the_setting_nothing_moves(tmp_path: Path) -> None:
     project = _project(tmp_path, yaml=None)
     record = _store(project).create_run(RunRequest(project_root=project, pipeline="p"))
-    assert record.log_path.parent == project.resolve() / ".kptn" / "runs"
+    assert record.log_path.parent == project.resolve() / ".kptn" / "state" / "runs"
     assert not (tmp_path / "r7" / "_kptn_logs").exists()
 
 
@@ -88,7 +88,7 @@ def test_the_index_follows_the_newest_run_after_the_setting_changes(tmp_path: Pa
     (tmp_path / "r7" / "_kptn_logs").mkdir()
     after = _finished_run(store, project)
 
-    assert before.log_path.parent == project.resolve() / ".kptn" / "runs"
+    assert before.log_path.parent == project.resolve() / ".kptn" / "state" / "runs"
     assert [run.run_id for run in read_index(_logs(tmp_path))] == [after.run_id, before.run_id]
 
 

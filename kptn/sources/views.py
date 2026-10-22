@@ -16,7 +16,7 @@ def _sql_str(value: str) -> str:
 def apply_search_path(conn: Any, bronze_root: Path) -> None:
     """Add *bronze_root* to the connection's ``file_search_path``, once.
 
-    Views store paths relative to ``_bronze/``; DuckDB resolves them through
+    Views store paths relative to ``.kptn/_bronze/``; DuckDB resolves them through
     this per-connection setting. Existing entries are kept, and paths relative
     to the working directory still resolve.
     """

@@ -137,8 +137,8 @@ def test_project_context_reports_every_declared_profile(ui_project: Path) -> Non
 def test_project_context_keeps_ui_state_under_dot_kptn(ui_project: Path) -> None:
     context = ProjectContext.load(ui_project)
 
-    assert context.database_path == ui_project / ".kptn" / "ui.db"
-    assert context.run_log_dir == ui_project / ".kptn" / "runs"
+    assert context.database_path == ui_project / ".kptn" / "state" / "ui.db"
+    assert context.run_log_dir == ui_project / ".kptn" / "state" / "runs"
 
 
 def test_project_context_canonicalizes_the_root(ui_project: Path) -> None:
@@ -267,7 +267,7 @@ def test_project_context_allows_a_project_with_no_profile_file(
 def test_app_exposes_its_store_and_supervisor(ui_project: Path) -> None:
     app = create_app(ui_project)
 
-    assert app.state.store.path == ui_project / ".kptn" / "ui.db"
+    assert app.state.store.path == ui_project / ".kptn" / "state" / "ui.db"
     assert app.state.project.root == ui_project.resolve()
     assert isinstance(app.state.processes, RunProcessManager)
 

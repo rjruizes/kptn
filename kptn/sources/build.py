@@ -15,6 +15,7 @@ import duckdb
 
 from kptn.change_detector.hasher import hash_file, hash_task_source
 from kptn.exceptions import HashError
+from kptn.layout import BRONZE_DIR
 from kptn.sources.checks import check_path, run_checks
 from kptn.sources.files import SourceFile, group_by_table, resolve_files
 from kptn.sources.read import create_table_view
@@ -23,9 +24,6 @@ from kptn.sources.spec import SourceSpec
 #: Bumped whenever a reading convention changes what a source writes, so every
 #: table rebuilds. The pipeline's code hash cannot see kptn's own conventions.
 SOURCE_FORMAT_VERSION = "2"
-
-#: Where built tables live, relative to the working directory.
-BRONZE_DIR = Path("_bronze")
 
 #: Metadata lookups on a network share wait on round trips, not the CPU, so
 #: they overlap well. 17,000 files at ~2 ms each is 30+ s one at a time.
@@ -164,7 +162,7 @@ def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path, dest: Path | N
 
 
 def remove_stale_tables(source: str, tables: set[str], *, root: Path) -> list[Path]:
-    """Delete ``_bronze/<source>/*.parquet`` files for tables no longer fed."""
+    """Delete ``.kptn/_bronze/<source>/*.parquet`` files for tables no longer fed."""
     folder = root / BRONZE_DIR / source
     removed: list[Path] = []
     if folder.is_dir():

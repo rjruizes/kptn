@@ -75,7 +75,7 @@ class ConfigNode:
 @dataclass
 class SourceNode:
     spec: "SourceSpec"
-    name: str                   # = the source's name, also its _bronze/ folder
+    name: str                   # = the source's name, also its .kptn/_bronze/ folder
 
 
 # Union of all node types present after Epic 1 Stories 1.1–1.7.

@@ -1,5 +1,6 @@
 from typing import Any, Callable
 
+from kptn.layout import DEFAULT_DB_PATH
 from kptn.state_store.protocol import StateStoreBackend
 from kptn.state_store.sqlite import SqliteBackend
 
@@ -22,7 +23,7 @@ def init_state_store(
         return DuckDbBackend(factory=duckdb_factory)
 
     db = (getattr(settings, "db", "sqlite") or "sqlite").lower()
-    path = getattr(settings, "db_path", None) or ".kptn/kptn.db"
+    path = getattr(settings, "db_path", None) or DEFAULT_DB_PATH
 
     if db == "sqlite":
         return SqliteBackend(path=path)

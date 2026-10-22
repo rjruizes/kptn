@@ -143,7 +143,7 @@ def _downstream_of_source(tmp_path: Path, store: FakeStateStore) -> ResolvedGrap
 def test_a_table_to_build_makes_downstream_run(tmp_path: Path) -> None:
     store = FakeStateStore()
     resolved = _downstream_of_source(tmp_path, store)
-    for parquet in (tmp_path / "_bronze").rglob("*.parquet"):
+    for parquet in (tmp_path / ".kptn" / "_bronze").rglob("*.parquet"):
         parquet.unlink()
 
     entries = build_plan(resolved, store, config_values={}, root=tmp_path)

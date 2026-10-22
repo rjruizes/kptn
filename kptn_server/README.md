@@ -32,8 +32,8 @@ port-forwarding recipe if you need to reach it from another machine.
 |------|-----------|
 | `app.py` | The application factory, and the reconciliation loop that settles runs whose worker is gone |
 | `project.py` | `ProjectContext`: which project, which pipeline, which profiles, where its UI state lives |
-| `run_store.py` | The SQLite run store (`.kptn/ui.db`), created by replaying `migrations/`; also the one writer of the run files |
-| `run_files.py` | The files other people's servers read: `.kptn/runs/<run_id>.jsonl` and `index.json` |
+| `run_store.py` | The SQLite run store (`.kptn/state/ui.db`), created by replaying `migrations/`; also the one writer of the run files |
+| `run_files.py` | The files other people's servers read: `.kptn/state/runs/<run_id>.jsonl` and `index.json` |
 | `processes.py` | Launching, inspecting, and reconciling detached run workers |
 | `worker.py`, `capture.py` | The worker process and the capture that hands its output to the store |
 | `console_layout.py` | Which fold each console event goes in: one per pipeline or stage, one per task. Shared by the run page and its stream |

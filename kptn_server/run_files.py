@@ -1,6 +1,6 @@
 """The run files a colleague's server can read.
 
-Two kinds of file, both under ``<project>/.kptn/runs/`` -- or, when
+Two kinds of file, both under ``<project>/.kptn/state/runs/`` -- or, when
 ``kptn.yaml`` sets ``shared_logs`` and that directory exists, under
 ``<shared_logs>/<working directory name>/``, where they outlive the working
 directory (see :func:`runs_dir_for`):
@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence, cast
 
 from kptn.exceptions import ProfileError
+from kptn.layout import LEGACY_RUNS_DIR, RUNS_DIR
 from kptn.profiles.loader import ProfileLoader
 from kptn.runner.events import EventKind
 
@@ -79,7 +80,7 @@ RUN_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 _TASK_OUTCOMES = ("succeeded", "failed")
 
 #: Where run files go when ``kptn.yaml`` names no ``shared_logs``.
-LOCAL_RUNS_DIR = Path(".kptn") / "runs"
+LOCAL_RUNS_DIR = RUNS_DIR
 
 #: Explicit modes for shared run logs, whatever the umask. Every account
 #: creates its own subdirectory in the root, which whoever set it up made
@@ -194,27 +195,43 @@ def runs_dir_of(project_root: Path, setting: str | None) -> Path:
     """
     shared = shared_logs_root(project_root, setting)
     if shared is None or not shared.is_dir():
-        return project_root / LOCAL_RUNS_DIR
+        return local_runs_dir(project_root)
     return shared / project_root.name
+
+
+def local_runs_dir(project_root: Path) -> Path:
+    """``.kptn/state/runs``, or ``.kptn/runs`` where only that exists.
+
+    A working directory no kptn has run in since its run files moved to
+    ``.kptn/state/`` still has them in ``.kptn/runs``. Its owner's next run
+    moves them; a colleague's server only reads, so it reads them there.
+    """
+    runs = project_root / LOCAL_RUNS_DIR
+    legacy = project_root / LEGACY_RUNS_DIR
+    if not runs.is_dir() and legacy.is_dir():
+        return legacy
+    return runs
 
 
 def runs_dir_for(project_root: Path) -> Path:
     """Where the next recorded run of *project_root* writes its files.
 
     ``<shared_logs>/<working directory name>`` when ``kptn.yaml`` sets
-    ``shared_logs`` and that directory exists, else ``.kptn/runs``; created
-    either way. The shared root itself is never created: whoever sets it up
+    ``shared_logs`` and that directory exists, else ``.kptn/state/runs``;
+    created either way. The shared root itself is never created: whoever sets it up
     gives it the pipeline group, and its existence is what moves the logs.
 
-    A ``kptn.yaml`` that does not load falls back to ``.kptn/runs``: the run
+    A ``kptn.yaml`` that does not load falls back to ``.kptn/state/runs``: the run
     fails on that same error when it loads its profile, and that failure is
     logged where its owner can read it.
     """
-    runs = runs_dir_of(project_root, _shared_logs_setting(project_root))
-    if runs == project_root / LOCAL_RUNS_DIR:
+    shared = shared_logs_root(project_root, _shared_logs_setting(project_root))
+    if shared is None or not shared.is_dir():
+        runs = project_root / LOCAL_RUNS_DIR
         runs.mkdir(parents=True, exist_ok=True)
-    else:
-        _mkdir(runs, LOG_DIR_MODE)
+        return runs
+    runs = shared / project_root.name
+    _mkdir(runs, LOG_DIR_MODE)
     return runs
 
 
@@ -655,6 +672,7 @@ __all__ = [
     "read_span_text",
     "read_untrusted",
     "run_file_text",
+    "local_runs_dir",
     "runs_dir_for",
     "runs_dir_of",
     "shared_logs_root",

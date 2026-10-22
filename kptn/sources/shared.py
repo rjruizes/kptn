@@ -1,4 +1,4 @@
-"""The shared bronze: built source tables kept by content key and linked into ``_bronze/``.
+"""The shared bronze: built source tables kept by content key and linked into ``.kptn/_bronze/``.
 
 Layout, under the root named by ``settings.shared_bronze``::
 

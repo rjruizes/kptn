@@ -871,7 +871,7 @@ def project_run(request: Request, run_id: str) -> RunRecord | None:
     """The run with this id *belonging to the project this app serves*.
 
     ``get_run`` is keyed by run id alone and is therefore global to the
-    database. One ``.kptn/ui.db`` holds one project today, but the store is
+    database. One ``.kptn/state/ui.db`` holds one project today, but the store is
     keyed by project root throughout -- ``create_run`` locks on it,
     ``list_runs`` filters on it -- precisely because nothing structurally
     stops two contexts from sharing a database. Every run-scoped route goes

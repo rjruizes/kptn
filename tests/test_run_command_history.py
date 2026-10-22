@@ -54,7 +54,7 @@ def restore_process_state(monkeypatch: pytest.MonkeyPatch):
 
 
 def recorded_runs(project: Path):
-    store = RunStore(project / ".kptn" / "ui.db")
+    store = RunStore(project / ".kptn" / "state" / "ui.db")
     return store, store.list_runs(project.resolve(), limit=50)
 
 
@@ -111,13 +111,13 @@ def test_kptn_run_no_record_keeps_no_history(ui_project_cwd: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "ordinary output" in result.stdout
-    assert not (ui_project_cwd / ".kptn" / "ui.db").exists()
+    assert not (ui_project_cwd / ".kptn" / "state" / "ui.db").exists()
 
 
 def test_kptn_run_refuses_while_another_recorded_run_is_live(
     ui_project_cwd: Path,
 ) -> None:
-    store = RunStore(ui_project_cwd / ".kptn" / "ui.db")
+    store = RunStore(ui_project_cwd / ".kptn" / "state" / "ui.db")
     active = store.create_run(
         RunRequest(project_root=ui_project_cwd, pipeline="fixture", profile="slow")
     )
@@ -153,7 +153,7 @@ def test_kptn_run_writes_its_log_to_shared_logs(ui_project_cwd: Path) -> None:
     assert run.log_path == logs / f"{run.run_id}.jsonl"
     assert "ordinary output\n" in run_file_text(run.log_path)
     assert (logs / "index.json").is_file()
-    assert not list((ui_project_cwd / ".kptn").glob("runs/*.jsonl"))
+    assert not list((ui_project_cwd / ".kptn").glob("state/runs/*.jsonl"))
 
 
 def test_kptn_run_says_when_shared_logs_do_not_exist(ui_project_cwd: Path) -> None:
@@ -166,8 +166,8 @@ def test_kptn_run_says_when_shared_logs_do_not_exist(ui_project_cwd: Path) -> No
 
     assert result.exit_code == 0, result.output
     _store, (run,) = recorded_runs(ui_project_cwd)
-    notice = "[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/runs"
-    assert run.log_path.parent == ui_project_cwd.resolve() / ".kptn" / "runs"
+    notice = "[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/state/runs"
+    assert run.log_path.parent == ui_project_cwd.resolve() / ".kptn" / "state" / "runs"
     assert notice in result.output
     assert notice in run_file_text(run.log_path)
     assert not (ui_project_cwd.parent / "_kptn_logs").exists()

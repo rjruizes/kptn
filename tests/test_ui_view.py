@@ -53,7 +53,7 @@ def publish_run(
     project: Path, *, lines: tuple[str, ...] = ("hello <b>world</b>\n",), finish: bool = True
 ) -> RunRecord:
     """Record a run the way its owner's pod would."""
-    store = RunStore(project / ".kptn" / "ui.db")
+    store = RunStore(project / ".kptn" / "state" / "ui.db")
     record = store.create_run(
         RunRequest(project_root=project, pipeline="fixture", profile="success")
     )
@@ -170,7 +170,7 @@ def test_their_pages_never_need_their_run_store(client: TestClient, theirs: Path
     """The point of the run files: their ui.db is in another pod's hands."""
     record = publish_run(theirs)
     for name in ("ui.db", "ui.db-wal", "ui.db-shm"):
-        (theirs / ".kptn" / name).unlink(missing_ok=True)
+        (theirs / ".kptn" / "state" / name).unlink(missing_ok=True)
 
     for path in (
         f"/view/{OTHER}/",
@@ -180,7 +180,7 @@ def test_their_pages_never_need_their_run_store(client: TestClient, theirs: Path
     ):
         assert client.get(path).status_code == 200, path
 
-    assert not (theirs / ".kptn" / "ui.db").exists()
+    assert not (theirs / ".kptn" / "state" / "ui.db").exists()
 
 
 def test_a_project_with_nothing_published_says_so(client: TestClient) -> None:
@@ -240,7 +240,7 @@ def test_a_symlinked_run_file_is_refused(
 
 def test_an_unreadable_index_is_reported_not_raised(client: TestClient, theirs: Path) -> None:
     publish_run(theirs)
-    (theirs / ".kptn" / "runs" / INDEX_FILENAME).write_text(
+    (theirs / ".kptn" / "state" / "runs" / INDEX_FILENAME).write_text(
         json.dumps({"schema": 99, "runs": []})
     )
 
@@ -255,7 +255,7 @@ def test_a_run_with_an_old_heartbeat_is_shown_as_not_reporting(
     client: TestClient, theirs: Path
 ) -> None:
     record = publish_run(theirs, finish=False)
-    db = theirs / ".kptn" / "ui.db"
+    db = theirs / ".kptn" / "state" / "ui.db"
     conn = sqlite3.connect(db)
     conn.execute(
         "UPDATE runs SET heartbeat_at = ? WHERE run_id = ?",
@@ -273,7 +273,7 @@ def test_a_run_from_before_run_files_shows_its_raw_log(
     client: TestClient, theirs: Path
 ) -> None:
     run_id = "c" * 32
-    runs_dir = theirs / ".kptn" / "runs"
+    runs_dir = theirs / ".kptn" / "state" / "runs"
     runs_dir.mkdir(parents=True)
     (runs_dir / INDEX_FILENAME).write_text(
         json.dumps({"schema": 1, "runs": [{"run_id": run_id, "status": "succeeded"}]})
@@ -314,7 +314,7 @@ def test_a_live_runs_stream_tails_the_file_until_the_run_ends(
             frames.append(frame)
             if len(frames) == 4:
                 # Everything published so far has been sent; the run goes on.
-                store = RunStore(theirs / ".kptn" / "ui.db")
+                store = RunStore(theirs / ".kptn" / "state" / "ui.db")
                 store.append_event(
                     record.run_id, "log", task_name="alpha",
                     payload={"stream": "stdout", "severity": "output"},

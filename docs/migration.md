@@ -79,7 +79,7 @@ kptn.run(pipeline: Pipeline, *, profile: str | None = None) -> None
 ```
 
 - `db` backend and `db_path` are sourced from `kptn.yaml → settings` when the file is present;
-  SQLite at `.kptn/kptn.db` otherwise — no `kptn.yaml` required for a basic run
+  SQLite at `.kptn/state/kptn.db` otherwise — no `kptn.yaml` required for a basic run
 - `ProfileError` propagates to the caller when the requested profile does not exist
 - `TaskError` propagates to the caller when a task raises during execution
 

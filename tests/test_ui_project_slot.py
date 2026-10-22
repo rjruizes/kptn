@@ -34,8 +34,8 @@ def make_entry(root: Path) -> ProjectEntry:
         release="r1",
         display_name=resolved.name,
         profiles=(),
-        database_path=resolved / ".kptn" / "ui.db",
-        run_log_dir=resolved / ".kptn" / "runs",
+        database_path=resolved / ".kptn" / "state" / "ui.db",
+        run_log_dir=resolved / ".kptn" / "state" / "runs",
     )
 
 
