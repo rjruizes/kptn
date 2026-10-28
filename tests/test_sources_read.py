@@ -115,3 +115,12 @@ def test_existing_source_file_column_is_an_error(tmp_path: Path) -> None:
     f = _file(tmp_path, "d/x.csv", "_source_file,a\nq,1\n")
     with pytest.raises(ValueError, match="_source_file"):
         create_table_view(duckdb.connect(), "s", "x", [f])
+
+
+def test_tables_on_one_connection_keep_their_own_files(tmp_path: Path) -> None:
+    a = _file(tmp_path, "d/a.csv", "x\n1\n")
+    b = _file(tmp_path, "d/b.csv", "y\n2\n")
+    conn = duckdb.connect()
+    first = create_table_view(conn, "s", "a", [a])
+    create_table_view(conn, "s", "b", [b])
+    assert _rows(conn, first) == [("1", "d/a.csv")]

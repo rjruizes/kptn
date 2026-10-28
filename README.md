@@ -279,6 +279,28 @@ pipeline = kptn.Pipeline(
 
 Each table is cached on its own files, check file and the source's code. A change upstream, such as a rebuilt schema, does not re-read unchanged files, but it still reruns what comes after the source. A table that is built or restored reruns only what comes after its source, so keep each source in the branch that reads it rather than at the top of the pipeline. Keep it there for profiles too: a source a profile leaves out does not run, so after a schema rebuild its views are gone, and the tasks that read them must be left out with it.
 
+### Loading a source in a test
+
+A task that reads a source's views can be tested without running the pipeline. `kptn.sources.load` reads the source's files into tables with the views' names, `raw_<source>.<table>`, on any DuckDB connection. The tables hold what a run's views would serve, and nothing is written under `.kptn/`.
+
+Here `sales` and `load_sales` are the source and the task from the [Sources](#sources) example above, imported from the `pipeline.py` that declares them:
+
+```python
+import duckdb
+import kptn
+
+from pipeline import load_sales, sales
+
+
+def test_load_sales():
+    conn = duckdb.connect()
+    kptn.sources.load(conn, sales)  # reads data/sales into raw_sales.orders
+    load_sales(engine=conn)         # the task reads raw_sales.orders as it would in a run
+    ...
+```
+
+Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Checks are skipped unless you pass `checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory). Tables of the same names are replaced.
+
 ### Shared bronze
 
 Working directories that read the same files can share built tables. Name a shared bronze directory in `kptn.yaml`, relative to the project, and create it where you want sharing:
@@ -393,6 +415,7 @@ Earlier versions kept the bookkeeping loose in `.kptn/` and the tables in `_bron
 | `kptn.r_task(path, outputs, compute=None, optional=None, duckdb_checkpoint=False, requires=None)` | Register an R script as a task |
 | `kptn.noop()` | Placeholder / synchronization node |
 | `kptn.source(name, files, *, table=None, read=None)` | Read raw files into `.kptn/_bronze/<name>/`, one text-only parquet per table, served as `raw_<name>.<table>` views |
+| `kptn.sources.load(conn, source, config_values=None, *, root=".", checks=False)` | Read a source's files straight into `raw_<name>.<table>` tables on *conn*, for tests |
 
 ### Graph Composition
 

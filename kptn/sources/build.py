@@ -136,6 +136,24 @@ def is_current(plan: TablePlan, state_store: _ReadsHashes, storage_key: str, pip
     return stored == state_value(plan)
 
 
+def read_table(
+    conn: duckdb.DuckDBPyConnection,
+    plan: TablePlan,
+    spec: SourceSpec,
+    *,
+    root: Path,
+    checks: bool = True,
+) -> tuple[str, bool]:
+    """Create ``raw_<source>."<table>"`` over the plan's files on *conn* and,
+    with *checks*, validate it. Returns the view and whether checks ran.
+    """
+    view = create_table_view(conn, plan.source, plan.table, list(plan.files), spec.read)
+    checked = checks and run_checks(
+        conn, source=plan.source, table=plan.table, root=root, declared_at=spec.declared_at
+    )
+    return view, checked
+
+
 def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path, dest: Path | None = None) -> bool:
     """Read, validate and atomically write one table to *dest*, by default
     ``plan.parquet``. Returns whether checks ran.
@@ -148,10 +166,7 @@ def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path, dest: Path | N
     tmp = dest.with_name(f".{dest.name}.{uuid4().hex}.tmp")
     conn = duckdb.connect()
     try:
-        view = create_table_view(conn, plan.source, plan.table, list(plan.files), spec.read)
-        checked = run_checks(
-            conn, source=plan.source, table=plan.table, root=root, declared_at=spec.declared_at
-        )
+        view, checked = read_table(conn, plan, spec, root=root)
         target = "'" + str(tmp).replace("'", "''") + "'"
         conn.execute(f"COPY (SELECT * FROM {view}) TO {target} (FORMAT parquet)")
         os.replace(tmp, dest)
