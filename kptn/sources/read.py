@@ -86,6 +86,27 @@ def _text_select(rel: duckdb.DuckDBPyRelation, file: SourceFile, temp_view: str)
     return f"SELECT {', '.join(exprs)} FROM {temp_view}"
 
 
+def _file_relation(
+    conn: duckdb.DuckDBPyConnection, file: SourceFile, read: Callable[[str], Any] | None
+) -> duckdb.DuckDBPyRelation:
+    return _read_custom(conn, file, read) if read is not None else _read_builtin(conn, file)
+
+
+def _prefix(source: str, table: str) -> str:
+    # Views and tables read their per-file relations by name, so each table
+    # needs its own; shared names would repoint an earlier table's view at
+    # this one's files.
+    return hashlib.sha256(f"{source}\x1f{table}".encode()).hexdigest()[:16]
+
+
+def union_view(conn: duckdb.DuckDBPyConnection, source: str, table: str, selects: list[str]) -> str:
+    """Create ``raw_<source>."<table>"`` as the ``UNION ALL BY NAME`` of *selects*."""
+    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name(source)}")
+    name = view_name(source, table)
+    conn.execute(f"CREATE OR REPLACE VIEW {name} AS " + " UNION ALL BY NAME ".join(selects))
+    return name
+
+
 def create_table_view(
     conn: duckdb.DuckDBPyConnection,
     source: str,
@@ -100,16 +121,38 @@ def create_table_view(
     """
     if not files:
         raise ValueError(f"Table {source}.{table} has no files.")
-    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name(source)}")
-    # The view reads its per-file views by name, so each table needs its own;
-    # shared names would repoint an earlier table's view at this one's files.
-    prefix = hashlib.sha256(f"{source}\x1f{table}".encode()).hexdigest()[:16]
+    prefix = _prefix(source, table)
     selects: list[str] = []
     for i, file in enumerate(sorted(files, key=lambda f: f.rel)):
-        rel = _read_custom(conn, file, read) if read is not None else _read_builtin(conn, file)
+        rel = _file_relation(conn, file, read)
         temp_view = f"_kptn_source_file_{prefix}_{i}"
         rel.create_view(temp_view, replace=True)
         selects.append(_text_select(rel, file, temp_view))
-    name = view_name(source, table)
-    conn.execute(f"CREATE OR REPLACE VIEW {name} AS " + " UNION ALL BY NAME ".join(selects))
+    return union_view(conn, source, table, selects)
+
+
+def read_file_table(
+    conn: duckdb.DuckDBPyConnection,
+    source: str,
+    table: str,
+    file: SourceFile,
+    index: int,
+    read: Callable[[str], Any] | None = None,
+) -> str:
+    """Read one file of a table into its own table, as ``create_table_view``
+    would serve it, and return that table's name.
+
+    The file is read in full here: DuckDB reads CSV lazily, so an error past
+    the rows it samples would otherwise surface only when the whole table is
+    copied, with no file to blame.
+    """
+    prefix = _prefix(source, table)
+    raw_view = f"_kptn_source_raw_{prefix}_{index}"
+    name = f"_kptn_source_file_{prefix}_{index}"
+    rel = _file_relation(conn, file, read)
+    rel.create_view(raw_view, replace=True)
+    try:
+        conn.execute(f"CREATE OR REPLACE TABLE {name} AS {_text_select(rel, file, raw_view)}")
+    finally:
+        conn.execute(f"DROP VIEW IF EXISTS {raw_view}")
     return name

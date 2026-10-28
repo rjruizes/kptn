@@ -135,22 +135,34 @@ def normalize_table_name(raw: str) -> str:
     return name
 
 
-def table_name(spec: SourceSpec, file: SourceFile) -> str:
-    """The table *file* feeds: ``table=`` if given, otherwise the file's stem."""
+def table_name(spec: SourceSpec, file: SourceFile) -> str | None:
+    """The table *file* feeds: ``table=`` if given, otherwise the file's stem.
+    None when a ``table=`` callable returns None: the file feeds no table."""
     if spec.table is None:
         raw = file.path.stem
     elif isinstance(spec.table, str):
         raw = spec.table
     else:
         raw = spec.table(file)
+        if raw is None:
+            return None
     if not isinstance(raw, str):
         raise TypeError(f"table= returned {type(raw).__name__} for {file.path}; expected a string.")
     return normalize_table_name(raw)
 
 
-def group_by_table(spec: SourceSpec, files: list[SourceFile]) -> dict[str, list[SourceFile]]:
-    """Files per table, tables in name order, files in ``_source_file`` order."""
+def group_by_table(
+    spec: SourceSpec, files: list[SourceFile]
+) -> tuple[dict[str, list[SourceFile]], list[SourceFile]]:
+    """Files per table, tables in name order, files in ``_source_file`` order;
+    and the files that feed no table, in the same order."""
     groups: dict[str, list[SourceFile]] = {}
+    no_table: list[SourceFile] = []
     for f in files:
-        groups.setdefault(table_name(spec, f), []).append(f)
-    return {t: sorted(fs, key=lambda f: f.rel) for t, fs in sorted(groups.items())}
+        table = table_name(spec, f)
+        if table is None:
+            no_table.append(f)
+        else:
+            groups.setdefault(table, []).append(f)
+    tables = {t: sorted(fs, key=lambda f: f.rel) for t, fs in sorted(groups.items())}
+    return tables, sorted(no_table, key=lambda f: f.rel)

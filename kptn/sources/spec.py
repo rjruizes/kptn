@@ -20,8 +20,9 @@ if TYPE_CHECKING:
 
 #: Paths, directories or globs; or a callable taking config values by name.
 FilesArg = Union[str, list[str], tuple[str, ...], Callable[..., Any]]
-#: A table name for every file, or a callable mapping one file to its table.
-TableArg = Union[str, Callable[[Any], str]]
+#: A table name for every file, or a callable mapping one file to its table
+#: (None for a file that feeds no table).
+TableArg = Union[str, Callable[[Any], Union[str, None]]]
 #: Reads one file path into a pandas DataFrame, pyarrow Table or DuckDB relation.
 ReadFn = Callable[[str], Any]
 
@@ -86,7 +87,10 @@ def source(
     Files are read by extension (CSV, TSV, JSON, Parquet), every value is stored
     as text, column names are lowercased, each row gets a
     ``_source_file`` column, and each table is validated by
-    ``checks/<name>/<table>.yml`` when that file exists.
+    ``checks/<name>/<table>.yml`` when that file exists. With
+    ``checks/<name>/<table>.file.yml``, each file is validated on its own
+    first, and files that fail are left out and listed in
+    ``raw_<name>._rejected``.
 
     When ``kptn.config`` names a DuckDB connection, each run also serves every
     table as the view ``raw_<name>.<table>``, whether or not it was rebuilt.
@@ -102,7 +106,8 @@ def source(
             values by name (like a task's parameters) and returning them. A
             directory means every visible file directly inside it.
         table: Which table each file feeds: a callable taking the file, or one
-            name for every file. Defaults to the file's stem.
+            name for every file. Defaults to the file's stem. A callable may
+            return None for a file that feeds no table.
         read: For formats kptn does not read itself, such as Excel or R data: a
             callable taking a path and returning a pandas DataFrame, pyarrow
             Table, or DuckDB relation.

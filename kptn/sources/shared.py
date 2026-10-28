@@ -6,6 +6,7 @@ Layout, under the root named by ``settings.shared_bronze``::
     <source>/<table>/<key>/
         entry.json                   what built it, from which files; never read by kptn
         <table>.parquet
+        _rejected.parquet            the files a file check left out, for a table with one
 
 An entry is immutable and complete whenever it exists. Several Unix accounts
 share one directory over NFS, so everything kptn creates here gets explicit
@@ -44,6 +45,7 @@ DIR_MODE = 0o2775
 FILE_MODE = 0o664
 
 ENTRY_LABEL = "entry.json"
+ENTRY_REJECTS = "_rejected.parquet"
 _TMP = ".tmp"
 
 Outcome = Literal["published", "linked"]
@@ -60,7 +62,13 @@ class SharedBronze:
     def lookup(self, plan: TablePlan) -> Path | None:
         """The entry's parquet, or None when no build of this key is shared."""
         parquet = self.entry(plan) / f"{plan.table}.parquet"
+        if plan.rejects is not None and not self.rejects(plan).is_file():
+            return None
         return parquet if parquet.is_file() else None
+
+    def rejects(self, plan: TablePlan) -> Path:
+        """The entry's record of rejected files, for a table with a file check."""
+        return self.entry(plan) / ENTRY_REJECTS
 
     def publish(self, plan: TablePlan, spec: SourceSpec, *, root: Path) -> tuple[Path, Outcome]:
         """Build *plan*'s table into the shared bronze. Returns the entry's parquet and
@@ -74,11 +82,13 @@ class SharedBronze:
         tmp = self._tmp_dir()
         try:
             parquet = tmp / f"{plan.table}.parquet"
-            build_table(plan, spec, root=root, dest=parquet)
+            rejects = tmp / ENTRY_REJECTS if plan.rejects is not None else None
+            build_table(plan, spec, root=root, dest=parquet, rejects_dest=rejects)
             label = tmp / ENTRY_LABEL
-            label.write_text(json.dumps(_label(plan, parquet, root), indent=2) + "\n")
-            for f in (parquet, label):
-                os.chmod(f, FILE_MODE)
+            label.write_text(json.dumps(_label(plan, parquet, rejects, root), indent=2) + "\n")
+            for f in (parquet, label, rejects):
+                if f is not None:
+                    os.chmod(f, FILE_MODE)
             entry = self.entry(plan)
             _mkdir(entry.parent.parent)
             _mkdir(entry.parent)
@@ -139,13 +149,20 @@ def _whoami() -> str:
         return str(os.getuid())
 
 
-def _label(plan: TablePlan, parquet: Path, root: Path) -> dict[str, object]:
+def _label(plan: TablePlan, parquet: Path, rejects: Path | None, root: Path) -> dict[str, object]:
     """``entry.json``: which files and code built this entry, and who built it."""
     path = "'" + str(parquet).replace("'", "''") + "'"
     conn = duckdb.connect()
     try:
         row = conn.execute(f"SELECT count(*) FROM read_parquet({path})").fetchone()
         described = conn.execute(f"DESCRIBE SELECT * FROM read_parquet({path})").fetchall()
+        rejected: list[str] = []
+        if rejects is not None:
+            rpath = "'" + str(rejects).replace("'", "''") + "'"
+            rejected = [
+                r[0]
+                for r in conn.execute(f"SELECT _source_file FROM read_parquet({rpath})").fetchall()
+            ]
     finally:
         conn.close()
     from kptn import __version__
@@ -164,6 +181,8 @@ def _label(plan: TablePlan, parquet: Path, root: Path) -> dict[str, object]:
         "format_version": SOURCE_FORMAT_VERSION,
         "files": files,
         "check_file": check.relative_to(root).as_posix() if check.exists() else None,
+        "file_check": plan.file_check.relative_to(root).as_posix() if plan.file_check else None,
+        "rejected": rejected,
         "rows": row[0] if row else 0,
         "columns": [r[0] for r in described],
         "built_by": _whoami(),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,11 +14,17 @@ from uuid import uuid4
 import duckdb
 
 from kptn.change_detector.hasher import hash_file, hash_task_source
-from kptn.exceptions import HashError
+from kptn.exceptions import HashError, TaskError
 from kptn.layout import BRONZE_DIR
-from kptn.sources.checks import check_path, run_checks
+from kptn.sources.checks import check_path, file_check_failure, file_check_path, run_checks
 from kptn.sources.files import SourceFile, group_by_table, resolve_files
-from kptn.sources.read import create_table_view
+from kptn.sources.read import create_table_view, read_file_table, union_view
+from kptn.sources.rejects import (
+    REJECTED_DIR,
+    RejectedFile,
+    create_rejects_table,
+    rejects_path,
+)
 from kptn.sources.spec import SourceSpec
 
 #: Bumped whenever a reading convention changes what a source writes, so every
@@ -73,6 +79,10 @@ class TablePlan:
     code_hash: str
     #: ``size:mtime_ns`` of each file in ``files``, in the same order.
     stamps: tuple[str, ...]
+    #: ``checks/<source>/<table>.file.yml`` when it exists. With one, a bad
+    #: file is left out of the table and recorded in ``rejects``.
+    file_check: Path | None = None
+    rejects: Path | None = None
 
     @property
     def state_name(self) -> str:
@@ -85,27 +95,36 @@ def source_code_hash(spec: SourceSpec) -> str:
     return _sha(*parts)
 
 
-def plan_tables(
+def plan_source(
     name: str,
     spec: SourceSpec,
     config_values: Mapping[str, Any],
     *,
     root: Path,
-) -> list[TablePlan]:
-    """One plan per table the source's files feed, in table-name order.
+) -> tuple[list[TablePlan], list[SourceFile]]:
+    """One plan per table the source's files feed, in table-name order, and
+    the files a ``table=`` callable assigned to no table.
 
     Raises:
         HashError: a pattern matched nothing, a file is unreadable, or a file
             disappeared while it was being fingerprinted.
     """
     files = resolve_files(name, spec, config_values)
-    stamps = dict(zip((f.path for f in files), fingerprints(f.path for f in files)))
+    tables, no_table = group_by_table(spec, files)
+    fed = [f for table_files in tables.values() for f in table_files]
+    stamps = dict(zip((f.path for f in fed), fingerprints(f.path for f in fed)))
     code = source_code_hash(spec)
     plans: list[TablePlan] = []
-    for table, table_files in group_by_table(spec, files).items():
+    for table, table_files in tables.items():
         check = check_path(root, name, table)
+        file_check: Path | None = file_check_path(root, name, table)
         parts = [f"{f.rel}:{stamps[f.path]}" for f in table_files]
         parts.append(f"check:{hash_file(str(check)) if check.exists() else 'none'}")
+        # Only when there is one, so tables without a file check keep their keys.
+        if file_check.exists():
+            parts.append(f"file_check:{hash_file(str(file_check))}")
+        else:
+            file_check = None
         input_hash = _sha(*parts)
         plans.append(
             TablePlan(
@@ -118,9 +137,22 @@ def plan_tables(
                 parquet=root / BRONZE_DIR / name / f"{table}.parquet",
                 code_hash=code,
                 stamps=tuple(stamps[f.path] for f in table_files),
+                file_check=file_check,
+                rejects=rejects_path(root, name, table) if file_check is not None else None,
             )
         )
-    return plans
+    return plans, no_table
+
+
+def plan_tables(
+    name: str,
+    spec: SourceSpec,
+    config_values: Mapping[str, Any],
+    *,
+    root: Path,
+) -> list[TablePlan]:
+    """``plan_source``'s plans alone."""
+    return plan_source(name, spec, config_values, root=root)[0]
 
 
 def state_value(plan: TablePlan) -> str:
@@ -129,11 +161,52 @@ def state_value(plan: TablePlan) -> str:
 
 
 def is_current(plan: TablePlan, state_store: _ReadsHashes, storage_key: str, pipeline: str) -> bool:
-    """True when the built parquet matches the table's current inputs and code."""
+    """True when the built parquet, and its record of rejected files if it
+    keeps one, match the table's current inputs and code."""
     stored = state_store.read_hash(storage_key, pipeline, plan.state_name)
     if stored is None or not plan.parquet.exists():
         return False
+    if plan.rejects is not None and not plan.rejects.exists():
+        return False
     return stored == state_value(plan)
+
+
+@dataclass(frozen=True)
+class TableRead:
+    view: str
+    #: Whether a check file or file check ran.
+    checked: bool
+    #: Files a file check left out; empty without one.
+    rejected: tuple[RejectedFile, ...] = ()
+
+
+def _read_each_file(
+    conn: duckdb.DuckDBPyConnection, plan: TablePlan, spec: SourceSpec, file_check: Path
+) -> tuple[str, list[RejectedFile]]:
+    """Read and check each file on its own, and serve the files that pass."""
+    kept: list[str] = []
+    rejected: list[RejectedFile] = []
+    for i, file in enumerate(plan.files):
+        try:
+            relation = read_file_table(conn, plan.source, plan.table, file, i, spec.read)
+        except Exception as exc:  # anything a file's content makes DuckDB or read= raise
+            rejected.append(RejectedFile(plan.table, file.rel, f"cannot be read: {exc}"))
+            continue
+        failure = file_check_failure(
+            conn, file_check, source=plan.source, table=plan.table, relation=relation
+        )
+        if failure is None:
+            kept.append(f"SELECT * FROM {relation}")
+        else:
+            conn.execute(f"DROP TABLE {relation}")
+            rejected.append(RejectedFile(plan.table, file.rel, failure))
+    if not kept:
+        first = rejected[0]
+        raise TaskError(
+            f"Every file of {plan.source}.{plan.table} was rejected; the first, "
+            f"{first.file}: {first.reason}"
+        )
+    return union_view(conn, plan.source, plan.table, kept), rejected
 
 
 def read_table(
@@ -143,41 +216,79 @@ def read_table(
     *,
     root: Path,
     checks: bool = True,
-) -> tuple[str, bool]:
+) -> TableRead:
     """Create ``raw_<source>."<table>"`` over the plan's files on *conn* and,
-    with *checks*, validate it. Returns the view and whether checks ran.
+    with *checks*, validate it.
+
+    With *checks* and a file check, each file is read and checked on its
+    own first, and the files that fail either are left out of the view.
+
+    Raises:
+        TaskError: a check failed, or a file check rejected every file.
     """
-    view = create_table_view(conn, plan.source, plan.table, list(plan.files), spec.read)
+    rejected: list[RejectedFile] = []
+    file_check = plan.file_check if checks else None
+    if file_check is not None:
+        view, rejected = _read_each_file(conn, plan, spec, file_check)
+    else:
+        view = create_table_view(conn, plan.source, plan.table, list(plan.files), spec.read)
     checked = checks and run_checks(
         conn, source=plan.source, table=plan.table, root=root, declared_at=spec.declared_at
     )
-    return view, checked
+    return TableRead(view, checked or file_check is not None, tuple(rejected))
 
 
-def build_table(plan: TablePlan, spec: SourceSpec, *, root: Path, dest: Path | None = None) -> bool:
+def build_table(
+    plan: TablePlan,
+    spec: SourceSpec,
+    *,
+    root: Path,
+    dest: Path | None = None,
+    rejects_dest: Path | None = None,
+) -> bool:
     """Read, validate and atomically write one table to *dest*, by default
-    ``plan.parquet``. Returns whether checks ran.
+    ``plan.parquet``, and, for a table with a file check, its record of
+    rejected files to *rejects_dest*, by default ``plan.rejects``. Returns
+    whether checks ran.
 
     ``os.replace`` onto a symlink replaces the link, never its target, so a
     local build leaves a shared-bronze entry untouched.
     """
     dest = plan.parquet if dest is None else dest
+    rejects_dest = plan.rejects if rejects_dest is None else rejects_dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(f".{dest.name}.{uuid4().hex}.tmp")
+    tmps = [dest.with_name(f".{dest.name}.{uuid4().hex}.tmp")]
+    if rejects_dest is not None:
+        rejects_dest.parent.mkdir(parents=True, exist_ok=True)
+        tmps.append(rejects_dest.with_name(f".{rejects_dest.name}.{uuid4().hex}.tmp"))
     conn = duckdb.connect()
     try:
-        view, checked = read_table(conn, plan, spec, root=root)
-        target = "'" + str(tmp).replace("'", "''") + "'"
-        conn.execute(f"COPY (SELECT * FROM {view}) TO {target} (FORMAT parquet)")
-        os.replace(tmp, dest)
-        return checked
+        read = read_table(conn, plan, spec, root=root)
+        conn.execute(f"COPY (SELECT * FROM {read.view}) TO {_sql_path(tmps[0])} (FORMAT parquet)")
+        if rejects_dest is not None:
+            create_rejects_table(conn, "_kptn_rejected", list(read.rejected))
+            conn.execute(f"COPY _kptn_rejected TO {_sql_path(tmps[1])} (FORMAT parquet)")
+            os.replace(tmps[1], rejects_dest)
+        os.replace(tmps[0], dest)
+        return read.checked
     finally:
         conn.close()
-        tmp.unlink(missing_ok=True)
+        for tmp in tmps:
+            tmp.unlink(missing_ok=True)
 
 
-def remove_stale_tables(source: str, tables: set[str], *, root: Path) -> list[Path]:
-    """Delete ``.kptn/_bronze/<source>/*.parquet`` files for tables no longer fed."""
+def _sql_path(path: Path) -> str:
+    return "'" + str(path).replace("'", "''") + "'"
+
+
+def remove_stale_tables(
+    source: str, tables: Collection[str], *, root: Path, rejects: Collection[str] = ()
+) -> list[Path]:
+    """Delete ``.kptn/_bronze/<source>/*.parquet`` files for tables no longer
+    fed, and records under ``_rejected/`` other than those named in *rejects*.
+
+    Only removed tables are returned: a record holds no table data.
+    """
     folder = root / BRONZE_DIR / source
     removed: list[Path] = []
     if folder.is_dir():
@@ -185,4 +296,7 @@ def remove_stale_tables(source: str, tables: set[str], *, root: Path) -> list[Pa
             if path.stem not in tables:
                 path.unlink()
                 removed.append(path)
+        for path in sorted((folder / REJECTED_DIR).glob("*.parquet")):
+            if path.stem not in rejects:
+                path.unlink()
     return removed

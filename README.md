@@ -271,13 +271,30 @@ pipeline = kptn.Pipeline(
 |---|---|
 | Reading | By extension: `.csv`, `.tsv`, `.txt`, `.json`, `.jsonl`, `.ndjson`, `.parquet`. Pass `read=` for anything else, such as Excel. |
 | Values | Every column stored as text, under its name in lowercase, so files that spell a column differently (`mealTime`, `MEALTIME`) feed one `mealtime` column. Transform downstream. |
-| Tables | One per file stem, unless `table=` says otherwise. Files feeding one table are combined by column name. |
+| Tables | One per file stem, unless `table=` says otherwise. Files feeding one table are combined by column name. A `table=` callable that returns `None` leaves the file out, with a warning, and lists it in `raw_<source>._rejected`. |
 | Provenance | A `_source_file` column, such as `sales/orders_2024-01-24.csv`. |
-| Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written, naming the table alone (`checks for orders:`) and its columns in lowercase. A failure stops the run. |
+| Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written, naming the table alone (`checks for orders:`) and its columns in lowercase. A failure stops the run. `checks/<source>/<table>.file.yml` checks each file instead, and leaves out the files that fail; see [Checking each file](#checking-each-file). |
 | Storage | `.kptn/_bronze/<source>/<table>.parquet`. |
 | Views | `raw_<source>.<table>`, such as `raw_sales.orders`: one schema per source, created by the source itself on every run, cached or not, when `kptn.config` names a DuckDB connection. Views of tables the source no longer has are dropped. |
 
-Each table is cached on its own files, check file and the source's code. A change upstream, such as a rebuilt schema, does not re-read unchanged files, but it still reruns what comes after the source. A table that is built or restored reruns only what comes after its source, so keep each source in the branch that reads it rather than at the top of the pipeline. Keep it there for profiles too: a source a profile leaves out does not run, so after a schema rebuild its views are gone, and the tasks that read them must be left out with it.
+Each table is cached on its own files, check files and the source's code. A change upstream, such as a rebuilt schema, does not re-read unchanged files, but it still reruns what comes after the source. A table that is built or restored reruns only what comes after its source, so keep each source in the branch that reads it rather than at the top of the pipeline. Keep it there for profiles too: a source a profile leaves out does not run, so after a schema rebuild its views are gone, and the tasks that read them must be left out with it.
+
+### Checking each file
+
+When a table is fed by many small files, such as one per participant, one bad file should not stop the run. Add `checks/<source>/<table>.file.yml` and kptn reads and checks each file on its own before combining them. A file that cannot be read, or fails a check, is left out with a warning; the rest are combined, and `checks/<source>/<table>.yml`, if there is one, then checks the result and stops the run when it fails. If every file is left out, the table fails.
+
+A file check is written like a check file, `checks for <table>:`, but it sees one file's rows. Since each row carries `_source_file`, it can compare a file's contents with its name:
+
+```yaml
+# checks/meals/day_served.file.yml
+checks for day_served:
+  - row_count > 0
+  - failed rows:
+      name: subject matches the filename
+      fail condition: subject <> split_part(regexp_extract(_source_file, '[^/]+$'), '-', 1)
+```
+
+Files left out are listed in the view `raw_<source>._rejected`, with columns `table_name`, `_source_file` and `reason`, and kept in `.kptn/_bronze/<source>/_rejected/`. A table with a file check keeps that list even when it is empty, so the view is there for every source that has one. A fixed file changes its size or modification time, so its table rebuilds and picks it up. Tables without a file check behave as before: a file that cannot be read stops the run.
 
 ### Loading a source in a test
 
@@ -299,7 +316,7 @@ def test_load_sales():
     ...
 ```
 
-Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Checks are skipped unless you pass `checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory). Tables of the same names are replaced.
+Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Checks are skipped unless you pass `checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory); with it, files a file check rejects are left out as in a run. Files left out are listed in a `raw_<source>._rejected` table. Tables of the same names are replaced.
 
 ### Shared bronze
 
@@ -312,7 +329,7 @@ settings:
 
 kptn shares only through a directory that exists, and never creates it. One committed `kptn.yaml` therefore serves the server, where the directory was set up, and every laptop, where it never is and each working directory builds its own tables. A run that finds the setting but not the directory says so: `[SHARE] off — ../_bronze does not exist, so tables are built here`. To share between checkouts on a laptop, `mkdir ../_bronze`.
 
-A table built in one working directory is published there under a key made from its files' paths, sizes and modification times, its check file, the source's code and kptn's reading conventions. Any working directory that computes the same key links to it instead of reading the files again: `.kptn/_bronze/<source>/<table>.parquet` becomes a symlink into the shared bronze. A restored table counts as a change, so what reads it reruns.
+A table built in one working directory is published there under a key made from its files' paths, sizes and modification times, its check files, the source's code and kptn's reading conventions. Any working directory that computes the same key links to it instead of reading the files again: `.kptn/_bronze/<source>/<table>.parquet` becomes a symlink into the shared bronze. A restored table counts as a change, so what reads it reruns.
 
 The console says which happened: `[RESTORE] … — from shared bronze`, or `[SHARE] … — published` after a build (`— linked to an identical build` when another run published the same key first). `kptn plan` and the UI's plan page show "in shared bronze" for a table the next run would restore.
 
@@ -375,7 +392,7 @@ kptn hashes each task's declared outputs and source code. On re-run:
 
 - Tasks whose outputs exist and haven't changed are **skipped**.
 - Tasks whose source code or upstream dependencies changed are **re-run**.
-- Source tables are **rebuilt** only when their own files, check file or the source's code change. Data files are recognised by size and modification time, so a touched file rebuilds its table; `kptn run --force` rebuilds everything.
+- Source tables are **rebuilt** only when their own files, check files or the source's code change. Data files are recognised by size and modification time, so a touched file rebuilds its table; `kptn run --force` rebuilds everything.
 
 To bypass the cache for a single run:
 

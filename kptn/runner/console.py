@@ -67,6 +67,22 @@ class ConsoleEventSink:
         if (
             event.kind is EventKind.TASK_FINISHED
             and event.payload.get("status") == "succeeded"
+            and event.payload.get("rejected")
+        ):
+            count = event.payload["rejected"]
+            files = "file" if count == 1 else "files"
+            source = str(event.task_name).split("[", 1)[0]
+            print(
+                self._timestamped(
+                    "[REJECT]", event, f" — {count} {files} left out; see raw_{source}._rejected"
+                ),
+                file=self.out,
+                flush=True,
+            )
+
+        if (
+            event.kind is EventKind.TASK_FINISHED
+            and event.payload.get("status") == "succeeded"
             and event.payload.get("shared") in _SHARE_WORDS
         ):
             print(

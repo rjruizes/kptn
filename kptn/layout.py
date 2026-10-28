@@ -7,7 +7,8 @@ Everything goes under ``.kptn/``, in two directories:
     names a ``db_path``), the UI's run history (``ui.db``) and its run files
     (``runs/``, unless ``settings.shared_logs`` moves them).
 ``.kptn/_bronze/``
-    The tables sources build, ``<source>/<table>.parquet``.
+    The tables sources build, ``<source>/<table>.parquet``, and the files
+    they left out, ``<source>/_rejected/``.
 
 Earlier versions kept the bookkeeping loose in ``.kptn/`` and the tables in
 ``_bronze/`` at the top of the working directory. :func:`migrate_layout`

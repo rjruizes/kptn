@@ -8,8 +8,9 @@ from typing import Any
 
 import duckdb
 
-from kptn.sources.build import plan_tables, read_table
-from kptn.sources.read import _ident, schema_name
+from kptn.sources.build import plan_source, read_table
+from kptn.sources.read import _ident, schema_name, view_name
+from kptn.sources.rejects import REJECTED_VIEW, RejectedFile, create_rejects_table
 from kptn.sources.spec import SourceHandle
 
 #: The in-memory database each table is read in, attached to the caller's
@@ -36,6 +37,10 @@ def load(
     Each table is read in an in-memory database attached to *conn*, so the
     views kptn reads through never land in *conn*'s own database.
 
+    Files ``table=`` assigns to no table, and with *checks* files a file
+    check rejects, are left out and listed in ``raw_<source>._rejected``, as
+    a run's view of that name lists them.
+
     Args:
         conn: The connection to create the tables on, in its current database.
         source: What ``kptn.source`` returned.
@@ -53,7 +58,8 @@ def load(
     """
     spec = source.__kptn__
     root = Path(root)
-    plans = plan_tables(source.__name__, spec, config_values or {}, root=root)
+    plans, no_table = plan_source(source.__name__, spec, config_values or {}, root=root)
+    rejected = [RejectedFile(None, f.rel, "table= gave it no table") for f in no_table]
     database, schema = conn.execute("SELECT current_database(), current_schema()").fetchall()[0]
     home = f"{_ident(database)}.{_ident(schema)}"
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {_ident(database)}.{schema_name(source.__name__)}")
@@ -64,10 +70,16 @@ def load(
             # Views resolve the names in them in the current database, so the
             # copy runs from inside the scratch one.
             conn.execute(f"USE {_SCRATCH}")
-            view, _ = read_table(conn, plan, spec, root=root, checks=checks)
+            read = read_table(conn, plan, spec, root=root, checks=checks)
+            view = read.view
             conn.execute(f"CREATE OR REPLACE TABLE {_ident(database)}.{view} AS SELECT * FROM {view}")
         finally:
             conn.execute(f"USE {home}")
             conn.execute(f"DETACH {_SCRATCH}")
         created.append(view)
+        rejected.extend(read.rejected)
+    if no_table or (checks and any(p.file_check is not None for p in plans)):
+        name = view_name(source.__name__, REJECTED_VIEW)
+        create_rejects_table(conn, f"{_ident(database)}.{name}", rejected)
+        created.append(name)
     return created

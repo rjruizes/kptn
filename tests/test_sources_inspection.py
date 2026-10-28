@@ -107,3 +107,12 @@ def test_console_prints_restore_and_share_lines() -> None:
     assert lines[1].startswith("[RUN] ") and lines[1].endswith("s[b]")
     assert lines[2].startswith("[SHARE] ") and lines[2].endswith("s[b] — published")
     assert lines[3].startswith("[SHARE] ") and lines[3].endswith("s[c] — linked to an identical build")
+
+
+def test_console_prints_a_reject_line() -> None:
+    out = io.StringIO()
+    emitter = EventEmitter("r", "p", None, ConsoleEventSink(stream_out=out, stream_err=io.StringIO()))
+    emitter.emit(EventKind.TASK_FINISHED, task_name="s[a]", mode="source_table", status="succeeded", rejected=0)
+    emitter.emit(EventKind.TASK_FINISHED, task_name="s[b]", mode="source_table", status="succeeded", rejected=2)
+    [line] = out.getvalue().splitlines()
+    assert line.startswith("[REJECT] ") and line.endswith("s[b] — 2 files left out; see raw_s._rejected")

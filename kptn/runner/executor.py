@@ -41,10 +41,12 @@ from kptn.sources.build import (
     BRONZE_DIR,
     build_table,
     is_current,
-    plan_tables,
+    plan_source,
     remove_stale_tables,
     state_value,
 )
+from kptn.sources.checks import warn_at
+from kptn.sources.rejects import NO_TABLE, RejectedFile, count_rejects, rejects_path, write_rejects
 from kptn.sources.shared import SharedBronze, link
 from kptn.sources.views import apply_search_path, register_views
 from kptn.state_store.protocol import StateStoreBackend
@@ -143,8 +145,9 @@ def _emit_task_finished(
     cached: bool = False,
     error: str | None = None,
     shared: str | None = None,
+    rejected: int | None = None,
 ) -> None:
-    payload: dict[str, bool | float | str] = {
+    payload: dict[str, bool | float | int | str] = {
         "mode": mode,
         "status": status,
         "duration_seconds": perf_counter() - started_at,
@@ -154,6 +157,8 @@ def _emit_task_finished(
         payload["error"] = error
     if shared is not None:
         payload["shared"] = shared
+    if rejected is not None:
+        payload["rejected"] = rejected
     emitter.emit(EventKind.TASK_FINISHED, task_name=task_name, **payload)
 
 
@@ -382,9 +387,12 @@ def _execute_source(
 
     With *shared*, a table that is not current is linked from the shared
     bronze when its key is there, and otherwise built into it and linked. ``force`` and ``no_cache`` build a local file and never publish.
+
+    Files a file check rejects, and files ``table=`` assigns to no table, are
+    left out with a warning and recorded for the ``raw_<source>._rejected`` view.
     """
     try:
-        plans = plan_tables(node.name, node.spec, config_kwargs, root=root)
+        plans, no_table = plan_source(node.name, node.spec, config_kwargs, root=root)
     except Exception as exc:  # includes errors raised by a files= or table= callable
         started_at = _emit_task_started(emitter, node.name, mode="source", groups=groups, count=0)
         _emit_task_finished(
@@ -395,7 +403,21 @@ def _execute_source(
     started_at = _emit_task_started(
         emitter, node.name, mode="source", groups=groups, count=len(plans)
     )
-    changed = bool(remove_stale_tables(node.name, {p.table for p in plans}, root=root))
+    records = {p.table for p in plans if p.rejects is not None}
+    if no_table:
+        write_rejects(
+            [RejectedFile(None, f.rel, "table= gave it no table") for f in no_table],
+            rejects_path(root, node.name, NO_TABLE),
+        )
+        records.add(NO_TABLE)
+        warn_at(
+            f"Source {node.name!r}: {len(no_table)} file(s) feed no table, such as "
+            f"{no_table[0].rel}; see raw_{node.name}._rejected.",
+            node.spec.declared_at,
+        )
+    changed = bool(
+        remove_stale_tables(node.name, {p.table for p in plans}, root=root, rejects=records)
+    )
     sharing = None if force or no_cache else shared
     for plan in plans:
         if not force and not no_cache and is_current(
@@ -409,16 +431,27 @@ def _execute_source(
             **({"shared": "restored"} if hit is not None else {}),
         )
         outcome: str | None = None
+        rejected: int | None = None
         try:
             with emitter.task_scope(plan.state_name):
-                if hit is not None:
-                    link(plan.parquet, hit)
-                    outcome = "restored"
-                elif sharing is not None:
-                    target, outcome = sharing.publish(plan, node.spec, root=root)
+                if sharing is not None:  # always, when there is a hit
+                    if hit is None:
+                        target, outcome = sharing.publish(plan, node.spec, root=root)
+                    else:
+                        target, outcome = hit, "restored"
+                    if plan.rejects is not None:
+                        link(plan.rejects, sharing.rejects(plan))
                     link(plan.parquet, target)
                 else:
                     build_table(plan, node.spec, root=root)
+                if plan.rejects is not None:
+                    rejected = count_rejects(plan.rejects)
+                    if rejected:
+                        warn_at(
+                            f"{node.name}.{plan.table}: skipped {rejected} of "
+                            f"{len(plan.files)} files; see raw_{node.name}._rejected.",
+                            node.spec.declared_at,
+                        )
                 # Through the link, for a shared table: the entry never changes.
                 value = state_value(plan)
         except Exception as exc:
@@ -435,7 +468,7 @@ def _execute_source(
             state_store.write_hash(resolved.storage_key, resolved.pipeline, plan.state_name, value)
         _emit_task_finished(
             emitter, plan.state_name, mode="source_table", status="succeeded",
-            started_at=table_started, shared=outcome,
+            started_at=table_started, shared=outcome, rejected=rejected,
         )
         changed = True
 

@@ -121,6 +121,7 @@ def test_same_stem_in_different_folders_groups_together(tmp_path: Path) -> None:
     _touch(tmp_path, "m1/refunds.csv")
     _touch(tmp_path, "m1/codes.csv")
     spec = _spec(files=[str(tmp_path / "m1"), str(tmp_path / "m2")])
-    groups = group_by_table(spec, resolve_files("s", spec, {}))
+    groups, no_table = group_by_table(spec, resolve_files("s", spec, {}))
+    assert no_table == []
     assert list(groups) == ["codes", "refunds"]
     assert [f.rel for f in groups["refunds"]] == ["m1/refunds.csv", "m2/refunds.csv"]
