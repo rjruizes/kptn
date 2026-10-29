@@ -208,13 +208,13 @@ def read_table(
     spec: SourceSpec,
     *,
     root: Path,
-    checks: bool = True,
+    soda_checks: bool = True,
 ) -> TableRead:
     """Create ``raw_<source>."<table>"`` over the plan's files on *conn* and,
-    with *checks*, validate it with its check file.
+    with *soda_checks*, validate it with its check file.
 
     A source's ``check=`` is part of reading it, like ``read=``, so it runs
-    whatever *checks* says: each file is read and checked on its own, and
+    whatever *soda_checks* says: each file is read and checked on its own, and
     the files that fail or cannot be read are left out of the view.
 
     Raises:
@@ -226,7 +226,7 @@ def read_table(
         view, rejected = _read_each_file(conn, plan, spec, spec.check)
     else:
         view = create_table_view(conn, plan.source, plan.table, list(plan.files), spec.read)
-    checked = checks and run_checks(
+    checked = soda_checks and run_checks(
         conn,
         source=plan.source,
         table=plan.table,

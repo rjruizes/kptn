@@ -242,7 +242,7 @@ def test_load_lists_rejected_files(tmp_path: Path) -> None:
         check=subject_matches_filename,
     )
     conn = duckdb.connect()
-    created = load(conn, source, root=tmp_path)  # check= runs without checks=True
+    created = load(conn, source, root=tmp_path)  # check= runs without soda_checks=True
     assert created == ['raw_meals."meals"', 'raw_meals."_rejected"']
     assert conn.execute("SELECT count(*) FROM raw_meals.meals").fetchall() == [(2,)]
     assert conn.execute(

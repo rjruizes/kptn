@@ -24,7 +24,7 @@ def load(
     config_values: Mapping[str, Any] | None = None,
     *,
     root: Path | str = ".",
-    checks: bool = False,
+    soda_checks: bool = False,
 ) -> list[str]:
     """Read *source*'s files into ``raw_<source>.<table>`` tables on *conn*.
 
@@ -39,7 +39,7 @@ def load(
 
     Files ``table=`` assigns to no table, and files the source's ``check=``
     rejects, are left out and listed in ``raw_<source>._rejected``, as a
-    run's view of that name lists them. ``check=`` runs whatever *checks*
+    run's view of that name lists them. ``check=`` runs whatever *soda_checks*
     says: it is part of reading the source, like ``read=``.
 
     Args:
@@ -48,7 +48,7 @@ def load(
         config_values: The values a ``files=`` callable takes by name, as a
             task's parameters would be filled from config.
         root: The project root, where ``checks/<source>/`` is found.
-        checks: Run each table's check file (``checks/<source>/<table>.yml``),
+        soda_checks: Run each table's check file (``checks/<source>/<table>.yml``),
             as a run does.
 
     Returns:
@@ -56,7 +56,7 @@ def load(
 
     Raises:
         HashError: a pattern matched nothing or a file is unreadable.
-        TaskError: with *checks*, a check file failed; or ``check=``
+        TaskError: with *soda_checks*, a check file failed; or ``check=``
             rejected every file of a table.
     """
     spec = source.__kptn__
@@ -73,7 +73,7 @@ def load(
             # Views resolve the names in them in the current database, so the
             # copy runs from inside the scratch one.
             conn.execute(f"USE {_SCRATCH}")
-            read = read_table(conn, plan, spec, root=root, checks=checks)
+            read = read_table(conn, plan, spec, root=root, soda_checks=soda_checks)
             view = read.view
             conn.execute(f"CREATE OR REPLACE TABLE {_ident(database)}.{view} AS SELECT * FROM {view}")
         finally:

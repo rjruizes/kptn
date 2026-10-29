@@ -124,7 +124,7 @@ def test_checks_run_only_when_asked(tmp_path: Path) -> None:
     load(conn, _source(), {"base": str(root / "in")}, root=root)
 
     with pytest.raises(TaskError, match=r"sales\.orders"):
-        load(conn, _source(), {"base": str(root / "in")}, root=root, checks=True)
+        load(conn, _source(), {"base": str(root / "in")}, root=root, soda_checks=True)
     # A failure leaves the connection as it was found.
     assert conn.execute("SELECT current_database(), current_schema()").fetchall() == [("memory", "main")]
     assert "_kptn_load" not in [r[0] for r in conn.execute("SELECT database_name FROM duckdb_databases()").fetchall()]
@@ -142,6 +142,6 @@ def test_passing_checks_see_only_the_table_being_read(tmp_path: Path) -> None:
     conn = duckdb.connect()
     # Twice, so the second read happens with the tables already on conn.
     for _ in range(2):
-        load(conn, _source(), {"base": str(root / "in")}, root=root, checks=True)
+        load(conn, _source(), {"base": str(root / "in")}, root=root, soda_checks=True)
 
     assert conn.execute("SELECT count(*) FROM raw_sales.orders").fetchall() == [(2,)]

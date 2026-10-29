@@ -324,7 +324,7 @@ def test_load_sales():
     ...
 ```
 
-Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Check files are skipped unless you pass `checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory). A source's `check=` always runs, as it does in a run, since it decides which files the tables hold. Files left out are listed in a `raw_<source>._rejected` table. Tables of the same names are replaced.
+Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Check files are skipped unless you pass `soda_checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory). A source's `check=` always runs, as it does in a run, since it decides which files the tables hold. Files left out are listed in a `raw_<source>._rejected` table. Tables of the same names are replaced.
 
 ### Shared bronze
 
@@ -440,7 +440,7 @@ Earlier versions kept the bookkeeping loose in `.kptn/` and the tables in `_bron
 | `kptn.r_task(path, outputs, compute=None, optional=None, duckdb_checkpoint=False, requires=None)` | Register an R script as a task |
 | `kptn.noop()` | Placeholder / synchronization node |
 | `kptn.source(name, files, *, table=None, read=None)` | Read raw files into `.kptn/_bronze/<name>/`, one text-only parquet per table, served as `raw_<name>.<table>` views |
-| `kptn.sources.load(conn, source, config_values=None, *, root=".", checks=False)` | Read a source's files straight into `raw_<name>.<table>` tables on *conn*, for tests |
+| `kptn.sources.load(conn, source, config_values=None, *, root=".", soda_checks=False)` | Read a source's files straight into `raw_<name>.<table>` tables on *conn*, for tests |
 
 ### Graph Composition
 
