@@ -388,7 +388,7 @@ def _execute_source(
     With *shared*, a table that is not current is linked from the shared
     bronze when its key is there, and otherwise built into it and linked. ``force`` and ``no_cache`` build a local file and never publish.
 
-    Files a file check rejects, and files ``table=`` assigns to no table, are
+    Files the source's ``check=`` rejects, and files ``table=`` assigns to no table, are
     left out with a warning and recorded for the ``raw_<source>._rejected`` view.
     """
     try:

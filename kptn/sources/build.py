@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +16,7 @@ import duckdb
 from kptn.change_detector.hasher import hash_file, hash_task_source
 from kptn.exceptions import HashError, TaskError
 from kptn.layout import BRONZE_DIR
-from kptn.sources.checks import check_path, file_check_failure, file_check_path, run_checks
+from kptn.sources.checks import check_path, file_check_reason, run_checks
 from kptn.sources.files import SourceFile, group_by_table, resolve_files
 from kptn.sources.read import create_table_view, read_file_table, union_view
 from kptn.sources.rejects import (
@@ -79,9 +79,8 @@ class TablePlan:
     code_hash: str
     #: ``size:mtime_ns`` of each file in ``files``, in the same order.
     stamps: tuple[str, ...]
-    #: ``checks/<source>/<table>.file.yml`` when it exists. With one, a bad
-    #: file is left out of the table and recorded in ``rejects``.
-    file_check: Path | None = None
+    #: The record of files the source's ``check=`` left out, for a source
+    #: with one; None without.
     rejects: Path | None = None
 
     @property
@@ -91,7 +90,8 @@ class TablePlan:
 
 def source_code_hash(spec: SourceSpec) -> str:
     """Hash of the source's own callables and the functions they call."""
-    parts = [hash_task_source(fn) for fn in (spec.files, spec.table, spec.read) if callable(fn)]
+    fns = (spec.files, spec.table, spec.read, spec.check)
+    parts = [hash_task_source(fn) for fn in fns if callable(fn)]
     return _sha(*parts)
 
 
@@ -117,14 +117,8 @@ def plan_source(
     plans: list[TablePlan] = []
     for table, table_files in tables.items():
         check = check_path(root, name, table)
-        file_check: Path | None = file_check_path(root, name, table)
         parts = [f"{f.rel}:{stamps[f.path]}" for f in table_files]
         parts.append(f"check:{hash_file(str(check)) if check.exists() else 'none'}")
-        # Only when there is one, so tables without a file check keep their keys.
-        if file_check.exists():
-            parts.append(f"file_check:{hash_file(str(file_check))}")
-        else:
-            file_check = None
         input_hash = _sha(*parts)
         plans.append(
             TablePlan(
@@ -137,8 +131,7 @@ def plan_source(
                 parquet=root / BRONZE_DIR / name / f"{table}.parquet",
                 code_hash=code,
                 stamps=tuple(stamps[f.path] for f in table_files),
-                file_check=file_check,
-                rejects=rejects_path(root, name, table) if file_check is not None else None,
+                rejects=rejects_path(root, name, table) if spec.check is not None else None,
             )
         )
     return plans, no_table
@@ -174,14 +167,14 @@ def is_current(plan: TablePlan, state_store: _ReadsHashes, storage_key: str, pip
 @dataclass(frozen=True)
 class TableRead:
     view: str
-    #: Whether a check file or file check ran.
+    #: Whether a check file or ``check=`` ran.
     checked: bool
-    #: Files a file check left out; empty without one.
+    #: Files ``check=`` left out, or that could not be read; empty without one.
     rejected: tuple[RejectedFile, ...] = ()
 
 
 def _read_each_file(
-    conn: duckdb.DuckDBPyConnection, plan: TablePlan, spec: SourceSpec, file_check: Path
+    conn: duckdb.DuckDBPyConnection, plan: TablePlan, spec: SourceSpec, check: Callable[..., Any]
 ) -> tuple[str, list[RejectedFile]]:
     """Read and check each file on its own, and serve the files that pass."""
     kept: list[str] = []
@@ -192,8 +185,8 @@ def _read_each_file(
         except Exception as exc:  # anything a file's content makes DuckDB or read= raise
             rejected.append(RejectedFile(plan.table, file.rel, f"cannot be read: {exc}"))
             continue
-        failure = file_check_failure(
-            conn, file_check, source=plan.source, table=plan.table, relation=relation
+        failure = file_check_reason(
+            check, rows=conn.table(relation), file=file, table=plan.table
         )
         if failure is None:
             kept.append(f"SELECT * FROM {relation}")
@@ -218,24 +211,30 @@ def read_table(
     checks: bool = True,
 ) -> TableRead:
     """Create ``raw_<source>."<table>"`` over the plan's files on *conn* and,
-    with *checks*, validate it.
+    with *checks*, validate it with its check file.
 
-    With *checks* and a file check, each file is read and checked on its
-    own first, and the files that fail either are left out of the view.
+    A source's ``check=`` is part of reading it, like ``read=``, so it runs
+    whatever *checks* says: each file is read and checked on its own, and
+    the files that fail or cannot be read are left out of the view.
 
     Raises:
-        TaskError: a check failed, or a file check rejected every file.
+        TaskError: a check file failed, or ``check=`` rejected every file.
+        TypeError: ``check=`` returned something other than None or a string.
     """
     rejected: list[RejectedFile] = []
-    file_check = plan.file_check if checks else None
-    if file_check is not None:
-        view, rejected = _read_each_file(conn, plan, spec, file_check)
+    if spec.check is not None:
+        view, rejected = _read_each_file(conn, plan, spec, spec.check)
     else:
         view = create_table_view(conn, plan.source, plan.table, list(plan.files), spec.read)
     checked = checks and run_checks(
-        conn, source=plan.source, table=plan.table, root=root, declared_at=spec.declared_at
+        conn,
+        source=plan.source,
+        table=plan.table,
+        root=root,
+        declared_at=spec.declared_at,
+        file_checked=spec.check is not None,
     )
-    return TableRead(view, checked or file_check is not None, tuple(rejected))
+    return TableRead(view, checked or spec.check is not None, tuple(rejected))
 
 
 def build_table(
@@ -247,7 +246,7 @@ def build_table(
     rejects_dest: Path | None = None,
 ) -> bool:
     """Read, validate and atomically write one table to *dest*, by default
-    ``plan.parquet``, and, for a table with a file check, its record of
+    ``plan.parquet``, and, for a source with ``check=``, its record of
     rejected files to *rejects_dest*, by default ``plan.rejects``. Returns
     whether checks ran.
 

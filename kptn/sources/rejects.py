@@ -1,8 +1,8 @@
 """The record of files a source left out, served as ``raw_<source>._rejected``.
 
-A table with a file check (``checks/<source>/<table>.file.yml``) keeps one
-record, ``.kptn/_bronze/<source>/_rejected/<table>.parquet``, written with the
-table even when it is empty. Files a ``table=`` callable assigns to no table
+Each table of a source with ``check=`` keeps one record,
+``.kptn/_bronze/<source>/_rejected/<table>.parquet``, written with the table
+even when it is empty. Files a ``table=`` callable assigns to no table
 are kept in ``_rejected/_no_table.parquet``. Table names never start with an
 underscore, so neither name can belong to a table.
 """

@@ -1,8 +1,9 @@
-"""File checks: ``checks/<source>/<table>.file.yml`` leaves bad files out, with a record."""
+"""``kptn.source(check=...)`` leaves bad files out, with a record."""
 
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import duckdb
@@ -19,7 +20,6 @@ from kptn.sources.build import (
     remove_stale_tables,
     state_value,
 )
-from kptn.sources.checks import file_check_path
 from kptn.sources.files import SourceFile
 from kptn.sources.load import load
 from kptn.sources.read import read_file_table
@@ -28,14 +28,12 @@ from kptn.sources.shared import ENTRY_LABEL, SHARED_BRONZE_ENV, SharedBronze
 from kptn.sources.spec import SourceSpec
 from kptn.sources.views import apply_search_path, register_views
 
-#: Each file holds one subject's meals; a file whose subject is not its name is bad.
-FILE_CHECK = (
-    "checks for meals:\n"
-    "  - row_count > 0\n"
-    "  - failed rows:\n"
-    "      name: subject matches the filename\n"
-    "      fail condition: subject <> regexp_extract(_source_file, '([^/]+)\\.csv$', 1)\n"
-)
+def subject_matches_filename(rows, file):
+    """Each file holds one subject's meals; a file whose subject is not its name is bad."""
+    others = rows.filter(f"subject <> '{file.path.stem}'").aggregate("count(*)").fetchone()[0]
+    if others:
+        return f"{others} row(s) name another subject"
+    return None
 
 
 def _write(root: Path, rel: str, text: str) -> Path:
@@ -45,14 +43,16 @@ def _write(root: Path, rel: str, text: str) -> Path:
     return p
 
 
-def _project(root: Path, *, file_check: bool = True) -> SourceSpec:
+def _files(root: Path) -> None:
     """Three subjects' files: one good, one naming another subject, one unreadable."""
     _write(root, "in/meals/p001.csv", "subject,kcal\np001,2000\np001,1800\n")
     _write(root, "in/meals/p002.csv", "subject,kcal\np009,2100\n")
     (root / "in/meals/p003.csv").write_bytes(b"subject,kcal\np003,\xff\xfe\n")
-    if file_check:
-        _write(root, "checks/meals/meals.file.yml", FILE_CHECK)
-    return SourceSpec(files=str(root / "in/meals"), table="meals")
+
+
+def _project(root: Path, check=subject_matches_filename) -> SourceSpec:
+    _files(root)
+    return SourceSpec(files=str(root / "in/meals"), table="meals", check=check)
 
 
 def _rows(path: Path, sql: str = "SELECT * FROM t ORDER BY ALL") -> list[tuple]:
@@ -64,21 +64,14 @@ def _rows(path: Path, sql: str = "SELECT * FROM t ORDER BY ALL") -> list[tuple]:
         conn.close()
 
 
-@pytest.fixture(autouse=True)
-def _soda() -> None:
-    pytest.importorskip("soda.scan")
-
-
-def test_file_check_path_convention(tmp_path: Path) -> None:
-    assert file_check_path(tmp_path, "s", "meals") == tmp_path / "checks/s/meals.file.yml"
-
-
 def test_bad_files_are_left_out_and_recorded(tmp_path: Path) -> None:
     spec = _project(tmp_path)
     [plan] = plan_tables("meals", spec, {}, root=tmp_path)
     assert plan.rejects == rejects_path(tmp_path, "meals", "meals")
 
-    assert build_table(plan, spec, root=tmp_path) is True  # no table check, so no warning
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # check= stands in for a table check: no warning
+        assert build_table(plan, spec, root=tmp_path) is True
 
     assert _rows(plan.parquet, "SELECT subject, kcal, _source_file FROM t ORDER BY ALL") == [
         ("p001", "1800", "meals/p001.csv"),
@@ -86,11 +79,12 @@ def test_bad_files_are_left_out_and_recorded(tmp_path: Path) -> None:
     ]
     rejected = _rows(plan.rejects)
     assert [(t, f) for t, f, _ in rejected] == [("meals", "meals/p002.csv"), ("meals", "meals/p003.csv")]
-    assert rejected[0][2] == "failed subject matches the filename (1)"
+    assert rejected[0][2] == "1 row(s) name another subject"
     assert rejected[1][2].startswith("cannot be read:")
 
 
 def test_table_check_still_runs_on_the_files_kept(tmp_path: Path) -> None:
+    pytest.importorskip("soda.scan")
     spec = _project(tmp_path)
     _write(tmp_path, "checks/meals/meals.yml", "checks for meals:\n  - row_count = 2\n")
     [plan] = plan_tables("meals", spec, {}, root=tmp_path)
@@ -112,46 +106,65 @@ def test_every_file_rejected_fails_the_table(tmp_path: Path) -> None:
     assert not plan.rejects.exists()
 
 
-def test_a_file_missing_a_checked_column_is_rejected(tmp_path: Path) -> None:
+def test_a_check_that_raises_rejects_the_file_with_the_error(tmp_path: Path) -> None:
     spec = _project(tmp_path)
     _write(tmp_path, "in/meals/p004.csv", "kcal\n1900\n")
     [plan] = plan_tables("meals", spec, {}, root=tmp_path)
     build_table(plan, spec, root=tmp_path)
     reasons = dict((f, r) for _, f, r in _rows(plan.rejects))
-    assert 'column "subject" not found' in reasons["meals/p004.csv"]
+    assert reasons["meals/p004.csv"].startswith("check= raised BinderException:")
+    assert '"subject"' in reasons["meals/p004.csv"]
 
 
-def test_a_file_check_without_soda_fails_rather_than_rejecting(tmp_path: Path, monkeypatch) -> None:
-    import sys
+def test_check_takes_any_of_its_arguments_by_name(tmp_path: Path) -> None:
+    seen: list[tuple] = []
 
-    spec = _project(tmp_path)
-    monkeypatch.setitem(sys.modules, "soda", None)
-    monkeypatch.setitem(sys.modules, "soda.scan", None)
+    def check(table, file):
+        seen.append((table, file.rel))
+
+    spec = _project(tmp_path, check=check)
+    (tmp_path / "in/meals/p003.csv").unlink()
     [plan] = plan_tables("meals", spec, {}, root=tmp_path)
-    with pytest.raises(TaskError, match=r"kptn\[soda\]"):
+    build_table(plan, spec, root=tmp_path)
+    assert seen == [("meals", "meals/p001.csv"), ("meals", "meals/p002.csv")]
+
+
+def test_an_empty_reason_still_rejects(tmp_path: Path) -> None:
+    spec = _project(tmp_path, check=lambda file: "" if file.name == "p002.csv" else None)
+    [plan] = plan_tables("meals", spec, {}, root=tmp_path)
+    build_table(plan, spec, root=tmp_path)
+    assert ("meals", "meals/p002.csv", "rejected by check=") in _rows(plan.rejects)
+
+
+@pytest.mark.parametrize("returned", [False, True, 0])
+def test_a_non_string_return_fails_rather_than_rejecting(tmp_path: Path, returned) -> None:
+    spec = _project(tmp_path, check=lambda rows: returned)
+    [plan] = plan_tables("meals", spec, {}, root=tmp_path)
+    with pytest.raises(TypeError, match="return None to keep a file"):
         build_table(plan, spec, root=tmp_path)
 
 
-def test_without_a_file_check_a_bad_file_fails_the_table(tmp_path: Path) -> None:
-    spec = _project(tmp_path, file_check=False)
+def test_check_parameters_are_validated_when_declared() -> None:
+    with pytest.raises(TypeError, match="cannot take 'df'"):
+        kptn.source("s", files="in", check=lambda df: None)
+    with pytest.raises(TypeError, match="must be a callable"):
+        kptn.source("s", files="in", check="checks.yml")
+    kptn.source("s", files="in", check=lambda rows, limit=3, **extra: None)
+
+
+def test_without_a_check_a_bad_file_fails_the_table(tmp_path: Path) -> None:
+    spec = _project(tmp_path, check=None)
     [plan] = plan_tables("meals", spec, {}, root=tmp_path)
-    assert plan.file_check is None and plan.rejects is None
+    assert plan.rejects is None
     with pytest.raises(duckdb.Error):  # before checks, so no missing-check warning
         build_table(plan, spec, root=tmp_path)
 
 
-def test_a_file_check_changes_the_key_only_when_it_exists(tmp_path: Path) -> None:
-    spec = _project(tmp_path, file_check=False)
-    [before] = plan_tables("meals", spec, {}, root=tmp_path)
-    _write(tmp_path, "checks/meals/meals.file.yml", FILE_CHECK)
-    [checked] = plan_tables("meals", spec, {}, root=tmp_path)
-    _write(tmp_path, "checks/meals/meals.file.yml", FILE_CHECK + "  - row_count < 10\n")
-    [edited] = plan_tables("meals", spec, {}, root=tmp_path)
-    (tmp_path / "checks/meals/meals.file.yml").unlink()
-    [after] = plan_tables("meals", spec, {}, root=tmp_path)
-
-    assert len({before.key, checked.key, edited.key}) == 3
-    assert after.key == before.key
+def test_the_check_is_part_of_the_key(tmp_path: Path) -> None:
+    [before] = plan_tables("meals", _project(tmp_path, check=None), {}, root=tmp_path)
+    [checked] = plan_tables("meals", _project(tmp_path), {}, root=tmp_path)
+    [other] = plan_tables("meals", _project(tmp_path, check=lambda rows: None), {}, root=tmp_path)
+    assert len({before.key, checked.key, other.key}) == 3
 
 
 def test_a_late_csv_error_is_caught_when_its_file_is_read(tmp_path: Path) -> None:
@@ -220,15 +233,16 @@ def test_register_views_serves_the_records_and_drops_the_view_without_them(tmp_p
 
 
 def test_load_lists_rejected_files(tmp_path: Path) -> None:
-    _project(tmp_path)
+    _files(tmp_path)
     _write(tmp_path, "in/meals/notes.txt", "x\n1\n")
     source = kptn.source(
         "meals",
         files=str(tmp_path / "in/meals"),
         table=lambda f: "meals" if f.path.suffix == ".csv" else None,
+        check=subject_matches_filename,
     )
     conn = duckdb.connect()
-    created = load(conn, source, root=tmp_path, checks=True)
+    created = load(conn, source, root=tmp_path)  # check= runs without checks=True
     assert created == ['raw_meals."meals"', 'raw_meals."_rejected"']
     assert conn.execute("SELECT count(*) FROM raw_meals.meals").fetchall() == [(2,)]
     assert conn.execute(
@@ -272,6 +286,7 @@ def _pipeline(
         "meals",
         files="in/meals",
         table=lambda f: "meals" if f.path.suffix == ".csv" else None,
+        check=subject_matches_filename,
     )
     pipeline = kptn.Pipeline(
         "p", kptn.config(duckdb=(get_engine, "engine")) >> kptn.Stage("raw", meals) >> consumer
@@ -281,7 +296,7 @@ def _pipeline(
 
 def test_run_warns_records_and_serves_rejected_files(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    _project(tmp_path)
+    _files(tmp_path)
     _write(tmp_path, "in/meals/notes.txt", "x\n1\n")
     pipeline, seen, _ = _pipeline(tmp_path)
 
@@ -310,7 +325,7 @@ def test_shared_bronze_carries_the_record(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "alice"
     project.mkdir()
     monkeypatch.chdir(project)
-    _project(project)
+    _files(project)
     pipeline, seen, meals = _pipeline(project, "  shared_bronze: ../_kptn_bronze\n")
 
     rec = Recorder()
@@ -319,10 +334,9 @@ def test_shared_bronze_carries_the_record(tmp_path: Path, monkeypatch) -> None:
     assert rec.finished("meals[meals]")["shared"] == "published"
     [plan] = plan_tables("meals", meals.__kptn__, {}, root=project)
     entry = SharedBronze(cache.resolve()).entry(plan)
-    assert json.loads((entry / ENTRY_LABEL).read_text())["rejected"] == [
-        "meals/p002.csv",
-        "meals/p003.csv",
-    ]
+    label = json.loads((entry / ENTRY_LABEL).read_text())
+    assert label["rejected"] == ["meals/p002.csv", "meals/p003.csv"]
+    assert label["check"] == f"{__name__}.subject_matches_filename"
     assert plan.rejects.is_symlink()
 
     # A fresh working directory restores the table and its record.

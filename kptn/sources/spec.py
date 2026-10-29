@@ -8,6 +8,7 @@ and the executor for when it runs.
 
 from __future__ import annotations
 
+import inspect
 import re
 import sys
 from dataclasses import dataclass, field
@@ -25,6 +26,12 @@ FilesArg = Union[str, list[str], tuple[str, ...], Callable[..., Any]]
 TableArg = Union[str, Callable[[Any], Union[str, None]]]
 #: Reads one file path into a pandas DataFrame, pyarrow Table or DuckDB relation.
 ReadFn = Callable[[str], Any]
+#: Checks one file, taking any of ``rows``, ``file`` and ``table`` by name;
+#: returns None to keep it or the reason to leave it out.
+CheckFn = Callable[..., Union[str, None]]
+
+#: The parameters a ``check=`` callable may take, passed by name.
+CHECK_PARAMS = ("rows", "file", "table")
 
 _SOURCE_NAME = re.compile(r"[a-z][a-z0-9_]*")
 _FROM_CONFIG = "(computed from config)"
@@ -38,11 +45,27 @@ def _describe_files(files: FilesArg) -> tuple[str, ...]:
     return tuple(str(f) for f in files)
 
 
+def _check_signature(name: str, check: Callable[..., Any]) -> None:
+    try:
+        params = inspect.signature(check).parameters.values()
+    except (TypeError, ValueError):
+        return  # a builtin without a signature; it fails when called, if at all
+    for p in params:
+        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) or p.default is not p.empty:
+            continue
+        if p.kind is p.POSITIONAL_ONLY or p.name not in CHECK_PARAMS:
+            raise TypeError(
+                f"kptn.source {name!r}: check= takes its arguments by name, from "
+                f"{', '.join(CHECK_PARAMS)}; it cannot take {p.name!r}."
+            )
+
+
 @dataclass
 class SourceSpec:
     files: FilesArg
     table: TableArg | None = None
     read: ReadFn | None = None
+    check: CheckFn | None = None
     declared_at: tuple[str, int] | None = None
     description: str | None = None
     # Attributes every kptn spec carries. The resolver, ``requires`` handling,
@@ -80,6 +103,7 @@ def source(
     *,
     table: TableArg | None = None,
     read: ReadFn | None = None,
+    check: CheckFn | None = None,
 ) -> SourceHandle:
     """Declare raw input files that kptn reads into ``.kptn/_bronze/<name>/``.
 
@@ -87,10 +111,9 @@ def source(
     Files are read by extension (CSV, TSV, JSON, Parquet), every value is stored
     as text, column names are lowercased, each row gets a
     ``_source_file`` column, and each table is validated by
-    ``checks/<name>/<table>.yml`` when that file exists. With
-    ``checks/<name>/<table>.file.yml``, each file is validated on its own
-    first, and files that fail are left out and listed in
-    ``raw_<name>._rejected``.
+    ``checks/<name>/<table>.yml`` when that file exists. With *check*, each
+    file is checked on its own first, and files that fail are left out and
+    listed in ``raw_<name>._rejected``.
 
     When ``kptn.config`` names a DuckDB connection, each run also serves every
     table as the view ``raw_<name>.<table>``, whether or not it was rebuilt.
@@ -111,6 +134,14 @@ def source(
         read: For formats kptn does not read itself, such as Excel or R data: a
             callable taking a path and returning a pandas DataFrame, pyarrow
             Table, or DuckDB relation.
+        check: Checks each file before it joins its table. Takes, by name, any
+            of ``rows`` (a DuckDB relation over the file's rows as the table
+            stores them), ``file`` (the file, with ``.path`` and ``.name``) and
+            ``table``. Returns None to keep the file, or a string saying why
+            to leave it out; ``False`` is not a reason and fails the run.
+            A check that raises leaves the file out with the error as its
+            reason. Its code is part of the cache key, so it should depend
+            on the file alone, not on other files it reads.
     """
     if not isinstance(name, str) or not _SOURCE_NAME.fullmatch(name):
         raise ValueError(
@@ -125,11 +156,16 @@ def source(
         raise TypeError("kptn.source table= must be a string or a callable.")
     if read is not None and not callable(read):
         raise TypeError("kptn.source read= must be a callable.")
+    if check is not None:
+        if not callable(check):
+            raise TypeError("kptn.source check= must be a callable.")
+        _check_signature(name, check)
     caller = sys._getframe(1)
     spec = SourceSpec(
         files=files,
         table=table,
         read=read,
+        check=check,
         declared_at=(caller.f_code.co_filename, caller.f_lineno),
         description=f"Reads raw files into .kptn/_bronze/{name}/ and serves them as raw_{name}.<table>.",
     )

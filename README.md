@@ -273,7 +273,7 @@ pipeline = kptn.Pipeline(
 | Values | Every column stored as text, under its name in lowercase, so files that spell a column differently (`mealTime`, `MEALTIME`) feed one `mealtime` column. Transform downstream. |
 | Tables | One per file stem, unless `table=` says otherwise. Files feeding one table are combined by column name. A `table=` callable that returns `None` leaves the file out, with a warning, and lists it in `raw_<source>._rejected`. |
 | Provenance | A `_source_file` column, such as `sales/orders_2024-01-24.csv`. |
-| Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written, naming the table alone (`checks for orders:`) and its columns in lowercase. A failure stops the run. `checks/<source>/<table>.file.yml` checks each file instead, and leaves out the files that fail; see [Checking each file](#checking-each-file). |
+| Checks | `checks/<source>/<table>.yml`, run with Soda (`pip install kptn[soda]`) before the table is written, naming the table alone (`checks for orders:`) and its columns in lowercase. A failure stops the run. To check each file instead, and leave out the files that fail, pass `check=`; see [Checking each file](#checking-each-file). |
 | Storage | `.kptn/_bronze/<source>/<table>.parquet`. |
 | Views | `raw_<source>.<table>`, such as `raw_sales.orders`: one schema per source, created by the source itself on every run, cached or not, when `kptn.config` names a DuckDB connection. Views of tables the source no longer has are dropped. |
 
@@ -281,20 +281,28 @@ Each table is cached on its own files, check files and the source's code. A chan
 
 ### Checking each file
 
-When a table is fed by many small files, such as one per participant, one bad file should not stop the run. Add `checks/<source>/<table>.file.yml` and kptn reads and checks each file on its own before combining them. A file that cannot be read, or fails a check, is left out with a warning; the rest are combined, and `checks/<source>/<table>.yml`, if there is one, then checks the result and stops the run when it fails. If every file is left out, the table fails.
+When a table is fed by many small files, such as one per participant, one bad file should not stop the run. Pass `check=`, a function kptn calls on each file before combining them. It returns `None` to keep the file, or a string saying why to leave it out:
 
-A file check is written like a check file, `checks for <table>:`, but it sees one file's rows. Since each row carries `_source_file`, it can compare a file's contents with its name:
+```python
+def subject_matches_filename(rows, file):
+    subjects = rows.filter(f"subject <> '{file.path.stem}'").aggregate("count(*)").fetchone()[0]
+    if subjects:
+        return f"{subjects} row(s) name another subject"
+    return None
 
-```yaml
-# checks/meals/day_served.file.yml
-checks for day_served:
-  - row_count > 0
-  - failed rows:
-      name: subject matches the filename
-      fail condition: subject <> split_part(regexp_extract(_source_file, '[^/]+$'), '-', 1)
+
+meals = kptn.source("meals", files="data/meals", table="day_served", check=subject_matches_filename)
 ```
 
-Files left out are listed in the view `raw_<source>._rejected`, with columns `table_name`, `_source_file` and `reason`, and kept in `.kptn/_bronze/<source>/_rejected/`. A table with a file check keeps that list even when it is empty, so the view is there for every source that has one. A fixed file changes its size or modification time, so its table rebuilds and picks it up. Tables without a file check behave as before: a file that cannot be read stops the run.
+The function takes, by name, any of:
+
+- `rows`: a DuckDB relation over the file's rows as the table stores them, with text values, lowercase column names and `_source_file`. Filter and aggregate it in DuckDB, or call `.df()`, `.pl()` or `.arrow()` when you need the rows in Python.
+- `file`: the file, with `.path`, `.name` and `.rel` (its `_source_file`).
+- `table`: the table it feeds, for a source with more than one.
+
+A file that cannot be read, or that the check rejects, is left out with a warning; the rest are combined, and `checks/<source>/<table>.yml`, if there is one, then checks the result and stops the run when it fails. If every file of a table is left out, the table fails. A check that raises leaves the file out with the error as its reason, such as `check= raised KeyError: 'date'`, so a bug in a check that fires on every file fails the table rather than passing quietly. A check that returns anything other than `None` or a string, such as `False`, fails the run.
+
+Files left out are listed in the view `raw_<source>._rejected`, with columns `table_name`, `_source_file` and `reason`, and kept in `.kptn/_bronze/<source>/_rejected/`. A source with `check=` keeps that list even when it is empty, so the view is always there. A fixed file changes its size or modification time, so its table rebuilds and picks it up. The check's code, and the functions it calls in your project, are part of each table's cache key, so a changed check rebuilds the tables; a check should depend on the file alone, since kptn cannot see other files it reads. Without `check=`, a file that cannot be read stops the run.
 
 ### Loading a source in a test
 
@@ -316,7 +324,7 @@ def test_load_sales():
     ...
 ```
 
-Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Checks are skipped unless you pass `checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory); with it, files a file check rejects are left out as in a run. Files left out are listed in a `raw_<source>._rejected` table. Tables of the same names are replaced.
+Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Check files are skipped unless you pass `checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory). A source's `check=` always runs, as it does in a run, since it decides which files the tables hold. Files left out are listed in a `raw_<source>._rejected` table. Tables of the same names are replaced.
 
 ### Shared bronze
 

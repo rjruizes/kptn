@@ -6,7 +6,7 @@ Layout, under the root named by ``settings.shared_bronze``::
     <source>/<table>/<key>/
         entry.json                   what built it, from which files; never read by kptn
         <table>.parquet
-        _rejected.parquet            the files a file check left out, for a table with one
+        _rejected.parquet            the files check= left out, for a source with one
 
 An entry is immutable and complete whenever it exists. Several Unix accounts
 share one directory over NFS, so everything kptn creates here gets explicit
@@ -67,7 +67,7 @@ class SharedBronze:
         return parquet if parquet.is_file() else None
 
     def rejects(self, plan: TablePlan) -> Path:
-        """The entry's record of rejected files, for a table with a file check."""
+        """The entry's record of rejected files, for a source with ``check=``."""
         return self.entry(plan) / ENTRY_REJECTS
 
     def publish(self, plan: TablePlan, spec: SourceSpec, *, root: Path) -> tuple[Path, Outcome]:
@@ -85,7 +85,7 @@ class SharedBronze:
             rejects = tmp / ENTRY_REJECTS if plan.rejects is not None else None
             build_table(plan, spec, root=root, dest=parquet, rejects_dest=rejects)
             label = tmp / ENTRY_LABEL
-            label.write_text(json.dumps(_label(plan, parquet, rejects, root), indent=2) + "\n")
+            label.write_text(json.dumps(_label(plan, spec, parquet, rejects, root), indent=2) + "\n")
             for f in (parquet, label, rejects):
                 if f is not None:
                     os.chmod(f, FILE_MODE)
@@ -149,7 +149,17 @@ def _whoami() -> str:
         return str(os.getuid())
 
 
-def _label(plan: TablePlan, parquet: Path, rejects: Path | None, root: Path) -> dict[str, object]:
+def _qualname(fn: object) -> str | None:
+    if fn is None:
+        return None
+    module = getattr(fn, "__module__", None)
+    name = getattr(fn, "__qualname__", None) or repr(fn)
+    return f"{module}.{name}" if module else name
+
+
+def _label(
+    plan: TablePlan, spec: SourceSpec, parquet: Path, rejects: Path | None, root: Path
+) -> dict[str, object]:
     """``entry.json``: which files and code built this entry, and who built it."""
     path = "'" + str(parquet).replace("'", "''") + "'"
     conn = duckdb.connect()
@@ -181,7 +191,7 @@ def _label(plan: TablePlan, parquet: Path, rejects: Path | None, root: Path) -> 
         "format_version": SOURCE_FORMAT_VERSION,
         "files": files,
         "check_file": check.relative_to(root).as_posix() if check.exists() else None,
-        "file_check": plan.file_check.relative_to(root).as_posix() if plan.file_check else None,
+        "check": _qualname(spec.check),
         "rejected": rejected,
         "rows": row[0] if row else 0,
         "columns": [r[0] for r in described],

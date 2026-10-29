@@ -37,9 +37,10 @@ def load(
     Each table is read in an in-memory database attached to *conn*, so the
     views kptn reads through never land in *conn*'s own database.
 
-    Files ``table=`` assigns to no table, and with *checks* files a file
-    check rejects, are left out and listed in ``raw_<source>._rejected``, as
-    a run's view of that name lists them.
+    Files ``table=`` assigns to no table, and files the source's ``check=``
+    rejects, are left out and listed in ``raw_<source>._rejected``, as a
+    run's view of that name lists them. ``check=`` runs whatever *checks*
+    says: it is part of reading the source, like ``read=``.
 
     Args:
         conn: The connection to create the tables on, in its current database.
@@ -47,14 +48,16 @@ def load(
         config_values: The values a ``files=`` callable takes by name, as a
             task's parameters would be filled from config.
         root: The project root, where ``checks/<source>/`` is found.
-        checks: Run each table's check file, as a run does.
+        checks: Run each table's check file (``checks/<source>/<table>.yml``),
+            as a run does.
 
     Returns:
         The tables created, as ``raw_<source>."<table>"``.
 
     Raises:
         HashError: a pattern matched nothing or a file is unreadable.
-        TaskError: with *checks*, a check failed.
+        TaskError: with *checks*, a check file failed; or ``check=``
+            rejected every file of a table.
     """
     spec = source.__kptn__
     root = Path(root)
@@ -78,7 +81,7 @@ def load(
             conn.execute(f"DETACH {_SCRATCH}")
         created.append(view)
         rejected.extend(read.rejected)
-    if no_table or (checks and any(p.file_check is not None for p in plans)):
+    if no_table or spec.check is not None:
         name = view_name(source.__name__, REJECTED_VIEW)
         create_rejects_table(conn, f"{_ident(database)}.{name}", rejected)
         created.append(name)
