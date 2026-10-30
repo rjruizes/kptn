@@ -152,10 +152,11 @@ class _PrefetchedHashes:
         self._hashes: dict[str, str | None] | None = None
 
     def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None:
-        if (storage_key, pipeline) != self._key:
+        read_hashes = getattr(self._store, "read_hashes", None)
+        if (storage_key, pipeline) != self._key or read_hashes is None:
             return self._store.read_hash(storage_key, pipeline, task)
         if self._hashes is None:
-            self._hashes = self._store.read_hashes(storage_key, pipeline)  # type: ignore[attr-defined]
+            self._hashes = read_hashes(storage_key, pipeline)
         return self._hashes.get(task)
 
 

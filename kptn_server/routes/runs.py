@@ -999,7 +999,7 @@ def looks_wedged(record: RunRecord, *, now: datetime | None = None) -> bool:
 
 @router.get("/", response_class=HTMLResponse)
 @router.get("/runs", response_class=HTMLResponse)
-def landing(request: Request, profile: str | None = None) -> HTMLResponse:
+def landing(request: Request, profile: str | None = None) -> Response:
     """The UI's landing page: the newest run of the chosen profile.
 
     There is no run history page: the run page lists the profile's runs in

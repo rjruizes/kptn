@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request, params
 
 from kptn_server.context import ui
 from kptn_server.routes import inspect, lineage, runs
@@ -70,7 +70,7 @@ def active_run(request: Request) -> dict[str, object]:
 def register_routers(
     app: FastAPI,
     prefix: str = "",
-    dependencies: Sequence[Depends] | None = None,
+    dependencies: Sequence[params.Depends] | None = None,
 ) -> None:
     """Attach every project-scoped UI router to *app*, optionally prefixed.
 
@@ -83,11 +83,8 @@ def register_routers(
     signature changes and no handler learns that more than one project
     exists.
     """
-    shared = {"prefix": prefix, "dependencies": list(dependencies or [])}
-    app.include_router(project_router, **shared)
-    app.include_router(runs.router, **shared)
-    app.include_router(inspect.router, **shared)
-    app.include_router(lineage.router, **shared)
+    for included in (project_router, runs.router, inspect.router, lineage.router):
+        app.include_router(included, prefix=prefix, dependencies=list(dependencies or []))
 
 
 __all__ = ["project_router", "register_routers", "router"]

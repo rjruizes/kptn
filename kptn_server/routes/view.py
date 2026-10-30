@@ -193,7 +193,7 @@ def _no_such_run(request: Request, run_id: str) -> HTMLResponse:
 
 
 @router.get("/", response_class=HTMLResponse)
-def view_landing(request: Request) -> HTMLResponse:
+def view_landing(request: Request) -> Response:
     """The owner's newest run -- whose page lists the rest in its sidebar --
     or, with none published, the page that says so. Redirected to
     relatively, as the owner's own landing page is."""
