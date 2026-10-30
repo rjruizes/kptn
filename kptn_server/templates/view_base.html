@@ -2,11 +2,11 @@
   Shell for the read-only pages of somebody else's project (``/view/<slug>``).
 
   Not base.html. That shell's app bar acts on the project -- a profile
-  selector, Run, Plan, and a poll of the project's run lock -- and every one
-  of those needs the owner's run store or the owner's code, neither of which
-  a reader in another pod may touch. So this bar has no controls at all:
-  only the project picker, which names the project and marks it read-only,
-  and the nav.
+  selector, and the Run and Plan beside it, and a poll of the project's run
+  lock -- and every one of those needs the owner's run store or the owner's
+  code, neither of which a reader in another pod may touch. So this bar has
+  no controls at all: only the project picker, which names the project and
+  marks it read-only. The sidebar lists every profile's runs.
 
   app.js is still loaded (``_modules.html``), for the console's stream, its
   auto-scroll, and the settings modal. Its run-lock poll finds no
@@ -19,17 +19,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ project.display_name }} - kptn{% endblock %}</title>
+  {% include "_theme.html" %}
   <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version('app.css') }}">
   {% include "_modules.html" %}
 </head>
-<body data-base="{{ base }}" data-project-base="{{ project_base }}">
+<body class="{% block body_class %}{% endblock %}" data-base="{{ base }}" data-project-base="{{ project_base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
-      {% include "_project_picker.html" %}
-      <nav class="app-bar__nav" aria-label="Main">
-        <a href="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+      {% block side_toggle %}{% endblock %}
+      <div class="app-bar__start">
+        <a class="app-bar__brand" href="{{ base }}/" aria-label="kptn home">kptn</a>
+        {% include "_project_picker.html" %}
+      </div>
+      {% block app_tools %}{% endblock %}
+      <div class="app-bar__end">
         {% include "_settings.html" %}
-      </nav>
+      </div>
     </div>
   </header>
 

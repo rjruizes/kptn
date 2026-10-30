@@ -235,10 +235,13 @@ def test_plan_topological_order(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_build_plan_returns_ordered_reasons() -> None:
-    """Structured plan entries preserve task order, action, and reason."""
+    """Structured plan entries preserve task order, action, and reason.
+
+    No edge joins the tasks: a stale task_a upstream would make task_b run.
+    """
     node_a = _make_task_node("task_a")
     node_b = _make_task_node("task_b", outputs=["b.csv"])
-    resolved = _make_resolved(Graph(nodes=[node_a, node_b], edges=[(node_a, node_b)]))
+    resolved = _make_resolved(Graph(nodes=[node_a, node_b], edges=[]))
 
     with patch(
         "kptn.runner.plan.is_stale",
@@ -251,6 +254,34 @@ def test_build_plan_returns_ordered_reasons() -> None:
         ("task_b", PlanAction.SKIP, "cached"),
     ]
 
+
+
+def test_build_plan_runs_tasks_downstream_of_a_stale_task() -> None:
+    """A stale task makes its downstream run whatever its hash says, as the
+    executor does; a task that runs for want of outputs dirties nothing."""
+    node_a = _make_task_node("task_a")
+    node_b = _make_task_node("task_b", outputs=["b.csv"])
+    node_c = _make_task_node("task_c")
+    node_d = _make_task_node("task_d", outputs=["d.csv"])
+    resolved = _make_resolved(
+        Graph(nodes=[node_a, node_b, node_c, node_d], edges=[(node_a, node_b), (node_c, node_d)])
+    )
+    verdicts = {
+        "task_a": (True, "code changed"),
+        "task_b": (False, "cached"),
+        "task_c": (False, "no outputs"),
+        "task_d": (False, "cached"),
+    }
+
+    with patch("kptn.runner.plan.is_stale", side_effect=lambda node, *_: verdicts[node.name]):
+        entries = build_plan(resolved, FakeStateStore())
+
+    assert {e.task_name: (e.action, e.reason) for e in entries} == {
+        "task_a": (PlanAction.RUN, "code changed"),
+        "task_b": (PlanAction.RUN, "upstream changed"),
+        "task_c": (PlanAction.RUN, "no outputs"),
+        "task_d": (PlanAction.SKIP, "cached"),
+    }
 
 def test_render_plan_preserves_exact_cli_output(capsys: pytest.CaptureFixture) -> None:
     """Rendering the structured plan preserves the existing terminal contract."""

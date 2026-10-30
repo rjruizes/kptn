@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # kptn package
-__version__ = "0.2.11"
+__version__ = "0.3.0"
 
 # v0.2.0 public API
 from kptn.graph.composition import Stage, map, parallel  # noqa: F401
@@ -10,6 +10,7 @@ from kptn.graph.decorators import noop, r_task, sql_task, task  # noqa: F401
 from kptn.graph.pipeline import Pipeline  # noqa: F401
 from kptn.graph.requires import any_of  # noqa: F401
 from kptn.runner.api import plan, run  # noqa: F401
+from kptn.sources.spec import source  # noqa: F401
 
 __all__ = [
     "task",
@@ -22,6 +23,7 @@ __all__ = [
     "any_of",
     "Pipeline",
     "config",
+    "source",
     "run",
     "plan",
 ]

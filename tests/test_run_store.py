@@ -39,7 +39,7 @@ def request(project_root: Path, **overrides: object) -> RunRequest:
 
 
 def test_create_run_persists_after_reopen(tmp_path: Path) -> None:
-    db = tmp_path / ".kptn" / "ui.db"
+    db = tmp_path / ".kptn" / "state" / "ui.db"
     first = RunStore(db)
     run = first.create_run(request(tmp_path))
     second = RunStore(db)
@@ -298,6 +298,98 @@ def test_list_runs_filters_by_project_and_orders_newest_first(tmp_path: Path) ->
     assert len(all_runs) == 3
 
 
+# --- run numbers ---------------------------------------------------------- #
+
+
+def _finished(store: RunStore, project: Path) -> int:
+    record = store.create_run(request(project))
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+    return record.number
+
+
+def test_runs_are_numbered_from_one_within_their_project(tmp_path: Path) -> None:
+    project_a = tmp_path / "a"
+    project_b = tmp_path / "b"
+    project_a.mkdir()
+    project_b.mkdir()
+    store = RunStore(tmp_path / "ui.db")
+
+    assert [_finished(store, project_a) for _ in range(3)] == [1, 2, 3]
+    assert _finished(store, project_b) == 1
+    assert _finished(store, project_a) == 4
+    assert [run.number for run in store.list_runs(project_a)] == [4, 3, 2, 1]
+
+
+def test_a_runs_number_survives_reopening_the_store(tmp_path: Path) -> None:
+    db = tmp_path / "ui.db"
+    _finished(RunStore(db), tmp_path)
+
+    assert _finished(RunStore(db), tmp_path) == 2
+
+
+def _version_one_database(db: Path, project: Path) -> None:
+    """A ``ui.db`` as kptn wrote it before runs were numbered."""
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.executescript(
+        (Path(__file__).parents[1] / "kptn_server" / "migrations" / "001_runs.sql").read_text()
+    )
+    # Inserted out of order, and with one tie broken by run id.
+    for run_id, made in [
+        ("c" * 32, "2026-01-03T00:00:00+00:00"),
+        ("a" * 32, "2026-01-01T00:00:00+00:00"),
+        ("e" * 32, "2026-01-02T00:00:00+00:00"),
+        ("d" * 32, "2026-01-02T00:00:00+00:00"),
+    ]:
+        conn.execute(
+            "INSERT INTO runs (run_id, project_root, pipeline, profile, force, status,"
+            " created_at, log_path) VALUES (?, ?, 'main', NULL, 0, 'succeeded', ?, ?)",
+            (run_id, str(project.resolve()), made, str(project / f"{run_id}.jsonl")),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_runs_made_before_numbering_are_numbered_in_the_order_they_were_made(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "ui.db"
+    _version_one_database(db, tmp_path)
+
+    store = RunStore(db)
+
+    assert {run.run_id[0]: run.number for run in store.list_runs()} == {
+        "a": 1,
+        "d": 2,
+        "e": 3,
+        "c": 4,
+    }
+    assert _finished(store, tmp_path) == 5
+
+
+def test_concurrent_upgrades_number_each_run_once(tmp_path: Path) -> None:
+    db = tmp_path / "ui.db"
+    _version_one_database(db, tmp_path)
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(3)
+
+    def _open() -> None:
+        try:
+            barrier.wait(timeout=5)
+            RunStore(db).list_runs()
+        except BaseException as exc:  # noqa: BLE001 - capture for the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_open) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert errors == []
+    assert sorted(run.number for run in RunStore(db).list_runs()) == [1, 2, 3, 4]
+
+
 def test_unfinished_runs_filters_terminal_statuses_in_sql(tmp_path: Path) -> None:
     """A supervisor polls this every few seconds, so it must not hydrate
     every run ever recorded."""
@@ -388,7 +480,7 @@ def test_append_event_accepts_mappingproxy_payload(tmp_path: Path) -> None:
 
 
 def test_concurrent_first_creation_does_not_raise(tmp_path: Path) -> None:
-    db_path = tmp_path / ".kptn" / "ui.db"
+    db_path = tmp_path / ".kptn" / "state" / "ui.db"
     errors: list[BaseException] = []
     barrier = threading.Barrier(2)
 

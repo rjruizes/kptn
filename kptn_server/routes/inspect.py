@@ -61,20 +61,29 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+import duckdb
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from kptn.exceptions import KptnError
-from kptn.graph.requires import gate_disjunctive
 from kptn.inspection import InspectionItem, PipelineInspection, inspect_pipeline
 from kptn.profiles.resolved import ResolvedGraph
-from kptn.profiles.resolver import ProfileResolver
-from kptn.runner.plan import PlanAction, PlanEntry, build_plan
+from kptn.runner.checkpoint import TaskStateReader
+from kptn.runner.plan import PlanAction, PlanEntry, build_plan, config_values_for_plan
+from kptn.sources.shared import resolve_shared_bronze
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
 from kptn_server.context import ui
 from kptn_server.markdown import DocumentationError, render_project_markdown
-from kptn_server.project import PROFILE_CONFIG_FILENAME, ProjectContext
+from kptn_server.next_start import state_source, uses_duckdb
+from kptn_server.project import (
+    DEFAULT_STATE_DB_PATH,
+    PROFILE_CONFIG_FILENAME,
+    ProjectContext,
+    resolve_graph,
+)
+from kptn_server.run_store import RunStore
+from kptn_server.routes.runs import runs_pane
 from kptn_server.routes.support import (
     error_response,
     is_fragment_request,
@@ -98,14 +107,10 @@ DOCS_REJECTION_ADVICE = (
     "declared on a task, Stage, or Pipeline in the project's own code."
 )
 
-#: Where ``kptn`` keeps task state when ``kptn.yaml`` names no ``db_path``.
-#: Mirrors :func:`kptn.state_store.factory.init_state_store`'s own default.
-DEFAULT_STATE_DB_PATH = ".kptn/kptn.db"
-
 #: Node kinds that represent a unit of work and therefore have a detail page.
 #: The rest -- pipeline, stage, parallel, noop, config -- are structure, and
 #: render as headings rather than steps.
-TASK_KINDS = frozenset({"python", "sql", "r", "map"})
+TASK_KINDS = frozenset({"python", "sql", "r", "map", "source"})
 
 #: The retained lineage and table-preview endpoints (see the module docstring).
 LINEAGE_PATH = "/lineage-page"
@@ -116,33 +121,6 @@ TABLE_PREVIEW_PATH = "/table-preview-fragment"
 
 
 # -- the resolved graph and its state store --------------------------------
-
-
-def _resolved_graph(project: ProjectContext, profile: str | None) -> ResolvedGraph:
-    """The graph the runner would execute for *profile*.
-
-    Mirrors :func:`kptn.runner.api.resolve_pipeline`: compile through the
-    profile resolver when a profile is named, take the pipeline as-is when it
-    is not, and gate disjunctive ``any_of`` requirements either way. The
-    ``storage_key`` stays the *configured* (usually relative) ``db_path``
-    string, because that is the key the CLI wrote its hashes under -- only the
-    location of the database file is made absolute, further down.
-    """
-    if profile is not None:
-        resolved = ProfileResolver(project.config).compile(project.pipeline, profile)
-    else:
-        resolved = ResolvedGraph(
-            graph=project.pipeline,
-            pipeline=project.pipeline.name,
-            storage_key=project.config.settings.db_path or DEFAULT_STATE_DB_PATH,
-        )
-    return ResolvedGraph(
-        graph=gate_disjunctive(resolved.graph),
-        pipeline=resolved.pipeline,
-        storage_key=resolved.storage_key,
-        bypassed_names=resolved.bypassed_names,
-        profile_args=resolved.profile_args,
-    )
 
 
 class _NeverRunStateStore:
@@ -196,6 +174,32 @@ def _open_state_store(project: ProjectContext) -> StateStoreBackend:
     return init_state_store(settings)
 
 
+def _plan_from_database(
+    project: ProjectContext,
+    runs: RunStore,
+    resolved: ResolvedGraph,
+    profile: str | None,
+    planning: dict[str, Any],
+) -> tuple[list[PlanEntry], str]:
+    """The plan of a pipeline with a DuckDB factory, and where its state came from.
+
+    Such a pipeline keeps its task state in its own database -- the runner
+    always uses the factory's when there is one -- not in ``.kptn/``. The
+    file is the one the next run would start from
+    (:func:`kptn_server.next_start.state_source`), opened ``read_only`` for
+    the length of the read. The factory itself is never called, for the
+    reasons on :func:`_open_state_store`.
+    """
+    source = state_source(project, runs, profile)
+    if source.path is None:
+        return build_plan(resolved, _NeverRunStateStore(), **planning), source.note
+    conn = duckdb.connect(str(source.path), read_only=True)
+    try:
+        return build_plan(resolved, TaskStateReader(conn), **planning), source.note
+    finally:
+        conn.close()
+
+
 def _release(store: StateStoreBackend) -> None:
     """Close a state store opened for one request.
 
@@ -244,13 +248,50 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
             return unknown_profile(request, profile, nav_active="plan")
         selected = requested_profile(profile)
 
+        note = ""
+        if uses_duckdb(project) and current.store.active_run(current.entry.root) is not None:
+            # The run has the database open for writing; reading it now
+            # would fail, and holding it could stop the run's next connect.
+            return error_response(
+                request,
+                status_code=409,
+                title="A run is in progress",
+                detail=(
+                    "The plan reads task state from the pipeline's database, which "
+                    "the run has open. Open the plan again when the run ends."
+                ),
+                nav_active="plan",
+            )
         try:
-            resolved = _resolved_graph(project, selected)
-            store = _open_state_store(project)
-            try:
-                entries = build_plan(resolved, store)
-            finally:
-                _release(store)
+            resolved = resolve_graph(project, selected)
+            # The config's values, as ``kptn plan`` passes them: a source
+            # whose files come from config is planned table by table rather
+            # than shown as "files depend on config". Read in the project's
+            # directory (the slot's), where a config reading a relative path
+            # finds it; ``duckdb`` is left out, so no database is opened.
+            # A table the shared bronze has is shown as a restore, as
+            # ``kptn plan`` shows it.
+            planning = {
+                "config_values": config_values_for_plan(project.pipeline),
+                "root": project.root,
+                "shared": resolve_shared_bronze(project.config.settings.shared_bronze, project.root),
+            }
+            if uses_duckdb(project):
+                entries, note = _plan_from_database(project, current.store, resolved, selected, planning)
+            else:
+                store = _open_state_store(project)
+                try:
+                    entries = build_plan(resolved, store, **planning)
+                finally:
+                    _release(store)
+        except duckdb.Error as exc:
+            return error_response(
+                request,
+                status_code=409,
+                title="The pipeline's database cannot be read",
+                detail=f"Another process has it open. {type(exc).__name__}: {exc}",
+                nav_active="plan",
+            )
         except (KptnError, ValueError, OSError) as exc:
             return error_response(
                 request,
@@ -266,7 +307,9 @@ def plan_view(request: Request, profile: str | None = None) -> HTMLResponse:
             {
                 "nav_active": "plan",
                 "selected_profile": selected,
+                "runs_pane": runs_pane(request, selected),
                 "rows": [_plan_row(entry) for entry in entries],
+                "state_note": note,
             },
         )
 

@@ -1,6 +1,6 @@
 {#
-  The settings button and the modal it opens: the reader's own preferences,
-  and which kptn is serving the page.
+  The settings button and the modal it opens: the reader's own preferences --
+  light or dark, and sound -- and which kptn is serving the page.
 
   Included at the right end of the app bar on every page, so a preference is
   reachable from wherever the reader is -- Sound in particular is set before
@@ -21,14 +21,10 @@
   backdrop. app.js opens it with ``showModal()`` and closes it on a backdrop
   click; the Close button needs no script at all (``method="dialog"``).
 #}
-<button type="button" class="app-bar__settings" data-settings-open
+<button type="button" class="iconbtn app-bar__settings" data-settings-open
         aria-haspopup="dialog" aria-controls="settings-dialog"
         aria-label="Settings" title="Settings">
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-    <circle cx="12" cy="12" r="3"/>
-  </svg>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 4.3c.4-1.8 2.9-1.8 3.4 0a1.7 1.7 0 0 0 2.6 1.1c1.5-.9 3.3.8 2.4 2.4a1.7 1.7 0 0 0 1 2.6c1.8.4 1.8 2.9 0 3.4a1.7 1.7 0 0 0-1 2.6c.9 1.5-.8 3.3-2.4 2.4a1.7 1.7 0 0 0-2.6 1c-.4 1.8-2.9 1.8-3.4 0a1.7 1.7 0 0 0-2.6-1c-1.5.9-3.3-.8-2.4-2.4a1.7 1.7 0 0 0-1-2.6c-1.8-.4-1.8-2.9 0-3.4a1.7 1.7 0 0 0 1-2.6c-.9-1.5.8-3.3 2.4-2.4 1 .6 2.3.1 2.6-1.1z"/><circle cx="12" cy="12" r="3"/></svg>
 </button>
 
 <dialog class="settings" id="settings-dialog" aria-labelledby="settings-title">
@@ -37,6 +33,20 @@
       <h2 id="settings-title">Settings</h2>
       <button type="submit" class="settings__close" aria-label="Close">&times;</button>
     </header>
+
+    {#
+      Light, dark, or whatever the system says -- the default. Kept in this
+      browser; ``_theme.html`` applies it before each page paints, and app.js
+      applies a change at once.
+    #}
+    <fieldset class="settings__theme">
+      <legend>Appearance</legend>
+      <div class="segmented">
+        <label><input type="radio" name="theme" value="system" data-theme-option checked><span>System</span></label>
+        <label><input type="radio" name="theme" value="light" data-theme-option><span>Light</span></label>
+        <label><input type="radio" name="theme" value="dark" data-theme-option><span>Dark</span></label>
+      </div>
+    </fieldset>
 
     <label class="settings__option">
       <input type="checkbox" id="run-sound" checked>

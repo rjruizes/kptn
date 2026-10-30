@@ -1,0 +1,92 @@
+{#
+  The workspace: a sidebar of three panes beside the page's own content --
+  a run's log, the plan, or the way to start a first run. The pages extend
+  this and fill ``main``, and the Run pane with ``run_pane``.
+
+    Next run   what the next run of the profile starts from, and Run and Plan
+    Runs       the profile's runs, newest first; the page's own is marked
+    Run        the run on the page: its id, status and timing, its tallies
+               as filters, and its tasks
+
+  The panes fold like VS Code's sections, each by its header (app.js, which
+  remembers them for this reader). The whole sidebar hides from the button
+  at the far left of the app bar, above it.
+
+  A colleague's project (``read_only``) gets the same workspace from the
+  read-only shell, without the Next run pane: there is nothing there to run.
+#}
+{% extends "view_base.html" if read_only else "base.html" %}
+{% from "_status.html" import status_icon %}
+{% from "_run_bar.html" import side_toggle %}
+
+{# A pane's header: folds the pane (app.js). #}
+{% macro pane_head(key, title, count=none) -%}
+<button type="button" class="pane-h" aria-expanded="true" aria-controls="pane-{{ key }}" data-pane-toggle>
+  <svg class="pane-h__chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+  {{ title }}
+  {%- if count is not none %}<span class="pane-h__n" data-pane-count>{{ count or "" }}</span>{% endif %}
+</button>
+{%- endmacro %}
+
+{% block body_class %}page--run{% endblock %}
+{% block side_toggle %}{{ side_toggle() }}{% endblock %}
+{% block select_form %} form="run-form"{% endblock %}
+
+{% block content %}
+<div class="run-body" id="workspace">
+  <aside class="side" id="side" aria-label="Next run, runs and the selected run">
+    {% if not read_only %}
+    <section class="pane pane--next" data-pane="next">
+    {{ pane_head("next", "Next run") }}
+    <div class="pane-b" id="pane-next">
+    {#
+      The card: what the next run starts from (_next_start.html), fetched by
+      app.js once the page is up -- reading the project's files never holds
+      up the page -- and hidden until there is one; then Run and Plan.
+
+      Run is the form the app bar's selector belongs to: POST, because it
+      starts work. Plan is a second submit button of the same form that
+      GETs the plan instead (``formaction``), so it carries the same
+      selector's profile, with no JavaScript.
+
+      One run per project is the store's rule, so while a run holds the lock
+      Run and Plan are disabled, and the link beneath says why and goes to
+      the run. ``data-run-control`` is what app.js toggles when that run
+      ends under an open page; the route keeps its own check either way.
+    #}
+    <div class="next" id="next">
+      <div class="state" id="next-start" data-url="{{ project_base }}/next-start" aria-live="polite" hidden></div>
+      <form id="run-form" class="btngroup next__go" role="group" aria-label="Start a run" method="post" action="{{ project_base }}/runs">
+        <button type="submit" class="btn btn--run" data-run-control {% if active_run %}disabled{% endif %}><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"/></svg>Run</button>
+        <button type="submit" class="btn" formaction="{{ project_base }}/plan" formmethod="get" data-run-control {% if active_run %}disabled{% endif %}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1.5"/><path d="M9 12h6M9 16h4"/></svg>Plan</button>
+      </form>
+      <a class="next__busy" data-run-busy data-active-run="{{ active_run.run_id if active_run else '' }}"
+         href="{% if active_run %}{{ project_base }}/runs/{{ active_run.run_id }}{% endif %}"
+         {% if not active_run %}hidden{% endif %}>A run is in progress</a>
+    </div>
+    </div>
+    </section>
+    {% endif %}
+
+    <section class="pane pane--runs" data-pane="runs">
+    {{ pane_head("runs", "Runs", runs_pane.count) }}
+    <div class="pane-b" id="pane-runs">
+      {% include "_run_list.html" %}
+    </div>
+    </section>
+
+    <section class="pane pane--run" data-pane="run">
+    {{ pane_head("run", "Run") }}
+    <div class="pane-b" id="pane-run">
+      {% block run_pane %}
+      <p class="pane-empty">No run selected.</p>
+      {% endblock %}
+    </div>
+    </section>
+  </aside>
+
+  <section class="run-page" aria-label="{% block main_label %}Selected run{% endblock %}">
+    {% block main %}{% endblock %}
+  </section>
+</div>
+{% endblock %}

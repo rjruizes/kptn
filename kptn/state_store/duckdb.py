@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable
 
 from kptn.exceptions import StateStoreError
+from kptn.layout import DEFAULT_DB_PATH
 
 
 class DuckDbBackend:
@@ -23,7 +24,7 @@ class DuckDbBackend:
 
     def __init__(
         self,
-        path: str = ".kptn/kptn.db",
+        path: str = DEFAULT_DB_PATH,
         *,
         factory: Callable[[], "duckdb.DuckDBPyConnection"] | None = None,
     ) -> None:

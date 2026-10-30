@@ -1,29 +1,30 @@
-"""Where each console event goes: which fold it opens, and which it lands in.
+"""Where each console event goes: which section it opens, and which it lands in.
 
-The console groups a run's flat event stream into folds -- one per pipeline
-or stage a task sits in, and one per task -- so twelve thousand lines of
-output read as an outline rather than a wall. The grouping is decided here,
-once, and both surfaces use it: the run page feeds a run's whole history
-through :class:`ConsoleLayout` to build the tree it renders, and the stream
-feeds the same layout one event at a time and tells ``app.js`` exactly where
-to put each row. The browser never works out structure for itself, so a
-reload and a live page cannot disagree about it.
+The run log is one continuous scroll of *sections*, one per unit of work --
+a task, a source's table, a mapped task's item -- each headed with where it
+sits in the pipeline (``raw_ingest / sales /``), how it ran, and how it ended.
+Between and around them are the run's own lines: its start, its end, and any
+output no task owns. The layout is decided here, once, and both surfaces use
+it: the run page feeds a run's whole history through :class:`ConsoleLayout`
+to build what it renders, and the stream feeds the same layout one event at
+a time and tells ``app.js`` exactly where to put each row. The browser never
+works out structure for itself, so a reload and a live page cannot disagree.
 
 The rules rely on one fact about the runner: tasks run one at a time, so a
 task's output is the unbroken run of events between its ``task_started`` and
 its ``task_finished``.
 
-* ``task_started`` and ``task_skipped`` carry the task's enclosing groups in
-  ``payload["groups"]``, outermost first (the run's own pipeline is never
-  among them). The groups already open are reused as far as they agree with
-  that path; the rest are opened. A started task then opens a fold of its
-  own; a skipped one -- which prints nothing -- is a plain row in its group.
-* Any other event belongs to the task fold at the end of the open chain when
-  it names that task, or names no task while that task is still running.
-* An event naming a task that has no fold open (output from a task whose
-  start was never recorded) opens a bare fold for it where the last task was.
-* Anything else with no task goes in the innermost open group; the run's own
-  ``run_started`` and ``run_finished`` go at the top, and close every group.
+* ``task_started`` and ``task_skipped`` open the task's section. A source's
+  or a mapped task's own start is only a marker: its tables or items open the
+  sections, under a path that ends with its name.
+* Any other event naming a task lands in that task's section. One naming a
+  source or a map with no section -- a failure before any table, output while
+  planning -- opens a section for it then.
+* An event naming no task lands in the section still running, if there is
+  one, and otherwise among the run's own lines.
+* A task's start, finish and skip are kept in the page but hidden: the
+  section's heading says the same, and the run's counters and the stream's
+  resume cursor count every event's row.
 """
 
 from __future__ import annotations
@@ -34,68 +35,95 @@ from typing import Any
 from kptn.runner.events import EventKind
 from kptn_server.run_store import StoredEvent
 
-#: The id of the console's top-level list: the parent of anything that sits
-#: in no fold. Shared with ``_console.html``.
+#: The id of the log's top-level list: the parent of the run's own lines and
+#: of every section. Shared with ``_console.html``.
 ROOT_ID = "console-events"
 
-FOLD_GROUP = "group"
-FOLD_TASK = "task"
-
 _RUN_KINDS = frozenset({EventKind.RUN_STARTED.value, EventKind.RUN_FINISHED.value})
+_OPENING_KINDS = frozenset({EventKind.TASK_STARTED.value, EventKind.TASK_SKIPPED.value})
 
-#: Task folds left open behind the newest one. "Two tasks back" is when a
-#: task's output stops being the thing the reader is following.
-OPEN_TASKS = 2
+#: Task modes whose own events only mark where their items start and end.
+_MARKER_MODES = frozenset({"map", "source"})
+#: Modes of the items a marker task runs.
+_ITEM_MODES = frozenset({"source_table", "map_item"})
+
+#: How each mode reads in a section's heading.
+_RUNNERS = {
+    "python": "python",
+    "sql": "sql",
+    "r": "r",
+    "source_table": "ingest",
+    "map_item": "map",
+    "views": "views",  # kptn.source_views, in older stored runs
+    "source": "ingest",
+    "map": "map",
+}
+
+#: A section's state, in the words its heading and the counters use.
+STATE_WORDS = {
+    "succeeded": "Succeeded",
+    "failed": "Failed",
+    "cached": "Cached",
+    "running": "Running",
+    "interrupted": "Interrupted",
+}
 
 
 @dataclass(eq=False)
-class Fold:
-    """One collapsible section of the console: a group, or a task."""
+class Section:
+    """One unit of work's part of the log: a heading, then its lines."""
 
     id: str
-    kind: str
+    #: The task's name as events carry it: ``report``, ``sales[orders]``.
     key: str
-    parent: Fold | None
-    #: What the fold holds, in order: folds and prepared event rows. Filled
-    #: only when a whole history is built into a tree for the page.
-    children: list[Any] = field(default_factory=list)
-    #: The task's outcome, from its ``task_finished``; empty while it runs.
+    #: The stages, pipelines and source around it, outermost first.
+    path: tuple[str, ...] = ()
+    #: What the heading calls it: the task, or the table or item.
+    label: str = ""
+    runner: str = ""
+    #: ``succeeded``, ``failed``, ``cached``... -- empty while it runs.
     status: str = ""
-    #: The prepared ``task_finished`` row, for the fold's heading.
+    #: The prepared ``task_finished`` row, for the heading's outcome.
     outcome: dict[str, Any] | None = None
+    #: The section's rows, in order. Filled only when a whole history is
+    #: built for the page.
+    children: list[Any] = field(default_factory=list)
     lines: int = 0
+    #: Lines the section shows, its output's and any failure's: none, and
+    #: there is nothing to fold.
+    shown: int = 0
     warnings: int = 0
-    failed: bool = False
     open: bool = True
+    #: Why a cached section was skipped, for its heading.
+    reason: str = ""
 
     @property
     def body_id(self) -> str:
-        return f"{self.id}-body"
+        return f"{self.id}-lines"
 
     @property
     def parent_id(self) -> str:
-        return self.parent.body_id if self.parent is not None else ROOT_ID
+        return ROOT_ID
 
-    def ancestors(self) -> list[Fold]:
-        chain: list[Fold] = []
-        fold: Fold | None = self
-        while fold is not None:
-            chain.append(fold)
-            fold = fold.parent
-        return chain
+    @property
+    def state(self) -> str:
+        return self.status or "running"
 
 
 @dataclass(frozen=True)
 class Placement:
     """Where one event goes."""
 
-    #: The fold the event's row is appended to; ``None`` for the top level.
-    container: Fold | None
-    #: Folds this event opens, outermost first. Each is appended to its
-    #: parent's body before the row is placed.
-    opens: tuple[Fold, ...] = ()
-    #: The task fold this event finishes, when it is a ``task_finished``.
-    finishes: Fold | None = None
+    #: The section the event's row is appended to; ``None`` for the run's own
+    #: lines at the top level.
+    container: Section | None
+    #: The section this event opens, if any: appended to the log before the
+    #: row is placed in it.
+    opens: tuple[Section, ...] = ()
+    #: The section this event finishes, when it is a ``task_finished``.
+    finishes: Section | None = None
+    #: Kept in the page for the counters and the cursor, but not shown.
+    hidden: bool = False
 
     @property
     def parent_id(self) -> str:
@@ -103,131 +131,124 @@ class Placement:
 
     @property
     def in_task(self) -> bool:
-        """Is the row inside its task's own fold? Then it need not name it."""
-        return self.container is not None and self.container.kind == FOLD_TASK
+        """Is the row inside its task's own section? Then it need not name it."""
+        return self.container is not None
 
 
 class ConsoleLayout:
-    """Places a run's events, in sequence order, into folds."""
+    """Places a run's events, in sequence order, into sections."""
 
     def __init__(self) -> None:
-        # The open chain: groups outermost first, then the newest task fold.
-        self._chain: list[Fold] = []
+        self._sections: dict[str, Section] = {}
+        #: The section still running, which output naming no task belongs to.
+        self._current: Section | None = None
+        #: Where each marker task (a source, a map) sits, from its start.
+        self._marker_paths: dict[str, tuple[str, ...]] = {}
+        #: Marker tasks that have opened items; their own outcome is then
+        #: already told by their items' sections.
+        self._marker_items: set[str] = set()
 
     def place(self, event: StoredEvent) -> Placement:
         if event.kind in _RUN_KINDS:
-            self._chain = []
+            self._current = None
             return Placement(container=None)
 
-        if _opens_task_row(event):
-            return self._place_task_row(event)
+        name = event.task_name
+        mode = event.payload.get("mode")
+        if event.kind in _OPENING_KINDS and name:
+            if mode in _MARKER_MODES:
+                self._marker_paths[name] = _group_path(event)
+                return Placement(container=None, hidden=True)
+            return self._open(event, name, mode)
 
-        task = self._task()
-        if task is not None and (
-            event.task_name == task.key or (event.task_name is None and not task.status)
-        ):
-            return self._land(event, task)
+        if name:
+            section = self._sections.get(name)
+            opens: tuple[Section, ...] = ()
+            if section is None:
+                base = name.split("[", 1)[0]
+                if (
+                    name in self._marker_paths
+                    and event.kind == EventKind.TASK_FINISHED.value
+                    and (event.payload.get("status") != "failed" or name in self._marker_items)
+                ):
+                    # A source's or a map's own outcome: its items' sections
+                    # have said it already.
+                    return Placement(container=None, hidden=True)
+                # Output from a task with no section yet -- a marker failing
+                # before any item, or a task whose start was never recorded.
+                section = self._new_section(
+                    event,
+                    name,
+                    path=self._marker_paths.get(name, _group_path(event)),
+                    label=name if base == name else name.split("[", 1)[1].rstrip("]"),
+                    runner=_RUNNERS.get(str(mode), str(mode or "")),
+                )
+                opens = (section,)
+            return self._land(event, section, opens)
 
-        groups = self._groups()
-        if event.task_name is None:
-            return Placement(container=groups[-1] if groups else None)
+        if self._current is not None and not self._current.status:
+            return self._land(event, self._current, ())
+        return Placement(container=None)
 
-        # Output from a task with no fold open. It still gets one, next to
-        # the last task, rather than spilling its lines among the groups.
-        fold = Fold(
-            id=f"fold-{event.sequence}-task",
-            kind=FOLD_TASK,
-            key=event.task_name,
-            parent=groups[-1] if groups else None,
+    def _open(self, event: StoredEvent, name: str, mode: Any) -> Placement:
+        if mode in _ITEM_MODES and "[" in name:
+            base, item = name.split("[", 1)
+            self._marker_items.add(base)
+            path = (*self._marker_paths.get(base, _group_path(event)), base)
+            label = item.rstrip("]")
+        else:
+            path = _group_path(event)
+            label = name
+        section = self._new_section(
+            event, name, path=path, label=label, runner=_RUNNERS.get(str(mode), str(mode or ""))
         )
-        self._chain = [*groups, fold]
-        placement = self._land(event, fold)
-        return Placement(
-            container=placement.container, opens=(fold,), finishes=placement.finishes
+        if event.kind == EventKind.TASK_SKIPPED.value:
+            section.status = "cached"
+            # A table is skipped when its files are as they were; a task,
+            # when nothing it reads or runs has changed.
+            section.reason = "source unchanged" if mode == "source_table" else "inputs unchanged"
+        else:
+            self._current = section
+        return Placement(container=section, opens=(section,), hidden=True)
+
+    def _new_section(
+        self, event: StoredEvent, name: str, *, path: tuple[str, ...], label: str, runner: str
+    ) -> Section:
+        section = Section(
+            id=f"sec-{event.sequence}", key=name, path=path, label=label, runner=runner
         )
+        self._sections[name] = section
+        return section
 
-    def _task(self) -> Fold | None:
-        if self._chain and self._chain[-1].kind == FOLD_TASK:
-            return self._chain[-1]
-        return None
-
-    def _groups(self) -> list[Fold]:
-        return [fold for fold in self._chain if fold.kind == FOLD_GROUP]
-
-    def _place_task_row(self, event: StoredEvent) -> Placement:
-        path = _group_path(event)
-        current = self._groups()
-        kept = 0
-        while kept < min(len(path), len(current)) and current[kept].key == path[kept]:
-            kept += 1
-        chain = current[:kept]
-        opens: list[Fold] = []
-        for depth in range(kept, len(path)):
-            fold = Fold(
-                id=f"fold-{event.sequence}-{depth}",
-                kind=FOLD_GROUP,
-                key=path[depth],
-                parent=chain[-1] if chain else None,
-            )
-            chain.append(fold)
-            opens.append(fold)
-
-        container = chain[-1] if chain else None
-        if _opens_task_fold(event):
-            task = Fold(
-                id=f"fold-{event.sequence}-task",
-                kind=FOLD_TASK,
-                key=str(event.task_name),
-                parent=container,
-            )
-            chain.append(task)
-            opens.append(task)
-            container = task
-        self._chain = chain
-        return Placement(container=container, opens=tuple(opens))
-
-    def _land(self, event: StoredEvent, task: Fold) -> Placement:
+    def _land(self, event: StoredEvent, section: Section, opens: tuple[Section, ...]) -> Placement:
+        if event.kind == EventKind.WARNING.value:
+            section.warnings += 1
         if event.kind != EventKind.TASK_FINISHED.value:
-            return Placement(container=task)
-        task.status = str(event.payload.get("status") or "")
-        if task.status == "failed":
-            for fold in task.ancestors():
-                fold.failed = True
-        return Placement(container=task, finishes=task)
+            return Placement(container=section, opens=opens)
+        section.status = str(event.payload.get("status") or "succeeded")
+        if self._current is section:
+            self._current = None
+        # A failure is a line of its own; a success says nothing the heading
+        # does not.
+        return Placement(
+            container=section,
+            opens=opens,
+            finishes=section,
+            hidden=section.status != "failed",
+        )
 
 
-def _opens_task_row(event: StoredEvent) -> bool:
-    """Is this the event that puts a task in its group?"""
-    return event.kind in (EventKind.TASK_STARTED.value, EventKind.TASK_SKIPPED.value)
-
-
-def _opens_task_fold(event: StoredEvent) -> bool:
-    """Does this task get a fold, or only a row in its group?
-
-    A started task gets a fold. A skipped one prints nothing, and the marker a
-    mapped task emits before its items has nothing of its own to hold -- each
-    item is a task with its own ``task_started``, and its own fold.
-    """
-    return (
-        event.kind == EventKind.TASK_STARTED.value
-        and bool(event.task_name)
-        and event.payload.get("mode") != "map"
-    )
-
-
-def _group_path(event: StoredEvent) -> list[str]:
+def _group_path(event: StoredEvent) -> tuple[str, ...]:
     groups = event.payload.get("groups")
     if not isinstance(groups, list):
-        return []
-    return [str(name) for name in groups if isinstance(name, str) and name]
+        return ()
+    return tuple(str(name) for name in groups if isinstance(name, str) and name)
 
 
 __all__ = [
-    "FOLD_GROUP",
-    "FOLD_TASK",
-    "OPEN_TASKS",
     "ROOT_ID",
+    "STATE_WORDS",
     "ConsoleLayout",
-    "Fold",
     "Placement",
+    "Section",
 ]

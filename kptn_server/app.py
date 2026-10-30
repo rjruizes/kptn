@@ -58,6 +58,7 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 import kptn
+from kptn.layout import migrate_layout
 from kptn_server.assets import STATIC_DIR, VersionedStaticFiles, asset_version
 from kptn_server.context import RequestUI, RequestUIMiddleware
 from kptn_server.origin import enforce_same_origin
@@ -67,6 +68,8 @@ from kptn_server.registry import ProjectEntry, ProjectRegistry
 from kptn_server.routes import register_routers, router as health_router
 from kptn_server.routes.support import error_response
 from kptn_server.routes.view import RequestView, router as view_router
+from kptn_server.run_list import run_label
+from kptn_server.run_outline import run_timing
 from kptn_server.run_store import RunStore
 from kptn_server.slot import ProjectSlot
 
@@ -243,10 +246,12 @@ def _build_templates(base: str = "") -> Jinja2Templates:
     templates = Jinja2Templates(
         directory=str(TEMPLATES_DIR), context_processors=[project_context]
     )
-    templates.env.globals["base"] = base
     # typeshed narrows Jinja's globals to the default namespace's value types.
+    templates.env.globals["base"] = base  # ty: ignore[invalid-assignment]
     templates.env.globals["kptn_version"] = kptn.__version__  # ty: ignore[invalid-assignment]
     templates.env.globals["asset_version"] = asset_version  # ty: ignore[invalid-assignment]
+    templates.env.filters["run_timing"] = run_timing
+    templates.env.filters["run_label"] = run_label
     return templates
 
 
@@ -466,10 +471,15 @@ def create_multi_app(
         # Somebody else's project is a 404 here, not a page: this prefix opens
         # the project's run store and supervises its processes, and theirs
         # live in another pod. Theirs is under ``/view/{slug}``.
-        if entry is None or not entry.owned:
+        # A removed working directory is gone, yours or not: only its
+        # published runs are left, under ``/view/{slug}``.
+        if entry is None or not entry.owned or entry.removed:
             raise HTTPException(status_code=404, detail=f"No such project: {slug}")
+        assert entry.database_path is not None  # every live entry has one
         store = app.state.stores.get(entry.slug)
         if store is None:
+            for notice in migrate_layout(entry.root):
+                print(notice, flush=True)
             store = RunStore(entry.database_path)
             store.ensure_index(entry.root)
             app.state.stores[entry.slug] = store
@@ -513,14 +523,15 @@ def create_multi_app(
         Sets ``request.state.view`` and never ``request.state.ui``: a
         :class:`~kptn_server.routes.view.RequestView` has no store, no
         supervisor and no slot to reach for. Your own project is a 404 here,
-        so there is exactly one URL for each project.
+        so there is exactly one URL for each project -- unless it has been
+        removed, when this is the only one.
 
         A project listed with an error still resolves: its published history
         needs none of what failed to load.
         """
         slug = request.path_params["slug"]
         entry = registry.resolve(slug, servable_only=False)
-        if entry is None or entry.owned:
+        if entry is None or (entry.owned and not entry.removed):
             raise HTTPException(status_code=404, detail=f"No such project: {slug}")
         request.state.view = RequestView(
             entry=entry,

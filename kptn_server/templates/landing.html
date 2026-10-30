@@ -1,0 +1,26 @@
+{#
+  The workspace with no run in it: a profile -- or a colleague's project --
+  with no runs yet. The landing page shows the newest run whenever there is
+  one, so this is where a project's first run starts: from the sidebar.
+#}
+{% extends "workspace.html" %}
+
+{% block main_label %}Runs{% endblock %}
+
+{% block main %}
+<div class="page-scroll">
+  {% if problem %}
+  <div class="notice notice--error">
+    <p class="notice__title">This project's run history cannot be read</p>
+    <p class="notice__detail">{{ problem }}</p>
+  </div>
+  {% elif read_only %}
+  <p class="page-empty">
+    No runs published yet. A project's runs appear here once its owner runs
+    it -- or opens it in <code>kptn ui</code> -- with a kptn that publishes them.
+  </p>
+  {% else %}
+  <p class="page-empty">Start a run from the sidebar to see its log here.</p>
+  {% endif %}
+</div>
+{% endblock %}

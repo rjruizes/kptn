@@ -1,0 +1,95 @@
+{#
+  The run page's rail: the pipeline as a tree of tasks, with the run on it.
+  Built in kptn_server.run_outline; macros only, so one step's part of the
+  rail can be rendered for an SSE frame (``outline_step``) exactly as the
+  page renders it.
+
+  A task is a button carrying ``data-unit``: the name its section in the log
+  is found by. A step's heading carries ``data-units``, every task beneath
+  it. Clicking either scrolls the log to its section and lights it (app.js);
+  the rail marks what was clicked, not where the log is scrolled.
+  ``data-selected`` on the rail is the task a finished run opens on -- its
+  failure, if it had one.
+
+  The filters at its head are the run's tallies too: every task, those that
+  ran, those the cache answered, and those with an issue -- failed, cut
+  short, never run, or warned. Pressing one narrows
+  the rail and the log to those tasks (app.js), by each task's
+  ``data-state`` and ``data-warned``; app.js recounts them as a live run
+  moves the rail.
+#}
+{% from "_status.html" import status_icon %}
+
+{% macro rail_unit(unit) -%}
+<button type="button" class="rail-item" data-unit="{{ unit.unit }}" data-state="{{ unit.state }}"{% if unit.warned %} data-warned{% endif %}>
+  <span class="rail-item__name">{{ unit.label }}</span>
+  {%- if unit.duration %}<span class="rail-item__dur">{{ unit.duration }}</span>{% endif %}
+  {{ status_icon(unit.state, warned=unit.warned) }}
+</button>
+{%- endmacro %}
+
+{% macro outline_step(step) -%}
+<div class="rail-step" id="outline-{{ step.key }}">
+  {%- if step.unit %}
+  {{ rail_unit(step.unit) }}
+  {%- else %}
+  {#-
+    A group's heading is two buttons on one row: the caret folds the tasks
+    beneath it in the rail (app.js), and the rest takes the log to them.
+    Rendered open; app.js keeps a group the reader folded folded when the
+    stream redraws it.
+  #}
+  <div class="rail-group">
+    <button type="button" class="rail-caret" data-rail-fold aria-expanded="true" aria-controls="outline-{{ step.key }}-kids" aria-label="Tasks in {{ step.name }}" title="Collapse">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <button type="button" class="rail-item rail-item--group" data-units="{{ step.units }}" data-state="{{ step.state }}">
+      <span class="rail-item__name">{{ step.name }}</span>
+      {%- if step.count %}<span class="rail-item__count" data-count="{{ step.count }}">{{ step.count }}</span>{% endif %}
+      {{ status_icon(step.state, warned=step.warned) }}
+    </button>
+  </div>
+  <div class="rail-kids" id="outline-{{ step.key }}-kids">
+    {%- for branch in step.branches %}
+    {%- if branch.label %}
+    <div class="rail-label">{{ branch.label }}
+      {%- if not branch.units %} <span class="rail-label__state">{{ {"not_run": "not run"}.get(branch.state, branch.state) }}</span>{% endif -%}
+    </div>
+    <div class="rail-kids">
+      {%- for unit in branch.units %}
+      {{ rail_unit(unit) }}
+      {%- endfor %}
+    </div>
+    {%- else %}
+    {%- for unit in branch.units %}
+    {{ rail_unit(unit) }}
+    {%- endfor %}
+    {%- endif %}
+    {%- endfor %}
+  </div>
+  {%- endif %}
+</div>
+{%- endmacro %}
+
+{#- Issues are red when a task failed or was cut short, amber when they are
+    only warnings and tasks left unrun; app.js keeps the class in step. #}
+{% macro rail_filters(counts) -%}
+<div class="rail-filters" role="group" aria-label="Filter tasks">
+  {%- for key, label in (("all", "All"), ("ran", "Ran"), ("cached", "Cached"), ("issues", "Issues")) %}
+  <button type="button" class="rail-filter
+    {%- if key == 'issues' and counts.issues %} rail-filter--{{ 'err' if counts.failed else 'warn' }}{% endif %}" data-filter="{{ key }}" aria-pressed="{{ 'true' if key == 'all' else 'false' }}"{% if not counts[key] %} disabled{% endif %}><b data-counter="{{ key }}">{{ counts[key] }}</b>{{ label }}</button>
+  {%- endfor %}
+</div>
+{%- endmacro %}
+
+{% macro outline_nav(steps, selected, counts) -%}
+<nav class="rail" id="outline" aria-label="Tasks in this run" data-selected="{{ selected }}">
+  {{ rail_filters(counts) }}
+  <div id="outline-steps">
+    {%- for step in steps %}
+    {{ outline_step(step) }}
+    {%- endfor %}
+  </div>
+  <p class="rail__empty" data-rail-empty hidden>No tasks match this filter.</p>
+</nav>
+{%- endmacro %}

@@ -1,0 +1,46 @@
+{#
+  How a task went, as one small icon -- shared by the rail and the log's
+  section headings so the two always agree.
+
+  Colour and shape both carry the state (a check, a triangle, a cross, a
+  database for a task the cache answered...), and
+  the label says it in words for assistive technology and on hover.
+
+  ``count`` turns a warned success into the heading's pill: the triangle and
+  how many warnings. ``warned`` alone marks it in the rail, where there is no
+  room for a count.
+#}
+{% macro status_icon(state, warned=false, count=0) -%}
+{%- set warns = warned or count > 0 -%}
+{%- set words = {
+  "succeeded": "Succeeded", "failed": "Failed", "cached": "Cached",
+  "running": "Running", "waiting": "Waiting", "not_run": "Not run",
+  "interrupted": "Interrupted", "bypassed": "Bypassed", "stopped": "Stopped",
+} -%}
+{%- set word = words.get(state, state | capitalize) -%}
+{%- if state == "succeeded" and warns -%}
+  {%- set label = word ~ " with " ~ count ~ (" warning" if count == 1 else " warnings") if count else "Has warnings" -%}
+  <span class="status-icon status-icon--warned{% if count %} status-icon--pill{% endif %}" role="img" aria-label="{{ label }}" title="{{ label }}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 4.3 2.6 17.6A2 2 0 0 0 4.3 20.6h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></svg>
+    {%- if count %}<span>{{ count }}</span>{% endif -%}
+  </span>
+{%- else -%}
+  <span class="status-icon status-icon--{{ state }}" role="img" aria-label="{{ word }}" title="{{ word }}">
+    {%- if state == "succeeded" -%}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+    {%- elif state == "cached" -%}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+    {%- elif state == "failed" -%}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>
+    {%- elif state == "running" -%}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5" stroke-opacity="0.25"/><path d="M19.5 12A7.5 7.5 0 0 0 12 4.5"/></svg>
+    {%- elif state == "interrupted" or state == "stopped" -%}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+    {%- elif state == "bypassed" -%}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M7 12h10"/></svg>
+    {%- else -%}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="5.5"/></svg>
+    {%- endif -%}
+  </span>
+{%- endif -%}
+{%- endmacro %}

@@ -560,14 +560,14 @@ def test_event_stream_run_header_still_carries_the_run(
 ) -> None:
     """Sending an empty fragment would also pass the test above.
 
-    The header's timestamps and log path are gone, so the status line is what
-    is left to prove the frame is a rendered header rather than nothing.
+    The run bar names its run -- for a reader with the sidebar hidden -- and
+    the Run pane's head carries the status line, which is what is left to
+    prove each frame is a rendered region rather than nothing.
     """
-    payload = _region_frame(
-        client.get(f"/runs/{seeded_events.run_id}/events").text, "run_header"
-    )
+    text = client.get(f"/runs/{seeded_events.run_id}/events").text
 
-    assert f'data-run-id="{seeded_events.run_id}"' in payload["html"]
+    assert f'title="{seeded_events.run_id}"' in _region_frame(text, "run_header")["html"]
+    assert f'data-run-id="{seeded_events.run_id}"' in _region_frame(text, "run_info")["html"]
 
 
 def test_event_stream_region_frames_carry_no_id(
@@ -609,23 +609,37 @@ def test_app_js_swaps_every_region_the_server_sends() -> None:
     )
 
 
-# -- one-line summary rows -------------------------------------------------
+# -- rows and sections ----------------------------------------------------
 
 
 def _row_for(body: str, sequence: int) -> str:
+    """One event's element, up to whatever follows it in the log."""
     start = body.index(f'id="event-{sequence}"')
-    start = body.rindex("<li", 0, start)
-    return body[start : body.index("</li>", start)]
+    start = body.rindex("<div", 0, start)
+    ends = [
+        index
+        for index in (
+            body.find('<div class="ev ', start + 1),
+            body.find("<section", start + 1),
+            body.find("</section>", start + 1),
+        )
+        if index != -1
+    ]
+    return body[start : min(ends)] if ends else body[start:]
 
 
-def test_summary_events_render_on_one_line(app, store: RunStore, client) -> None:
-    """A one-word summary does not get a line of its own.
+def _section_for(body: str, task: str) -> str:
+    """The task's section in the log -- not its row in the sidebar's rail,
+    which carries the same ``data-unit``."""
+    start = body.index(f'data-unit="{task}"', body.index('id="console"'))
+    start = body.rindex("<section", 0, start)
+    return body[start : body.index("</section>", start)]
 
-    ``.event__text`` is ``flex: 1 1 100%`` -- a full-width flex line, which is
-    what multi-line captured output needs. Rendering ``cached`` into the same
-    element spends a whole row on one word, so the console reads nothing like
-    the raw log it mirrors.
-    """
+
+def test_a_skipped_task_is_a_cached_section_with_nothing_to_read(
+    app, store: RunStore, client
+) -> None:
+    """A cached task says so in its heading; its row is kept but not shown."""
     record = _start_run(store, app.state.project.root)
     store.append_event(
         record.run_id,
@@ -635,54 +649,56 @@ def test_summary_events_render_on_one_line(app, store: RunStore, client) -> None
     )
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
-    row = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
+    body = client.get(f"/runs/{record.run_id}").text
+    section = _section_for(body, "init_database")
 
-    assert "<pre" not in row, row
-    assert 'class="event__summary"' in row
-    assert "cached" in row
-    assert "init_database" in row
+    assert 'data-state="cached"' in section
+    assert 'aria-label="Cached"' in section
+    assert " hidden>" in _row_for(body, 2)
 
 
-def test_captured_output_still_renders_as_a_block(app, store: RunStore, client) -> None:
-    """Log events keep the ``<pre>``.
-
-    Their text is real pipeline output: multi-line, whitespace-significant,
-    and the reason ``.event__text`` exists. Collapsing summaries must not
-    collapse this.
-    """
+def test_captured_output_renders_a_line_per_line(app, store: RunStore, client) -> None:
+    """Pipeline output is multi-line and whitespace-significant: each line is
+    a line of the log, its leading spaces kept."""
     record = _start_run(store, app.state.project.root)
     _append_log(store, record, "   recs\n0    39\n")
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     row = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
 
-    assert '<pre class="event__text">' in row
-    assert "event__summary" not in row
+    assert row.count('class="ln"') == 2
+    assert '<span class="ln__tx">   recs</span>' in row
+    assert '<span class="ln__tx">0    39</span>' in row
 
 
-def test_streamed_summary_fragment_matches_the_reloaded_row(
-    app, store: RunStore, client
-) -> None:
+def test_lines_are_numbered_across_the_run(app, store: RunStore, client) -> None:
+    record = _start_run(store, app.state.project.root)
+    _append_log(store, record, "one\ntwo\n")
+    store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    body = client.get(f"/runs/{record.run_id}").text
+
+    assert re.findall(r'<span class="ln__no">(\d*)</span>', body) == ["1", "2", "3", "4"]
+
+
+def test_streamed_row_matches_the_reloaded_row(app, store: RunStore, client) -> None:
     """The contract in ``_event.html``: append == reload.
 
-    A summary rendered one way by the page and another by the stream would
-    make a row change shape when the connection dropped and the page came
-    back.
+    A row rendered one way by the page and another by the stream would change
+    shape when the connection dropped and the page came back. The one
+    difference is the line number, which app.js fills in for a streamed row.
     """
     record = _start_run(store, app.state.project.root)
-    store.append_event(
-        record.run_id,
-        "task_skipped",
-        task_name="init_database",
-        payload={"mode": "python", "cached": True},
-    )
+    _append_log(store, record, "hello\n")
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     reloaded = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
     payloads = _data_payloads(client.get(f"/runs/{record.run_id}/events").text)
-    streamed = next(p for p in payloads if p.get("kind") == "task_skipped")["html"]
+    streamed = next(p for p in payloads if p.get("kind") == "log")["html"]
 
-    assert reloaded.strip() == streamed[: streamed.index("</li>")].strip()
+    unnumbered = re.sub(r'<span class="ln__no">\d+</span>', '<span class="ln__no"></span>', reloaded)
+    assert unnumbered.strip().startswith(streamed.strip())
 
 
 def test_console_clock_is_local_time(app, store: RunStore, client) -> None:
@@ -698,10 +714,11 @@ def test_console_clock_is_local_time(app, store: RunStore, client) -> None:
     record = _start_run(store, app.state.project.root)
     store.append_event(
         record.run_id,
-        "task_skipped",
-        task_name="init_database",
+        "log",
+        task_name="alpha",
         timestamp=stamp,
-        payload={"cached": True},
+        payload={"stream": "stdout", "severity": "output"},
+        text="tick\n",
     )
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
@@ -715,17 +732,20 @@ def test_console_clock_is_local_time(app, store: RunStore, client) -> None:
 def test_run_finished_row_does_not_repeat_the_task_error(
     app, store: RunStore, client
 ) -> None:
-    """The run's error is the failing task's, already shown one row above.
+    """The run's error is the failing task's, already shown in its section.
 
     ``kptn.run`` finishes a failed run with ``error=str(exc)`` -- the very
     exception that propagated out of the task -- so rendering it again says
-    the same sentence twice in two consecutive rows.
-
-    The status stays: "the run failed" is not implied by a task failing, and
-    the reason is never lost, because the worker prints the traceback into
-    the captured log.
+    the same sentence twice. The status stays: "the run failed" is not
+    implied by a task failing.
     """
     record = _start_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id,
+        "task_started",
+        task_name="qa_omop_person",
+        payload={"mode": "python"},
+    )
     store.append_event(
         record.run_id,
         "task_finished",
@@ -745,36 +765,27 @@ def test_run_finished_row_does_not_repeat_the_task_error(
     store.finish_run(record.run_id, STATUS_FAILED, exit_code=1)
 
     body = client.get(f"/runs/{record.run_id}").text
-    task_row = _row_for(body, 2)
-    run_row = _row_for(body, 3)
+    task_row = _row_for(body, 3)
+    run_row = _row_for(body, 4)
 
     assert "QC failed. Check person." in task_row
-    assert "1.72s" in task_row
-
-    assert "failed" in run_row
+    assert "1.7s" in _section_for(body, "qa_omop_person")
+    assert "run failed" in run_row
     assert "QC failed. Check person." not in run_row
 
 
 def test_failed_rows_are_not_coloured_as_success(app, store: RunStore, client) -> None:
-    """A failure must not render in the success colour.
-
-    The console's colour rule keys on the event *kind*, and "task finished"
-    is the same kind whether the task succeeded or failed -- so a failure
-    came out in the same green as a success. The outcome has to reach the
-    markup for the stylesheet to be able to tell them apart.
-    """
+    """A failure must not render in the success colour: the outcome reaches
+    the markup, so the stylesheet can tell them apart."""
     record = _start_run(store, app.state.project.root)
+    store.append_event(
+        record.run_id, "task_started", task_name="qa_omop_person", payload={"mode": "python"}
+    )
     store.append_event(
         record.run_id,
         "task_finished",
         task_name="qa_omop_person",
         payload={"mode": "python", "status": "failed", "error": "QC failed."},
-    )
-    store.append_event(
-        record.run_id,
-        "task_finished",
-        task_name="load_ref",
-        payload={"mode": "python", "status": "succeeded"},
     )
     store.append_event(
         record.run_id,
@@ -785,152 +796,108 @@ def test_failed_rows_are_not_coloured_as_success(app, store: RunStore, client) -
 
     body = client.get(f"/runs/{record.run_id}").text
 
-    assert "event--failed" in _row_for(body, 2)
-    assert "event--succeeded" in _row_for(body, 3)
-    assert "event--failed" in _row_for(body, 4)
+    assert "ev--failed" in _row_for(body, 3)
+    assert "ev--failed" in _row_for(body, 4)
+    assert 'data-state="failed"' in _section_for(body, "qa_omop_person")
 
 
 def test_the_stylesheet_colours_failure_apart_from_success() -> None:
-    """The markup distinction is only worth anything if the CSS uses it.
-
-    Asserted against the stylesheet because there is nowhere else it can be:
-    the colour is not observable in the rendered HTML.
-    """
+    """The markup distinction is only worth anything if the CSS uses it."""
     source = (STATIC_DIR / "app.css").read_text()
 
-    assert ".event--failed .event__kind" in source
+    assert ".ev--failed .ln__tx" in source
     assert "var(--danger)" in source
-    # The success colour must no longer apply to every finished event.
-    assert ".event--task_finished .event__kind" not in source
 
 
-def test_finished_rows_name_the_outcome_in_the_label(
+def test_a_succeeded_finish_is_said_by_the_heading_not_a_row(
     app, store: RunStore, client
 ) -> None:
-    """A finished row names its outcome: "task failed", not "task finished".
-
-    The kind and the outcome are one fact about the row, and splitting them
-    across a label and the start of a summary made the reader join them back
-    up. The status leaves the summary, which for a run leaves nothing behind
-    -- "run failed" is the whole of it.
-    """
+    """A task's success is its heading's check mark and duration; its finish
+    row is kept for the counters but not shown. A finish with no status in
+    its payload reads as a success."""
     record = _start_run(store, app.state.project.root)
-    store.append_event(
-        record.run_id,
-        "task_finished",
-        task_name="qa_omop_person",
-        payload={
-            "mode": "python",
-            "status": "failed",
-            "error": "QC failed. Check person.",
-            "duration_seconds": 1.72,
-        },
-    )
+    store.append_event(record.run_id, "task_started", task_name="load_ref", payload={"mode": "python"})
     store.append_event(
         record.run_id,
         "task_finished",
         task_name="load_ref",
         payload={"mode": "python", "status": "succeeded", "duration_seconds": 0.5},
     )
-    store.append_event(record.run_id, "run_finished", payload={"status": "failed"})
-    store.finish_run(record.run_id, STATUS_FAILED, exit_code=1)
-
-    body = client.get(f"/runs/{record.run_id}").text
-    failed, succeeded, run = (_row_for(body, n) for n in (2, 3, 4))
-
-    assert '<span class="event__kind">task failed</span>' in failed
-    assert "QC failed. Check person. 1.72s" in failed
-    # The visible label loses "finished"; the machine-readable hooks keep it,
-    # because the CSS and app.js key on the kind.
-    assert ">failed QC failed" not in failed
-    assert 'data-kind="task_finished"' in failed
-
-    assert '<span class="event__kind">task succeeded</span>' in succeeded
-    assert '<span class="event__summary">0.50s</span>' in succeeded
-
-    assert '<span class="event__kind">run failed</span>' in run
-    assert "event__summary" not in run
-
-
-def test_a_finished_event_without_a_status_keeps_its_kind(
-    app, store: RunStore, client
-) -> None:
-    """No status in the payload must not render a bare "task"."""
-    record = _start_run(store, app.state.project.root)
+    store.append_event(record.run_id, "task_started", task_name="alpha", payload={"mode": "python"})
     store.append_event(record.run_id, "task_finished", task_name="alpha", payload={})
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
-    row = _row_for(client.get(f"/runs/{record.run_id}").text, 2)
+    body = client.get(f"/runs/{record.run_id}").text
+    load_ref = _section_for(body, "load_ref")
 
-    assert '<span class="event__kind">task finished</span>' in row
+    assert " hidden>" in _row_for(body, 3)
+    assert "python · 0.5s" in load_ref
+    assert 'aria-label="Succeeded"' in load_ref
+    assert 'data-state="succeeded"' in _section_for(body, "alpha")
 
 
-# -- counters and the log download in the run header -----------------------
+# -- counts and the log download in the run bar ----------------------------
 
 
-def test_counters_and_log_download_sit_in_the_run_header(
+def test_the_log_download_sits_in_the_run_tools_and_the_counts_in_the_rail(
     app, store: RunStore, client
 ) -> None:
-    """Both moved out of the console bar and up beside Retry."""
+    """The run's tallies are the rail's filters, outside the run tools -- so
+    the tools' closing frame, which replaces them whole, cannot blank them."""
     record = _start_run(store, app.state.project.root)
     store.append_event(record.run_id, "task_started", task_name="alpha")
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     body = client.get(f"/runs/{record.run_id}").text
-    header = body[body.index('id="run-header"') : body.index('class="console"')]
+    header = body[body.index('id="run-header"') : body.index('class="app-bar__end"')]
+    rail = body[body.index('<nav class="rail"') : body.index("</nav>", body.index('<nav class="rail"'))]
 
-    assert 'data-counter="tasks"' in header
     assert f'action="/runs/{record.run_id}/log"' in header
-    assert ">Console<" not in body
+    assert "data-counter" not in header
+    assert 'data-counter="ran"' in rail
 
 
-def test_the_closing_frame_still_carries_the_counters(
+def test_the_closing_frame_says_how_long_the_run_took(
     app, store: RunStore, client
 ) -> None:
-    """The header frame replaces ``#run-header`` whole.
-
-    Counters live in that region now, so a context without them would blank
-    the numbers the moment a run went terminal under an open stream -- a
-    break that never shows on a reload, only mid-run.
-    """
+    """The run info frame replaces ``#run-info`` whole, with the run row as
+    it is at the end: a run that finishes under an open page says how long
+    it took without a reload."""
     record = _start_run(store, app.state.project.root)
     store.append_event(record.run_id, "task_started", task_name="alpha")
-    store.append_event(record.run_id, "task_skipped", task_name="beta")
     store.append_event(record.run_id, "run_finished", payload={"status": "succeeded"})
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     payloads = _data_payloads(client.get(f"/runs/{record.run_id}/events").text)
-    frame = next(p for p in payloads if p.get("target") == "run-header")
+    frame = next(p for p in payloads if p.get("target") == "run-info")
 
-    assert 'data-counter="tasks">1<' in frame["html"]
-    assert 'data-counter="skipped">1<' in frame["html"]
-
-
-def test_the_live_recount_reaches_counters_outside_the_console() -> None:
-    """``app.js`` recounts off the DOM; the counters are no longer inside it.
-
-    Scoping the lookup to the console element would leave them frozen at
-    their server-rendered values for the life of the connection.
-    """
-    source = (STATIC_DIR / "app.js").read_text()
-
-    assert 'console_.querySelectorAll("[data-counter]")' not in source
+    assert re.search(r'class="rinfo__meta">Started [^<]*, took [^<]+<', frame["html"])
 
 
-def test_the_counter_reads_ran_not_tasks(app, store: RunStore, client) -> None:
-    """It counts ``task_started``, so "tasks" beside "skipped" is a lie.
-
-    The internal key stays ``tasks``: it is also a ``counters()`` key, an
-    ``app.js`` lookup key, and part of the ``unfinished`` derivation.
-    """
+def test_the_counts_read_all_ran_cached_and_issues(app, store: RunStore, client) -> None:
     record = _start_run(store, app.state.project.root)
     store.append_event(record.run_id, "task_started", task_name="alpha")
     store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
 
     run_page = client.get(f"/runs/{record.run_id}").text
-    history = client.get("/runs").text
 
-    assert "ran <b" in run_page
-    assert "tasks <b" not in run_page
-    assert "ran <b" in history
-    assert "tasks <b" not in history
+    for word in ("All", "Ran", "Cached", "Issues"):
+        assert f"</b>{word}</button>" in run_page, word
+
+
+def test_timestamps_are_off_until_the_reader_turns_them_on(
+    app, store: RunStore, client
+) -> None:
+    """Line numbers on, timestamps off: the log renders without them, and
+    View's box starts unticked; app.js applies the reader's own choice."""
+    record = _start_run(store, app.state.project.root)
+    store.finish_run(record.run_id, STATUS_SUCCEEDED, exit_code=0)
+
+    body = client.get(f"/runs/{record.run_id}").text
+
+    assert 'class="console no-timestamps" id="console"' in body
+    assert '<input type="checkbox" data-view-option="timestamps">' in body
+    assert '<input type="checkbox" data-view-option="numbers" checked>' in body
+    assert "var VIEW_DEFAULTS = { timestamps: false, numbers: true };" in (
+        STATIC_DIR / "app.js"
+    ).read_text()

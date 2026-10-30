@@ -4,6 +4,7 @@ import difflib
 from typing import Any
 
 from kptn.exceptions import ProfileError
+from kptn.layout import DEFAULT_STORAGE_KEY
 from kptn.graph.graph import Graph
 from kptn.graph.nodes import AnyNode, TaskNode, SqlTaskNode, RTaskNode, StageNode, ParallelNode, PipelineNode
 from kptn.graph.pipeline import Pipeline
@@ -517,7 +518,7 @@ class ProfileResolver:
         profile = self.resolve(profile_name)
         _validate_stage_refs(pipeline, profile, profile_name)
         pruned = _prune(pipeline, profile, pipeline.name if isinstance(pipeline, Pipeline) else None)
-        storage_key = self._settings.db_path or ".kptn/kptn.db"
+        storage_key = self._settings.db_path or DEFAULT_STORAGE_KEY
         final_graph, bypassed_names = _apply_cursors(pruned, profile)
         return ResolvedGraph(
             graph=final_graph,

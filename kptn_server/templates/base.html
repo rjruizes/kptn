@@ -3,21 +3,21 @@
 
   Blocks a page may override:
     title           - browser tab title (defaults to the pipeline name)
-    profile_options - the profile <select>'s options, so a page can mark one
-                      selected (the run console marks the profile in play)
     content         - the page body
+    body_class      - a class for <body>; the workspace's ``page--run``
+                      makes the page as tall as the window, with its panes
+                      scrolling inside it
+    profile_nav     - where choosing a profile goes (see below)
+    select_form     - ``form="run-form"`` on a page that has the Run form
+    side_toggle     - the sidebar's button, at the far left of the app bar,
+                      on a page with a sidebar (workspace.html)
+    app_tools       - what acts on the page, before the gear: the run
+                      page's Stop, Collapse all, View, Retry and "..."
     scripts         - extra page-local script tags
 
-  The app bar holds the three controls that act on "the selected profile":
-  the selector, Run, and Plan. There is no separate run console page for
-  them to live on -- "/" is the run history -- so they are here, on every
-  page, and a run can be started from wherever you are.
-
-  The selector sits *outside* the run form and carries `form="run-form"`,
-  which is what lets one `<select>` drive a form it is not nested in. HTML
-  form-owner association does the wiring, no JS required. That association
-  is also why there is exactly one selector: a page that swapped in a
-  selector of its own would leave Run posting no profile at all.
+  The app bar says where you are -- kptn, the project, the profile -- and
+  holds the reader's settings. What acts on the profile, Run and Plan, is in
+  the sidebar's Next run pane (workspace.html).
 
   Assets are vendored only. There are no CDN references anywhere in this UI:
   it has to work on a laptop with no network.
@@ -28,124 +28,59 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ project.display_name }} - kptn{% endblock %}</title>
+  {% include "_theme.html" %}
   <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version('app.css') }}">
   <script src="{{ base }}/static/htmx.min.js?v={{ asset_version('htmx.min.js') }}" defer></script>
   {% include "_modules.html" %}
 </head>
-<body data-base="{{ base }}" data-project-base="{{ project_base }}">
+<body class="{% block body_class %}{% endblock %}" data-base="{{ base }}" data-project-base="{{ project_base }}">
   <header class="app-bar">
     <div class="app-bar__inner">
       {#
-        Which project, before anything that acts on it. Renders nothing on a
-        single-project server. Outside ``app-bar__controls`` on purpose: those
-        are disabled while a run holds the lock, and moving to another
-        project is never something a run should block.
-      #}
-      {% include "_project_picker.html" %}
-      {#
-        One selector, every page, always bound to the run form below. It marks
-        ``selected_profile``, which each route that accepts a ``?profile=``
-        passes after validating it -- so a profile carried here through the nav
-        arrives visible, and is the one Run and Plan will use.
-      #}
-      {#
-        One run per project is the store's rule -- ``POST /runs`` answers 409
-        to a second one -- so while a run holds the lock the three controls
-        that would start or re-aim one are disabled, and the notice below
-        says why and links to the run that is holding it.
+        A path: the project -- the picker on a server with several, the
+        pipeline's name on one with one -- then the profile.
 
-        This is an affordance, not the guard: the route keeps its own check,
-        because a lock can be taken between this render and the submit.
+        The profile is the one every page shows: the sidebar lists its runs,
+        and Run and Plan use it. Choosing one goes to ``profile_nav`` with
+        that profile (app.js): the landing page, which opens its newest run,
+        or the page you are on when it is a page about a profile. Blank is
+        "(no profile)", a real and documented way to run a pipeline.
 
-        ``data-run-control`` is the contract app.js toggles these by when the
-        run ends under an open page. It toggles the *property* and never
-        re-renders this group: a swap would wipe an unsubmitted profile
-        choice out from under the reader every few seconds.
+        On a page with the Run form the selector belongs to it, by
+        ``form="run-form"`` -- one ``<select>`` driving a form it is not
+        nested in -- so Run and Plan submit it with JavaScript off too.
+        Never on a page without that form: an orphaned ``form=`` attribute
+        would take the select out of every form.
+
+        It marks ``selected_profile``, which each route passes after
+        validating it -- the run page's from the run row.
       #}
-      <div class="app-bar__controls">
-        <div class="app-bar__profile">
-          <label for="profile-select">Profile</label>
-          <select id="profile-select" name="profile" form="run-form"
-                  data-run-control {% if active_run %}disabled{% endif %}>
-            {% block profile_options %}
+      {% block side_toggle %}{% endblock %}
+      <div class="app-bar__start">
+        <a class="app-bar__brand" href="{{ base }}/" aria-label="kptn home">kptn</a>
+        {% if picker %}
+        {% include "_project_picker.html" %}
+        {% else %}
+        <span class="app-bar__project">{{ project.display_name }}</span>
+        {% endif %}
+        <span class="app-bar__sep" aria-hidden="true">/</span>
+        <label class="selbox selbox--path">
+          <select id="profile-select" name="profile" aria-label="Profile"
+                  data-profile-nav="{% block profile_nav %}{{ project_base }}/{% endblock %}"{% block select_form %}{% endblock %}>
             <option value="" {% if not selected_profile %}selected{% endif %}>(no profile)</option>
             {% for profile in project.profiles %}
             <option value="{{ profile }}" {% if profile == selected_profile %}selected{% endif %}>{{ profile }}</option>
             {% endfor %}
-            {% endblock %}
           </select>
-        </div>
-
-        {# The form the selector above belongs to. POST, because it starts work. #}
-        <form id="run-form" class="app-bar__run" method="post" action="{{ project_base }}/runs">
-          <button type="submit" class="button button--primary"
-                data-run-control {% if active_run %}disabled{% endif %}>Run</button>
-        </form>
-
-        {#
-          Plan reads rather than starts, so it is a plain GET -- and a real
-          ``<form>`` with a real ``<button>``, not a link wearing a class, so
-          it inherits the same rules as every other button here.
-
-          The select cannot drive two forms, so the profile rides in a hidden
-          input. Disabled when there is none, because a disabled control is not
-          submitted and the URL stays a clean ``/plan``; app.js keeps both the
-          value and the disabled flag in step with an unsubmitted selection.
-        #}
-        <form class="app-bar__plan" method="get" action="{{ project_base }}/plan">
-          <input type="hidden" name="profile" data-profile-input
-                 value="{{ selected_profile or '' }}"
-                 {% if not selected_profile %}disabled{% endif %}>
-          <button type="submit"
-                data-run-control {% if active_run %}disabled{% endif %}>Plan</button>
-        </form>
+        </label>
       </div>
 
-      {#
-        Why the controls are refused, and the way out: the active run's page
-        is where Stop is.
+      {% block app_tools %}{% endblock %}
 
-        Rendered on every page and hidden when there is none, rather than
-        built by app.js when it sees one -- the poller sets ``hidden`` and
-        the href and nothing else, so this markup has exactly one home.
-      #}
-      <a class="app-bar__busy" data-run-busy
-         href="{% if active_run %}{{ project_base }}/runs/{{ active_run.run_id }}{% endif %}"
-         {% if not active_run %}hidden{% endif %}>a run is in progress</a>
-
-      {#
-        The profile travels with the reader.
-
-        The links carry ``selected_profile``, which each route that accepts a
-        ``?profile=`` passes after validating it -- the run page's comes from
-        the run row rather than the URL. So choosing a profile and clicking
-        Plan shows the plan for *that* profile, with no JavaScript involved.
-
-        Deliberately the route's value and not the request's query string: a
-        page that *refused* a profile (the unknown-profile 400) must not hand
-        it to the next page, or every link on that error page is another 400.
-        A page that passes nothing gets a clean nav, which is the right answer
-        for the run history and for every error shell.
-
-        ``data-profile-link`` holds each link's bare path, and is the contract
-        app.js rebuilds these hrefs from when the selector changes without a
-        submit -- the one case no server render can know.
-
-        The history link carries it. The history does not filter by profile,
-        but it does carry one to the page after it, so a bare link here would
-        break the chain at the click -- one step before anything server-side
-        could help. Plan is not among them: it is a button in the controls
-        above, and takes the profile in its own hidden input.
-
-        The walkthrough is not linked here. ``/walkthrough`` still serves, and
-        the plan page still links into its per-task pages; it is only off the
-        bar.
-      #}
-      {% set profile_query = "?profile=" ~ (selected_profile | urlencode) if selected_profile else "" %}
-      <nav class="app-bar__nav" aria-label="Main">
-        <a href="{{ project_base }}/{{ profile_query }}" data-profile-link="{{ project_base }}/" {% if nav_active == 'runs' %}aria-current="page"{% endif %}>History</a>
+      {# The settings gear, out at the right-hand end of the bar. #}
+      <div class="app-bar__end">
         {% include "_settings.html" %}
-      </nav>
+      </div>
     </div>
   </header>
 

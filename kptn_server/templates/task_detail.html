@@ -9,6 +9,7 @@
 {% extends "base.html" %}
 
 {% block title %}{{ item.name }} - {{ project.display_name }} - kptn{% endblock %}
+{% block profile_nav %}{{ project_base }}/walkthrough/task/{{ item.name | urlencode }}{% endblock %}
 
 
 {% block content %}

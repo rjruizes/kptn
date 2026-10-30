@@ -13,9 +13,11 @@ import typer
 import kptn
 from kptn.exceptions import ProfileError, ProjectConfigError
 from kptn.graph.pipeline import Pipeline
+from kptn.layout import migrate_layout
 from kptn.project import load_pipeline
 from kptn.runner.api import resolve_pipeline
 from kptn.runner.api import run as _run_pipeline
+from kptn.sources.shared import SHARED_BRONZE_ENV, shared_bronze_for
 import kptn.runner.plan as runner_plan
 
 if TYPE_CHECKING:
@@ -36,8 +38,24 @@ def run(
             "`kptn ui` shows them, as it does for runs it starts itself."
         ),
     ),
+    shared_bronze: bool = typer.Option(
+        True,
+        "--shared-bronze/--no-shared-bronze",
+        help=(
+            "Restore source tables from, and publish them to, the shared bronze "
+            "named by settings.shared_bronze in kptn.yaml. Off: build every "
+            "table in this directory."
+        ),
+    ),
 ) -> None:
+    if not shared_bronze:
+        # The run reads the variable wherever it executes, recorded in this
+        # process or not, so neither RunRequest nor kptn.run needs a field.
+        os.environ[SHARED_BRONZE_ENV] = "off"
     project_root = Path.cwd()
+    # Before the run store opens .kptn/state/ui.db.
+    for notice in migrate_layout(project_root):
+        typer.echo(notice)
     try:
         pipeline = load_pipeline(project_root)
     except ProjectConfigError as e:
@@ -65,7 +83,7 @@ def _run_recorded(
     """Run *pipeline* in this process, recorded as a UI-started run would be.
 
     The run, its events, and its captured output go to the project's run store
-    (``.kptn/ui.db`` and ``.kptn/runs/<run_id>.jsonl``) through the UI worker's
+    (``.kptn/state/ui.db`` and ``.kptn/state/runs/<run_id>.jsonl``) through the UI worker's
     own :func:`~kptn_server.worker.execute_run`, so ``kptn ui`` lists the run
     and serves its log like any other. Output still reaches the terminal.
 
@@ -137,13 +155,19 @@ def plan(
     try:
         pipeline = load_pipeline(project_root)
         resolved, state_store = resolve_pipeline(pipeline, project_root, profile)
+        shared = shared_bronze_for(project_root)
     except ProjectConfigError as e:
         raise typer.BadParameter(str(e)) from e
     except ProfileError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1)
 
-    runner_plan.plan(resolved, state_store)
+    runner_plan.plan(
+        resolved,
+        state_store,
+        config_values=runner_plan.config_values_for_plan(pipeline),
+        shared=shared,
+    )
 
 
 DEFAULT_UI_HOST = "127.0.0.1"

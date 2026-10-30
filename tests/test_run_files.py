@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -41,11 +42,11 @@ from kptn_server.run_store import (
 def _store_and_run(tmp_path: Path):
     project = tmp_path / "project"
     project.mkdir()
-    store = RunStore(project / ".kptn" / "ui.db")
+    store = RunStore(project / ".kptn" / "state" / "ui.db")
     record = store.create_run(
         RunRequest(project_root=project, pipeline="two_tasks", profile="dev")
     )
-    return store, record, project.resolve() / ".kptn" / "runs"
+    return store, record, project.resolve() / ".kptn" / "state" / "runs"
 
 
 def _two_tasks(store: RunStore, run_id: str) -> None:
@@ -205,6 +206,27 @@ def test_creating_and_finishing_a_run_publish_the_index(tmp_path: Path) -> None:
     assert listed.counters["succeeded"] == 2
 
 
+def test_the_index_carries_each_runs_number(tmp_path: Path) -> None:
+    store, record, runs_dir = _store_and_run(tmp_path)
+    _two_tasks(store, record.run_id)
+    second = store.create_run(RunRequest(project_root=record.project_root, pipeline="main"))
+
+    assert [run.number for run in read_index(runs_dir)] == [second.number, record.number] == [2, 1]
+
+
+def test_an_index_from_before_run_numbers_reads_without_them(tmp_path: Path) -> None:
+    _store, record, runs_dir = _store_and_run(tmp_path)
+    index = runs_dir / INDEX_FILENAME
+    document = json.loads(index.read_text())
+    for row in document["runs"]:
+        del row["number"]
+    index.write_text(json.dumps(document))
+
+    (listed,) = read_index(runs_dir)
+    assert listed.run_id == record.run_id
+    assert listed.number is None
+
+
 def test_unforced_publishes_are_rate_limited(tmp_path: Path) -> None:
     store, record, runs_dir = _store_and_run(tmp_path)
     store.append_event(record.run_id, EventKind.RUN_STARTED.value)  # forced
@@ -309,12 +331,12 @@ def test_an_index_reached_through_a_symlink_is_refused(tmp_path: Path) -> None:
 
 def test_a_runs_directory_reached_through_a_symlink_is_refused(tmp_path: Path) -> None:
     root = tmp_path / "project"
-    (root / ".kptn").mkdir(parents=True)
+    (root / ".kptn" / "state").mkdir(parents=True)
     (tmp_path / "elsewhere").mkdir()
-    (root / ".kptn" / "runs").symlink_to(tmp_path / "elsewhere")
+    (root / ".kptn" / "state" / "runs").symlink_to(tmp_path / "elsewhere")
 
     with pytest.raises(RunFileError):
-        run_files.published_runs_dir(root.resolve())
+        run_files.published_runs_dir(root.resolve() / ".kptn" / "state" / "runs")
 
 
 def test_an_oversized_index_is_refused(tmp_path: Path, monkeypatch) -> None:
@@ -388,3 +410,123 @@ def test_index_writes_leave_no_temporary_files(tmp_path: Path) -> None:
     for _ in range(3):
         store.publish_index(record.project_root)
     assert not [name for name in os.listdir(runs_dir) if name.endswith(".tmp")]
+
+
+# -- shared logs: where run files go ------------------------------------------
+
+
+def _mode(p: Path) -> int:
+    return stat.S_IMODE(p.stat().st_mode)
+
+
+def _workdir(root: Path, yaml: str | None) -> Path:
+    root.mkdir(parents=True)
+    if yaml is not None:
+        (root / "kptn.yaml").write_text(yaml)
+    return root
+
+
+SHARED_LOGS_YAML = "settings:\n  shared_logs: ../_kptn_logs\n"
+
+
+def test_without_shared_logs_runs_stay_in_dot_kptn(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", None)
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "state" / "runs"
+    assert (project / ".kptn" / "state" / "runs").is_dir()
+
+
+def _shared_logs(release: Path) -> Path:
+    """The release's shared logs directory, set up as on the server."""
+    logs = release / "_kptn_logs"
+    logs.mkdir(parents=True)
+    return logs
+
+
+def test_shared_logs_is_relative_to_the_project_and_named_by_directory(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    _shared_logs(tmp_path / "r7")
+    expected = (tmp_path / "r7" / "_kptn_logs" / "alice_main").resolve()
+    assert run_files.runs_dir_for(project) == expected
+    assert expected.is_dir()
+    assert not (project / ".kptn").exists()
+
+
+def test_shared_logs_modes_whatever_the_umask(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    _shared_logs(tmp_path / "r7")
+    old = os.umask(0o077)
+    try:
+        runs = run_files.runs_dir_for(project)
+    finally:
+        os.umask(old)
+    # The setgid bit is dropped by some systems when the owner is not in the
+    # directory's group; the rest of the mode must hold everywhere.
+    assert _mode(runs) & 0o777 == run_files.LOG_DIR_MODE & 0o777
+
+
+def test_missing_shared_logs_keeps_runs_in_dot_kptn(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    assert run_files.runs_dir_of(project, "../_kptn_logs") == project / ".kptn" / "state" / "runs"
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "state" / "runs"
+    assert not (tmp_path / "r7" / "_kptn_logs").exists()
+    assert run_files.missing_shared_logs(project) == (
+        "[LOGS] ../_kptn_logs does not exist, so this run's log stays in .kptn/state/runs"
+    )
+
+
+def test_nothing_is_reported_when_shared_logs_exist_or_are_unset(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", SHARED_LOGS_YAML)
+    _shared_logs(tmp_path / "r7")
+    assert run_files.missing_shared_logs(project) is None
+    assert run_files.missing_shared_logs(_workdir(tmp_path / "r7" / "bob_main", None)) is None
+
+
+def test_unreadable_kptn_yaml_falls_back_to_dot_kptn(tmp_path: Path) -> None:
+    project = _workdir(tmp_path / "r7" / "alice_main", "settings: [unclosed\n")
+    assert run_files.runs_dir_for(project) == project / ".kptn" / "state" / "runs"
+
+
+def test_shared_logs_root_does_not_touch_the_filesystem(tmp_path: Path) -> None:
+    assert run_files.shared_logs_root(tmp_path / "w", "../logs") == (tmp_path / "logs").resolve()
+    assert run_files.shared_logs_root(tmp_path / "w", None) is None
+    assert not (tmp_path / "logs").exists()
+
+
+def _indexed(run_id: str, created_at: datetime | None) -> run_files.IndexedRun:
+    return run_files.IndexedRun(
+        run_id=run_id,
+        pipeline="p",
+        profile=None,
+        force=False,
+        status="succeeded",
+        created_at=created_at,
+        started_at=None,
+        finished_at=None,
+        heartbeat_at=None,
+        current_task=None,
+        exit_code=0,
+        counters={"tasks": 1},
+        number=7,
+    )
+
+
+def test_carried_rows_merge_by_creation_time_and_are_capped(tmp_path: Path) -> None:
+    store, record, _runs_dir = _store_and_run(tmp_path)
+    now = record.created_at
+    older = _indexed("a" * 32, now - timedelta(days=1))
+    newer = _indexed("b" * 32, now + timedelta(days=1))
+    undated = _indexed("c" * 32, None)
+
+    document = run_files.build_index(
+        record.project_root, [record], {}, carried=[undated, older, newer]
+    )
+    assert [row["run_id"] for row in document["runs"]] == [
+        "b" * 32, record.run_id, "a" * 32, "c" * 32
+    ]
+    assert document["runs"][0]["number"] == 7
+    assert document["runs"][0]["counters"] == {"tasks": 1}
+
+    many = [_indexed(f"{i:032x}", now - timedelta(minutes=i + 1)) for i in range(run_files.INDEX_LIMIT)]
+    document = run_files.build_index(record.project_root, [record], {}, carried=many)
+    assert len(document["runs"]) == run_files.INDEX_LIMIT
+    assert document["runs"][0]["run_id"] == record.run_id

@@ -179,8 +179,8 @@ def test_state_paths_are_under_dot_kptn(tmp_path: Path) -> None:
     registry = ProjectRegistry(tmp_path, USER)
     (entry,) = registry.scan()
 
-    assert entry.database_path == workdir.resolve() / ".kptn" / "ui.db"
-    assert entry.run_log_dir == workdir.resolve() / ".kptn" / "runs"
+    assert entry.database_path == workdir.resolve() / ".kptn" / "state" / "ui.db"
+    assert entry.run_log_dir == workdir.resolve() / ".kptn" / "state" / "runs"
 
 
 @pytest.mark.parametrize("slug", ["nope", "..", "../..", "r1/rruizesparza_main", "/etc"])
@@ -248,3 +248,114 @@ def test_default_user_falls_back_to_user(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("USER", "shell-person")
 
     assert default_user() == "shell-person"
+
+
+# -- settings.shared_logs ------------------------------------------------------
+
+
+def test_run_log_dir_follows_shared_logs(tmp_path: Path) -> None:
+    workdir = make_workdir(tmp_path, "r7", f"{USER}_main")
+    (workdir / "kptn.yaml").write_text("settings:\n  shared_logs: ../_kptn_logs\n")
+    (tmp_path / "r7" / "_kptn_logs").mkdir()
+
+    (entry,) = ProjectRegistry(tmp_path, USER).scan()
+
+    assert entry.run_log_dir == (tmp_path / "r7" / "_kptn_logs" / f"{USER}_main").resolve()
+    assert entry.run_log_error is None
+    assert not entry.run_log_dir.exists()  # the registry creates nothing
+
+
+def test_missing_shared_logs_leave_runs_in_dot_kptn(tmp_path: Path) -> None:
+    workdir = make_workdir(tmp_path, "r7", f"{USER}_main")
+    (workdir / "kptn.yaml").write_text("settings:\n  shared_logs: ../_kptn_logs\n")
+
+    (entry,) = ProjectRegistry(tmp_path, USER).scan()
+
+    assert entry.run_log_dir == workdir.resolve() / ".kptn" / "state" / "runs"
+    assert entry.run_log_error is None
+
+
+def test_shared_logs_outside_the_projects_root_are_not_read(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    workdir = make_workdir(root, "r7", f"{USER}_main")
+    (workdir / "kptn.yaml").write_text(f"settings:\n  shared_logs: {tmp_path / 'elsewhere'}\n")
+    (tmp_path / "elsewhere").mkdir()
+
+    (entry,) = ProjectRegistry(root, USER).scan()
+
+    assert entry.run_log_error is not None and "outside" in entry.run_log_error
+    assert entry.error is None  # still served as a project; only its logs are not read
+
+
+# -- removed working directories -----------------------------------------------
+
+
+def _share_logs(workdir: Path) -> Path:
+    (workdir / "kptn.yaml").write_text("settings:\n  shared_logs: ../_kptn_logs\n")
+    return workdir
+
+
+def _left_logs(root: Path, release: str, name: str) -> Path:
+    logs = root / release / "_kptn_logs" / name
+    logs.mkdir(parents=True)
+    (logs / "index.json").write_text('{"schema": 1, "runs": []}')
+    return logs
+
+
+def test_a_deleted_directory_with_logs_is_listed_as_removed(tmp_path: Path) -> None:
+    _share_logs(make_workdir(tmp_path, "r7", f"{USER}_main"))
+    logs = _left_logs(tmp_path, "r7", "bob_old")
+    _left_logs(tmp_path, "r7", f"{USER}_main")  # its directory is still there
+
+    entries = {entry.slug: entry for entry in ProjectRegistry(tmp_path, USER).scan()}
+
+    assert set(entries) == {f"{USER}_main", "bob_old"}
+    removed = entries["bob_old"]
+    assert removed.removed and not removed.owned
+    assert removed.database_path is None
+    assert removed.run_log_dir == logs.resolve()
+    assert not entries[f"{USER}_main"].removed
+
+
+def test_my_removed_directory_resolves_for_viewing(tmp_path: Path) -> None:
+    _share_logs(make_workdir(tmp_path, "r7", f"{USER}_main"))
+    _left_logs(tmp_path, "r7", f"{USER}_old")
+    registry = ProjectRegistry(tmp_path, USER)
+    registry.scan()
+
+    entry = registry.resolve(f"{USER}_old", servable_only=False)
+
+    assert entry is not None and entry.removed and entry.owned
+
+
+def test_removed_directories_do_not_choose_the_release(tmp_path: Path) -> None:
+    make_workdir(tmp_path, "r6", f"{USER}_main")
+    _share_logs(make_workdir(tmp_path, "r7", "bob_main"))
+    _left_logs(tmp_path, "r7", f"{USER}_old")
+    registry = ProjectRegistry(tmp_path, USER)
+
+    registry.scan()
+
+    assert registry.release == "r6"
+
+
+def test_only_directories_with_an_index_and_no_links_are_listed(tmp_path: Path) -> None:
+    _share_logs(make_workdir(tmp_path, "r7", f"{USER}_main"))
+    logs = tmp_path / "r7" / "_kptn_logs"
+    (logs / "no_index").mkdir(parents=True)
+    _left_logs(tmp_path, "r7", "real")
+    (logs / "linked").symlink_to(logs / "real")
+
+    slugs = {entry.slug for entry in ProjectRegistry(tmp_path, USER).scan()}
+
+    assert slugs == {f"{USER}_main", "real"}
+
+
+def test_removed_logs_outside_the_projects_root_are_not_listed(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    workdir = make_workdir(root, "r7", f"{USER}_main")
+    (workdir / "kptn.yaml").write_text(f"settings:\n  shared_logs: {tmp_path / 'elsewhere'}\n")
+    (tmp_path / "elsewhere" / "ghost").mkdir(parents=True)
+    (tmp_path / "elsewhere" / "ghost" / "index.json").write_text("{}")
+
+    assert {entry.slug for entry in ProjectRegistry(root, USER).scan()} == {f"{USER}_main"}

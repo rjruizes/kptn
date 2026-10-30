@@ -148,7 +148,7 @@ def test_plan_view_renders_the_plan_builders_entries(
     monkeypatch.setattr(
         inspect_routes,
         "build_plan",
-        lambda resolved, state_store: [
+        lambda resolved, state_store, **_: [
             PlanEntry("only_from_build_plan", PlanAction.SKIP, reason="cached"),
         ],
     )
@@ -172,7 +172,7 @@ def test_plan_view_reports_every_plan_action(
     monkeypatch.setattr(
         inspect_routes,
         "build_plan",
-        lambda resolved, state_store: [
+        lambda resolved, state_store, **_: [
             PlanEntry("runs_now", PlanAction.RUN, reason="no cached hash"),
             PlanEntry("stays_cached", PlanAction.SKIP, reason="cached"),
             PlanEntry("fans_out", PlanAction.MAP, provider="upstream"),
@@ -204,7 +204,7 @@ def test_plan_view_does_not_create_the_projects_state_store(
     project that has never run leaves a database behind -- and, because the
     configured path is relative, possibly not even inside the project.
     """
-    state_db = ui_project / ".kptn" / "kptn.db"
+    state_db = ui_project / ".kptn" / "state" / "kptn.db"
     assert not state_db.exists()
 
     assert client.get("/plan?profile=success").status_code == 200
@@ -219,19 +219,17 @@ def test_plan_view_reads_an_existing_state_store(
 
     This is the other half of the test above: not creating the store must not
     become not *reading* it, which would make every task look stale forever.
+    ``setup_task`` is recorded too: a stale upstream would make noisy_task run.
     """
     from kptn.change_detector.detector import _hash_code
     from kptn.graph.nodes import TaskNode
     from kptn.state_store.sqlite import SqliteBackend
 
     project = create_app(ui_project).state.project
-    node = next(
-        n
-        for n in project.pipeline.nodes
-        if isinstance(n, TaskNode) and n.name == "noisy_task"
-    )
-    store = SqliteBackend(path=str(ui_project / ".kptn" / "kptn.db"))
-    store.write_hash(".kptn/kptn.db", "fixture", "noisy_task", _hash_code(node))
+    store = SqliteBackend(path=str(ui_project / ".kptn" / "state" / "kptn.db"))
+    for node in project.pipeline.nodes:
+        if isinstance(node, TaskNode) and node.name in ("setup_task", "noisy_task"):
+            store.write_hash(".kptn/kptn.db", "fixture", node.name, _hash_code(node))
 
     body = client.get("/plan?profile=success").text
 
@@ -787,7 +785,7 @@ def test_task_detail_is_a_whole_page_for_a_direct_request(
 
     assert response.status_code == 200
     assert response.text.lstrip().startswith("<!DOCTYPE html>")
-    assert "app-bar__nav" in response.text
+    assert '<header class="app-bar">' in response.text
     assert "Emit output and warnings." in response.text
 
 
@@ -799,7 +797,7 @@ def test_task_detail_is_a_bare_fragment_for_htmx(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert "<!DOCTYPE html>" not in response.text
-    assert "app-bar__nav" not in response.text
+    assert '<header class="app-bar">' not in response.text
     assert "Emit output and warnings." in response.text
 
 
@@ -1079,3 +1077,35 @@ def test_the_inspection_routes_never_start_a_run(client: TestClient) -> None:
 
     assert store.list_runs(project.root) == []
     assert store.active_run(project.root) is None
+
+
+def test_ingest_steps_carry_an_icon(tmp_path: Path) -> None:
+    root = write_project(
+        tmp_path,
+        "sources",
+        module_source=(
+            "import kptn\n\n\n"
+            "@kptn.task(outputs=[])\n"
+            "def transform() -> None:\n    return None\n\n\n"
+            'raw = kptn.source("raw", files="in")\n'
+            'raw_ingest = kptn.Stage("raw_ingest", raw)\n'
+            'silver = kptn.Stage("silver", transform)\n'
+            'pipeline = kptn.Pipeline(\n'
+            '    "sources", raw_ingest >> silver\n'
+            ')\n'
+        ),
+    )
+    client = project_client(root)
+
+    page = client.get("/walkthrough").text
+
+    def row(name: str) -> str:
+        return page.split(f'data-task="{name}"')[1].split("</tr>")[0]
+
+    for marked in ("raw", "raw_ingest"):
+        assert "<svg" in row(marked), marked
+    for plain in ("transform", "silver"):
+        assert "<svg" not in row(plain), plain
+
+    assert 'class="kind__icon"' in client.get("/walkthrough/task/raw").text
+    assert 'class="kind__icon"' not in client.get("/walkthrough/task/transform").text

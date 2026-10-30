@@ -1,0 +1,19 @@
+{#
+  The head of the Run pane: which run, how it is going, and when it ran.
+
+  A replaceable region, like the run bar: the stream's closing frame
+  re-renders it from the run row (``run_info``), so the timing gains how
+  long the run took. It therefore takes only ``run`` and ``is_terminal`` --
+  never the request. The status is still the ``#run-status`` fragment the
+  stream's status frame swaps by id.
+#}
+<div class="rinfo" id="run-info">
+  <div class="rinfo__top">
+    <span class="rinfo__id" title="{{ run.run_id }}">{{ run | run_label }}</span>
+    {% include "_run_status.html" %}
+  </div>
+  {%- set timing = run | run_timing %}
+  {%- if timing %}
+  <div class="rinfo__meta">{{ timing }}</div>
+  {%- endif %}
+</div>

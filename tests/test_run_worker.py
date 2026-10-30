@@ -57,6 +57,7 @@ from kptn_server.run_store import (
     RunStoreError,
     StoredEvent,
 )
+from tests.conftest import copy_fixture_project
 
 FIXTURE_PROJECT = Path(__file__).parent / "fixtures" / "ui_project"
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -111,9 +112,7 @@ class FixtureRun:
 
 @pytest.fixture
 def ui_project(tmp_path: Path) -> Path:
-    destination = tmp_path / "project"
-    shutil.copytree(FIXTURE_PROJECT, destination)
-    return destination
+    return copy_fixture_project(FIXTURE_PROJECT, tmp_path, "project")
 
 
 def create_fixture_run(
@@ -122,7 +121,7 @@ def create_fixture_run(
     profile: str,
     force: bool = False,
 ) -> FixtureRun:
-    db_path = ui_project / ".kptn" / "ui.db"
+    db_path = ui_project / ".kptn" / "state" / "ui.db"
     store = RunStore(db_path)
     record = store.create_run(
         RunRequest(
@@ -436,7 +435,7 @@ def test_worker_stops_and_exits_nonzero_when_a_durable_write_fails(
 
 
 def test_worker_rejects_an_unknown_run_id(tmp_path: Path) -> None:
-    db_path = tmp_path / ".kptn" / "ui.db"
+    db_path = tmp_path / ".kptn" / "state" / "ui.db"
     RunStore(db_path)
 
     exit_code = worker.main(["--db", str(db_path), "--run-id", "does-not-exist"])

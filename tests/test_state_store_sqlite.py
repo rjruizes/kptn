@@ -85,7 +85,7 @@ def test_creates_parent_directory_if_missing(tmp_path):
 def test_default_path_directory_created(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     SqliteBackend()
-    assert (tmp_path / ".kptn" / "kptn.db").exists()
+    assert (tmp_path / ".kptn" / "state" / "kptn.db").exists()
 
 
 # ─── AC-6: SQLite errors wrapped in StateStoreError ──────────────────────── #

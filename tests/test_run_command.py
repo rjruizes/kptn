@@ -134,3 +134,27 @@ def test_run_command_translates_project_config_errors(
 
     assert result.exit_code == 2
     assert expected_message in result.stderr
+
+
+@pytest.mark.parametrize(("args", "expected"), [([], "on"), (["--no-shared-bronze"], "off")])
+def test_run_command_no_shared_bronze_turns_sharing_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], expected: str
+) -> None:
+    """--no-shared-bronze works through KPTN_SHARED_BRONZE, which every run path reads."""
+    from kptn.sources.shared import SHARED_BRONZE_ENV
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(SHARED_BRONZE_ENV, "on")  # restored after the test
+    seen: list[str | None] = []
+
+    def fake_run(*_args, **_kwargs) -> None:
+        import os
+
+        seen.append(os.environ.get(SHARED_BRONZE_ENV))
+
+    with patch("kptn.cli.commands.load_pipeline", return_value=_make_pipeline()), \
+         patch("kptn.cli.commands._run_pipeline", side_effect=fake_run):
+        result = CliRunner().invoke(app, ["run", "--no-record", *args])
+
+    assert result.exit_code == 0, result.output
+    assert seen == [expected]

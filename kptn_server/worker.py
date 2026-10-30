@@ -54,6 +54,7 @@ from kptn_server.capture import (
     capture_worker_output,
     durable,
 )
+from kptn_server.run_files import missing_shared_logs
 from kptn_server.run_store import (
     STATUS_ERRORED,
     STATUS_FAILED,
@@ -178,7 +179,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--db",
         required=True,
         type=Path,
-        help="Path to the UI run store (normally <project>/.kptn/ui.db).",
+        help="Path to the UI run store (normally <project>/.kptn/state/ui.db).",
     )
     parser.add_argument(
         "--run-id",
@@ -266,6 +267,9 @@ def execute_run(
             try:
                 if pipeline is None:
                     pipeline = load_pipeline(record.project_root)
+                logs_notice = missing_shared_logs(Path(record.project_root))
+                if logs_notice is not None:
+                    print(logs_notice, flush=True)
                 kptn.run(
                     pipeline,
                     profile=record.profile,

@@ -265,12 +265,12 @@ def _warning_rows(page: str) -> set[str]:
     to show up now.
     """
     return set(
-        re.findall(r'<li class="event[^"]*"\s+id="(event-\d+)"[^>]*data-kind="warning"', page)
+        re.findall(r'<div class="ev[^"]*"\s+id="(event-\d+)"[^>]*data-kind="warning"', page)
     )
 
 
 def _event_ids(page: str) -> set[str]:
-    return set(re.findall(r'<li class="event[^"]*"\s+id="(event-\d+)"', page))
+    return set(re.findall(r'<div class="ev[^"]*"\s+id="(event-\d+)"', page))
 
 
 def _recorded_worker(project: Path, run_id: str) -> psutil.Process:
@@ -319,7 +319,7 @@ def test_a_run_survives_the_server_that_started_it(
         #    restart below prove nothing at all. The UI's own history lives in
         #    `.kptn/ui.db` and is deliberately *not* touched here; the history
         #    assertions further down are what show the two are independent.
-        task_state_db = ui_project / ".kptn" / "kptn.db"
+        task_state_db = ui_project / ".kptn" / "state" / "kptn.db"
         assert task_state_db.is_file(), "the finished run recorded no task state"
         task_state_db.unlink()
 
@@ -371,15 +371,16 @@ def test_a_run_survives_the_server_that_started_it(
         assert slow_warnings, "the restarted run rendered no warning rows"
         assert slow_warnings <= _event_ids(page)
 
-        # history: both runs, both succeeded, newest first
-        history = client.get("/runs")
-        assert history.status_code == 200, history.text
-        listed = re.findall(
-            r'class="run-history__link" href="/runs/([0-9a-zA-Z_-]+)"', history.text
-        )
-        assert slow_id in listed and success_id in listed, listed
-        assert listed.index(slow_id) < listed.index(success_id)
-        assert history.text.count('class="status status--succeeded"') >= 2
+        # the Runs pane: each run under its own profile, succeeded; and the
+        # landing page opens the newest
+        for profile, run_id in (("slow", slow_id), ("success", success_id)):
+            listing = client.get(f"/run-list?profile={profile}")
+            assert listing.status_code == 200, listing.text
+            row = re.search(r'<a class="runrow"[^>]*data-run-id="' + run_id + r'".*?</a>', listing.text, re.S)
+            assert row, f"the {profile} run is not in its Runs pane"
+            assert 'title="Succeeded' in row.group(0)
+        landing = client.get("/", follow_redirects=False)
+        assert landing.headers["location"] == f"runs/{slow_id}"
 
         # log download
         log = client.get(f"/runs/{slow_id}/log")
@@ -454,7 +455,7 @@ def test_a_reader_goes_from_the_list_to_a_project_and_runs_it(
 ) -> None:
     """The whole path a person takes on their first visit.
 
-    List -> a project's history -> start a run there. The redirect's
+    List -> a project -> start a run there. The redirect's
     ``Location`` must be relative: a root-absolute one is re-prefixed by
     jupyter-server-proxy, arriving doubled -- see
     ``tests/test_ui_root_path.py``.
@@ -475,8 +476,8 @@ def test_a_reader_goes_from_the_list_to_a_project_and_runs_it(
 
     # The run just started shows up in the project it was started in --
     # without this, the isolation test below would pass vacuously against an
-    # implementation that never renders a run-history link anywhere at all.
-    assert "run-history__link" in multi_client.get(f"/p/{USER}_main/").text
+    # implementation that never renders a Runs pane row anywhere at all.
+    assert 'class="runrow"' in multi_client.get(f"/p/{USER}_main/").text
 
 
 def test_a_run_in_one_project_is_absent_from_the_other(
@@ -484,9 +485,9 @@ def test_a_run_in_one_project_is_absent_from_the_other(
 ) -> None:
     """Starting a run in one project must not leak into another's history.
 
-    Asserted on ``run-history__link``, not on the word "runs" -- "runs"
-    appears on nearly any page in this UI (the nav link, the form action,
-    the redirect target) and would pass even against a shared store.
+    Asserted on the Runs pane's rows, not on the word "runs" -- "runs"
+    appears on nearly any page in this UI (the pane's header, the form
+    action, the redirect target) and would pass even against a shared store.
     """
     _stub_supervisor(multi_client, f"{USER}_main")
 
@@ -496,4 +497,4 @@ def test_a_run_in_one_project_is_absent_from_the_other(
 
     other = multi_client.get(f"/p/{USER}_featureA/")
 
-    assert "run-history__link" not in other.text
+    assert 'class="runrow"' not in other.text

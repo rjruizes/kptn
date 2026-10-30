@@ -218,8 +218,8 @@ def test_post_run_conflict_renders_the_whole_page_for_a_plain_form_post(
     Every form in this UI is a plain ``<form method="post">`` -- there is no
     ``hx-`` attribute anywhere in ``templates/`` -- so pressing Run while the
     project is busy is a browser *navigation*. Answering it with a bare
-    fragment lands the developer on an unstyled orphan ``<div>`` with no nav
-    and no stylesheet, while the same module builds a proper page for the 400,
+    fragment lands the developer on an unstyled orphan ``<div>`` with no app
+    bar and no stylesheet, while the same module builds a proper page for the 400,
     404 and 500 paths.
     """
     response = client.post("/runs", data={"profile": "success"})
@@ -229,7 +229,7 @@ def test_post_run_conflict_renders_the_whole_page_for_a_plain_form_post(
     # The page shell, not a fragment.
     assert "<!DOCTYPE html>" in response.text
     assert "/static/app.css" in response.text
-    assert 'aria-label="Main"' in response.text
+    assert '<header class="app-bar">' in response.text
 
 
 def test_post_run_conflict_stays_a_fragment_for_an_htmx_request(
@@ -530,55 +530,54 @@ def test_run_page_links_its_event_stream(
     assert f"/runs/{record.run_id}/events" in body
 
 
-def _run_heading(body: str) -> str:
-    """The run panel's heading, which is a breadcrumb rather than a title."""
-    match = re.search(r"<h2 class=\"run-header__crumbs\">.*?</h2>", body, re.S)
-    assert match, "the run panel has no heading"
+def _run_info(body: str) -> str:
+    """The head of the sidebar's Run pane: which run, and how it is going."""
+    match = re.search(r'<div class="rinfo" id="run-info">.*?\n</div>', body, re.S)
+    assert match, "the Run pane has no run info"
     return match.group(0)
 
 
-def test_run_heading_leads_back_to_the_history(
+def test_the_run_pane_names_the_run_by_its_number(
     client: TestClient, app, store: RunStore
 ) -> None:
-    """"Run" named the page; "Runs" gets you off it.
-
-    A single run's page is reached from the history and has nowhere else to
-    go, so the heading is the way back rather than a label for where you
-    already know you are.
-    """
+    """``#2``, as the Runs pane lists it; the whole id on hover."""
+    first = _seed_run(store, app.state.project.root, profile="slow")
+    store.finish_run(first.run_id, STATUS_FAILED, exit_code=1)
     record = _seed_run(store, app.state.project.root, profile="slow")
 
-    heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
+    body = client.get(f"/runs/{record.run_id}").text
+    info = _run_info(body)
 
-    assert ">Runs<" in heading
-    assert 'href="/?profile=slow"' in heading, "the way back drops the profile"
+    assert record.number == 2
+    assert f'title="{record.run_id}">#2</span>' in info
+    assert "<title>#2 " in body
 
 
-def test_run_heading_names_the_runs_profile(
+def test_the_run_info_heads_the_run_pane(
     client: TestClient, app, store: RunStore
 ) -> None:
-    """The second crumb is which run this is: its profile."""
-    record = _seed_run(store, app.state.project.root, profile="slow")
+    """Above the filters and the tasks, in the sidebar's Run pane."""
+    record = _seed_run(store, app.state.project.root)
 
-    heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
+    body = client.get(f"/runs/{record.run_id}").text
+    pane = body[body.index('<section class="pane pane--run"') :]
 
-    assert "slow" in heading
+    assert pane.index('id="run-info"') < pane.index('class="rail-filters"')
 
 
-def test_run_heading_says_so_when_the_run_had_no_profile(
+def test_the_run_bar_names_the_run_for_a_hidden_sidebar(
     client: TestClient, app, store: RunStore
 ) -> None:
-    """Running with no profile is a real, documented way to run a pipeline.
+    """app.css shows it only when the sidebar, which says it otherwise, is hidden."""
+    record = _seed_run(store, app.state.project.root)
+    store.finish_run(record.run_id, STATUS_FAILED, exit_code=1)
 
-    A crumb that just stopped after "Runs" would read as a missing value
-    rather than the deliberate one it is.
-    """
-    record = _seed_run(store, app.state.project.root, profile=None)
+    body = client.get(f"/runs/{record.run_id}").text
+    ctx = re.search(r'<div class="run-bar__ctx">.*?</div>', body, re.S)
 
-    heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
-
-    assert "no profile" in heading
-    assert "?profile=" not in heading, "the way back carries an empty profile"
+    assert ctx, "the run bar does not name the run"
+    assert f">#{record.number}</strong>" in ctx.group(0)
+    assert "status--failed" in ctx.group(0)
 
 
 def _retry_form(body: str) -> str:
@@ -655,21 +654,15 @@ def test_retry_is_disabled_while_a_run_holds_the_lock(
 
 
 def test_run_page_is_one_panel(client: TestClient, app, store: RunStore) -> None:
-    """The heading, the controls and the console are one surface, not two.
-
-    They were two bordered cards with a gap between them, which read as two
-    unrelated things -- and the top one was four lines tall.
-    """
+    """The log is the main area, with no bar of its own over it: the run's
+    tools are in the app bar."""
     record = _seed_run(store, app.state.project.root)
 
     body = client.get(f"/runs/{record.run_id}").text
-    panels = re.findall(r'<section class="panel[^"]*"', body)
+    panels = re.findall(r'<section class="(?:panel|run-page)[^"]*"', body)
 
     assert len(panels) == 1, f"the run page renders {len(panels)} panels"
-    panel = body[body.index('<section class="panel') :]
-    assert panel.index('id="run-header"') < panel.index('id="console"'), (
-        "the console renders before the run's own header"
-    )
+    assert body.index('id="run-header"') < body.index("</header>") < body.index('id="console"')
 
 
 def test_run_header_stays_a_swappable_region(
@@ -692,22 +685,17 @@ def test_run_header_stays_a_swappable_region(
     )
 
 
-def test_run_heading_carries_the_status_after_the_profile(
+def test_the_run_info_carries_the_status_after_the_id(
     client: TestClient, app, store: RunStore
 ) -> None:
-    """One line: which runs, which profile, how it is going.
-
-    The status was a row of its own under the heading, which spent a line on
-    a single word.
-    """
+    """One line: which run, how it is going -- the ``#run-status`` fragment
+    the stream's closing frame swaps."""
     record = _seed_run(store, app.state.project.root, profile="slow")
 
-    heading = _run_heading(client.get(f"/runs/{record.run_id}").text)
+    info = _run_info(client.get(f"/runs/{record.run_id}").text)
 
-    assert 'id="run-status"' in heading, "the status is not in the heading"
-    assert heading.index("slow") < heading.index('id="run-status"'), (
-        "the status renders before the profile it belongs to"
-    )
+    assert 'id="run-status"' in info, "the status is not in the run info"
+    assert info.index(f"#{record.number}") < info.index('id="run-status"')
 
 
 def test_run_page_does_not_report_an_exit_code(
@@ -729,14 +717,12 @@ def test_run_page_does_not_report_an_exit_code(
 def test_status_line_no_longer_repeats_the_profile(
     client: TestClient, app, store: RunStore
 ) -> None:
-    """It is in the heading above, one line up."""
+    """The profile is in the app bar's selector."""
     record = _seed_run(store, app.state.project.root, profile="slow")
 
-    body = client.get(f"/runs/{record.run_id}").text
-    status = re.search(r'<span class="run-status".*?</span>\s*</h2>', body, re.S)
-    assert status, "the status line is gone"
+    info = _run_info(client.get(f"/runs/{record.run_id}").text)
 
-    assert "run-status__profile" not in status.group(0)
+    assert "run-status__profile" not in info
 
 
 def test_status_line_does_not_repeat_the_run_id(
@@ -745,19 +731,16 @@ def test_status_line_does_not_repeat_the_run_id(
     """The status line says what the run is doing, and nothing else.
 
     It used to end in a link whose text was the run's 32-character hash. The
-    id is in the URL, in the history row, and in ``data-run-id`` on this very
-    element for anything that needs it -- and the app bar's "a run is in
-    progress" notice is what links to the active run from elsewhere, which is
-    the one place that link was the way out.
+    id is in the URL, in the Runs pane, and in ``data-run-id`` on this very
+    element for anything that needs it -- and the Next run pane's "a run is
+    in progress" notice is what links to the active run from elsewhere.
     """
     record = _seed_run(store, app.state.project.root)
 
-    body = client.get(f"/runs/{record.run_id}").text
-    status = re.search(r'<span class="run-status".*?</span>\s*</h2>', body, re.S)
-    assert status, "the status line is gone"
+    info = _run_info(client.get(f"/runs/{record.run_id}").text)
 
-    assert "run-status__link" not in status.group(0)
-    assert f">{record.run_id}<" not in status.group(0)
+    assert "run-status__link" not in info
+    assert f">{record.run_id}<" not in info
 
 
 def test_run_page_404s_for_an_unknown_run(client: TestClient) -> None:

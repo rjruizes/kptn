@@ -129,7 +129,7 @@ def ui_project(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def store(ui_project: Path) -> RunStore:
-    return RunStore(ui_project / ".kptn" / "ui.db")
+    return RunStore(ui_project / ".kptn" / "state" / "ui.db")
 
 
 def wait_until(predicate, *, message: str, timeout: float = POLL_TIMEOUT_SECONDS):

@@ -311,8 +311,46 @@ def test_plan_uses_shared_resolution() -> None:
     state_store = MagicMock()
 
     with patch("kptn.runner.api.resolve_pipeline", return_value=(resolved, state_store)) as mock_resolve, \
-         patch("kptn.runner.api._plan") as mock_plan:
+         patch("kptn.runner.api._plan") as mock_plan, \
+         patch("kptn.runner.api.shared_bronze_for", return_value=None) as mock_shared:
         plan(pipeline, profile="dev")
 
     mock_resolve.assert_called_once_with(pipeline, Path.cwd(), "dev")
-    mock_plan.assert_called_once_with(resolved, state_store)
+    mock_shared.assert_called_once_with(Path.cwd())
+    mock_plan.assert_called_once_with(resolved, state_store, config_values={}, shared=None)
+
+
+def _run_and_get_factory(graph: Graph):
+    pipeline = Pipeline("default", graph)
+    mock_config = MagicMock(settings=MagicMock(db="sqlite", db_path=None))
+    with patch("kptn.runner.api.ProfileLoader") as mock_loader, \
+         patch("kptn.runner.api.execute") as mock_exec, \
+         patch("kptn.runner.api.init_state_store", return_value=MagicMock()):
+        mock_loader.load.return_value = mock_config
+        run(pipeline)
+    return mock_exec.call_args.kwargs["duckdb_factory"]
+
+
+def test_run_wraps_duckdb_factory_with_bronze_search_path() -> None:
+    import duckdb
+
+    source = kptn.source("s", files="in")
+    stage = kptn.Stage("raw_ingest", source)
+    graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> stage
+
+    factory = _run_and_get_factory(graph)
+
+    conn = factory()
+    setting = conn.execute("SELECT current_setting('file_search_path')").fetchall()[0][0]
+    assert str((Path.cwd() / ".kptn" / "_bronze").resolve()) in setting.split(",")
+
+
+def test_run_leaves_duckdb_factory_alone_without_sources() -> None:
+    import duckdb
+
+    @kptn.task(outputs=[])
+    def t() -> None: ...
+
+    graph = kptn.config(duckdb=(duckdb.connect, "engine")) >> t
+
+    assert _run_and_get_factory(graph) is duckdb.connect

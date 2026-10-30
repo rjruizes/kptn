@@ -1,87 +1,112 @@
 {#
-  One console event, as one list item.
+  The run log's rows and sections.
 
   Macros only, so this template can be rendered from Python for a single SSE
   frame (via ``get_template(...).module.event_row``) as well as included in a
   loop by the console. Both paths therefore produce byte-identical markup: what
   the stream appends is exactly what a page reload would have rendered.
 
-  The folds -- one per pipeline or stage, one per task -- are here for the
-  same reason. The stream sends a fold as ``fold_shell``, open and empty, and
-  appends rows into its body; the page renders the same markup around the
-  rows it already holds. Where every row goes is decided in
+  The sections -- one per task, table or item -- are here for the same
+  reason. The stream sends a section as ``section_shell``, open and empty,
+  and appends rows into it; the page renders the same markup around the rows
+  it already holds. Where every row goes is decided in
   ``kptn_server.console_layout``, never here and never in app.js.
 
   Every value here goes through Jinja's autoescaping. ``event.text`` is
   pipeline output -- untrusted bytes read out of the run's log file -- and this
   is the only place it is turned into markup. Do not add ``| safe`` to it.
 #}
+{% from "_status.html" import status_icon %}
+
+{#
+  One event: an element per event, holding a line per line it shows. Every
+  event has one, hidden or not -- the run's counters and the stream's resume
+  cursor count them -- and its ``id`` is what the history page's warning
+  links point at. A line's number is empty when the stream sends it; app.js
+  numbers it after the last line on the page.
+#}
 {% macro event_row(event) -%}
-<li class="event event--{{ event.kind }}{% if event.severity %} event--{{ event.severity }}{% endif %}{% if event.status %} event--{{ event.status }}{% endif %}"
+<div class="ev ev--{{ event.kind }}{% if event.severity %} ev--{{ event.severity }}{% endif %}{% if event.status %} ev--{{ event.status }}{% endif %}"
     id="event-{{ event.sequence }}"
     data-sequence="{{ event.sequence }}"
-    data-kind="{{ event.kind }}"{% if event.is_log %}
-    data-lines="{{ event.lines }}"{% endif %}>
-  <span class="event__seq">{{ event.sequence }}</span>
-  <time class="event__clock" datetime="{{ event.timestamp }}">{{ event.clock }}</time>
-  {% if event.label %}<span class="event__kind">{{ event.label }}</span>{% endif %}
-  {% if event.task and not event.in_task %}<span class="event__task">{{ event.task }}</span>{% endif %}
-  {% if event.text %}{% if event.is_log %}<pre class="event__text">{{ event.text }}</pre>{% else %}<span class="event__summary">{{ event.text }}</span>{% endif %}{% endif %}
-</li>
+    data-kind="{{ event.kind }}"{% if event.task %}
+    data-task="{{ event.task }}"{% endif %}
+    data-lines="{{ event.lines }}"{% if event.hidden %}
+    hidden{% endif %}>
+  {%- for line in event.shown %}<div class="ln"><span class="ln__no">{{ event.first_line + loop.index0 if event.first_line else "" }}</span><time class="ln__ts" datetime="{{ event.timestamp }}">{{ event.clock }}</time><span class="ln__tx">{{ line }}</span></div>{% endfor -%}
+</div>
 {%- endmacro %}
 
 
+{% macro lines_text(count) -%}
+{{ "no output" if not count else ("1 line" if count == 1 else "{:,} lines".format(count)) }}
+{%- endmacro %}
+
 {#
-  The heading's outcome: "succeeded 1m 42s". Its own element, with an id,
-  because the task finishes after its fold was sent: the ``task_finished``
-  frame replaces just this.
+  The right-hand end of a section's heading: how it ran, how long, how much it
+  printed, and how it ended. Its own element, with an id, because the task
+  finishes after its section was sent: the ``task_finished`` frame replaces
+  just this. app.js keeps the line count current as rows stream in.
 #}
-{% macro fold_outcome(fold, finished) -%}
-<span class="fold__outcome" id="{{ fold.id }}-outcome">
-  {%- if finished and finished.status %}<span class="fold__status fold__status--{{ finished.status }}">{{ finished.status }}</span>{% endif %}
-  {%- if finished and finished.duration %} <span class="fold__duration">{{ finished.duration }}</span>{% endif -%}
+{% macro section_outcome(section, finished) -%}
+{%- set state = finished.status if finished and finished.status else section.state -%}
+{#- What the shared bronze did for a source table, as the heading says it. #}
+{%- set shared_words = {"restored": "from shared bronze", "published": "published", "linked": "linked to shared build"} -%}
+<span class="sec-h__end" id="{{ section.id }}-outcome" data-state="{{ state }}">
+  <span class="sec-h__meta">
+    {%- if state == "cached" %}cached{% if section.reason %} · {{ section.reason }}{% endif %}
+    {%- else %}
+    {%- if section.runner %}{{ section.runner }} · {% endif -%}
+    {%- if finished and finished.shared %}{{ shared_words.get(finished.shared, finished.shared) }} · {% endif -%}
+    {%- if finished and finished.duration %}{{ finished.duration }} · {% endif -%}
+    <span data-sec-lines="{{ section.lines }}">{{ lines_text(section.lines) }}</span>
+    {%- endif -%}
+  </span>
+  {{ status_icon(state, count=section.warnings) }}
 </span>
 {%- endmacro %}
 
 {#
-  How much a task printed. app.js keeps these up to date as rows stream in,
-  from each row's ``data-lines`` -- the number in the attribute is the one it
-  adds to, the text is what it writes back, in this same form.
+  One section: a heading that folds it, then its lines. The heading names
+  where the task sits (``raw_ingest / sales /``) before the task itself, and
+  sticks to the top of the log while its lines scroll under it.
 #}
-{% macro fold_counts(fold) -%}
-<span class="fold__count" data-fold-lines="{{ fold.lines }}"{% if not fold.lines %} hidden{% endif %}>{{ "{:,}".format(fold.lines) }} {{ "line" if fold.lines == 1 else "lines" }}</span>
-<span class="fold__count fold__count--warnings" data-fold-warnings="{{ fold.warnings }}"{% if not fold.warnings %} hidden{% endif %}>{{ "{:,}".format(fold.warnings) }} {{ "warning" if fold.warnings == 1 else "warnings" }}</span>
+{% macro section_markup(section, open, body) -%}
+{%- set empty = not section.shown -%}
+{%- set cached = section.state == "cached" -%}
+<section class="sec{% if empty %} is-empty{% elif not open %} is-closed{% endif %}" id="{{ section.id }}"
+    data-section data-unit="{{ section.key }}"
+    data-state="{{ section.state }}" data-warnings="{{ section.warnings }}">
+  {#-
+    A section with nothing to show is its heading alone -- which already says
+    "no output" -- and offers no fold: the heading stays a button, so a
+    streamed section can grow lines and become foldable, but it is out of
+    the tab order and app.js ignores it until then. A cached section never
+    runs, so never grows any: its heading is not a button at all.
+  #}
+  {%- set tag = "div" if cached else "button" %}
+  <{{ tag }}{% if not cached %} type="button"{% endif %} class="sec-h"
+    {%- if cached %}{% elif empty %} tabindex="-1"{% else %} aria-expanded="{{ 'true' if open else 'false' }}"{% endif %}
+    {%- if not cached %} aria-controls="{{ section.body_id }}"{% endif %}>
+    <svg class="sec-h__chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    <span class="sec-h__title">
+      {%- if section.path %}<span class="sec-h__path">{{ section.path | join(" / ") }} /</span> {% endif -%}
+      <span class="sec-h__name">{{ section.label }}</span>
+    </span>
+    {{ section_outcome(section, section.outcome) }}
+  </{{ tag }}>
+  {#- Folded with ``hidden="until-found"``, so the browser's find still
+      searches the lines and opens the section on a match. #}
+  <div class="sec__lines" id="{{ section.body_id }}"{% if not empty and not open %} hidden="until-found"{% endif %}>{{ body }}</div>
+</section>
 {%- endmacro %}
 
-{% macro fold_markup(fold, open, body) -%}
-<li class="fold fold--{{ fold.kind }}" id="{{ fold.id }}" data-fold="{{ fold.kind }}">
-  <details{% if open %} open{% endif %}>
-    <summary class="fold__head">
-      <span class="fold__name">{{ fold.key }}</span>
-      {%- if fold.kind == "task" %}
-      {{ fold_outcome(fold, fold.outcome) }}
-      {{ fold_counts(fold) }}
-      <button type="button" class="fold__jump" data-fold-jump
-              title="Jump to the end of this task's log"
-              aria-label="Jump to the end of {{ fold.key }}'s log">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"
-             fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M8 2.5v11M4 9.5l4 4 4-4"/>
-        </svg>
-      </button>
-      {%- endif %}
-    </summary>
-    <ol class="fold__body" id="{{ fold.body_id }}"><li class="fold__gutter" data-fold-gutter aria-hidden="true" title="Collapse {{ fold.key }}"></li>{{ body }}</ol>
-  </details>
-</li>
+{# A section as the stream first sends it: open, with nothing in it yet. #}
+{% macro section_shell(section) -%}
+{{ section_markup(section, true, "") }}
 {%- endmacro %}
 
-{# A fold as the stream first sends it: open, with nothing in it yet. #}
-{% macro fold_shell(fold) -%}
-{{ fold_markup(fold, true, "") }}
-{%- endmacro %}
-
-{# The console's tree, as ``build_console`` lays it out: folds and rows. #}
+{# The log, as ``build_console`` lays it out: sections and the run's rows. #}
 {% macro console_items(items) -%}
-{% for item in items %}{% if item.body_id is defined %}{{ fold_markup(item, item.open, console_items(item.children)) }}{% else %}{{ event_row(item) }}{% endif %}{% endfor %}
+{% for item in items %}{% if item.body_id is defined %}{{ section_markup(item, item.open, console_items(item.children)) }}{% else %}{{ event_row(item) }}{% endif %}{% endfor %}
 {%- endmacro %}

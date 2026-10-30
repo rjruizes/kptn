@@ -168,6 +168,17 @@ def _find_package_root(file_path: Path) -> Path:
     return current
 
 
+def _lambda_params(node: ast.Lambda) -> tuple[str, ...]:
+    """*node*'s parameter names in ``co_varnames`` order."""
+    a = node.args
+    names = [p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs)]
+    if a.vararg:
+        names.append(a.vararg.arg)
+    if a.kwarg:
+        names.append(a.kwarg.arg)
+    return tuple(names)
+
+
 # Line breaks as the tokenizer counts them, so ``lineno`` indexes the result.
 # ``str.splitlines`` also breaks on form feeds and other separators, which would
 # shift every function after one.
@@ -186,6 +197,7 @@ class _ModuleSummary:
         self.module_aliases: dict[str, str] = {}          # bound → full module
         self.symbol_aliases: dict[str, tuple[str, str]] = {}  # bound → (module, orig)
         self._package_parts: list[str] = self._infer_package_parts()
+        self.tree: ast.Module | None = None
         self._index()
 
     def _infer_package_parts(self) -> list[str]:
@@ -206,6 +218,7 @@ class _ModuleSummary:
             tree = ast.parse(self.source, filename=str(self.file_path))
         except SyntaxError:
             return
+        self.tree = tree
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.functions[node.name] = node
@@ -224,6 +237,49 @@ class _ModuleSummary:
                 for alias in node.names:
                     bound = alias.asname or alias.name
                     self.symbol_aliases[bound] = (mod, alias.name)
+
+    def find_lambda(self, fn: Any) -> ast.Lambda | None:
+        """The ``ast.Lambda`` that compiled to *fn*, or None.
+
+        Located by the earliest source position of *fn*'s code object, taking
+        the innermost lambda whose *body* contains it and whose parameters are
+        the code object's, so two lambdas on one line are distinguished. The
+        body rather than the whole lambda: a lambda that returns a lambda
+        starts its code at the inner ``lambda`` keyword, which lies outside
+        the inner one's body. Zero-width positions are skipped: the ``RESUME``
+        instruction every code object starts with sits at column 0.
+        """
+        if self.tree is None:
+            return None
+        code = fn.__code__
+        positions = [
+            (line, col)
+            for line, end_line, col, end_col in code.co_positions()
+            if line is not None
+            and col is not None
+            and (line, col) != (end_line, end_col)
+        ]
+        if not positions:
+            return None
+        target = min(positions)
+        n_params = (
+            code.co_argcount
+            + code.co_kwonlyargcount
+            + bool(code.co_flags & inspect.CO_VARARGS)
+            + bool(code.co_flags & inspect.CO_VARKEYWORDS)
+        )
+        params = code.co_varnames[:n_params]
+        best: ast.Lambda | None = None
+        for node in ast.walk(self.tree):
+            if not isinstance(node, ast.Lambda) or node.body.end_lineno is None:
+                continue
+            start = (node.body.lineno, node.body.col_offset)
+            end = (node.body.end_lineno, node.body.end_col_offset or 0)
+            if not start <= target <= end or _lambda_params(node) != params:
+                continue
+            if best is None or start >= (best.body.lineno, best.body.col_offset):
+                best = node
+        return best
 
     def _resolve_module(self, module: str | None, level: int) -> str | None:
         if level == 0:
@@ -281,11 +337,33 @@ class _SourceCollector:
         except (OSError, TypeError):
             return []
 
-        fn_name = fn.__name__
-        stack: list[tuple[Path, str]] = [(file_path, fn_name)]
-        visited: set[tuple[Path, str]] = set()
-        sources: list[str] = []
+        if fn.__name__ == "<lambda>":
+            return self._collect_lambda(file_path, fn)
+        return self._walk([(file_path, fn.__name__)], [], set())
 
+    def _collect_lambda(self, file_path: Path, fn: Any) -> list[str]:
+        """The lambda's own source plus every in-package function it calls."""
+        summary = self._load(file_path)
+        if summary is None:
+            return []
+        node = summary.find_lambda(fn)
+        if node is None:
+            return []
+        segment = ast.get_source_segment(summary.source, node) or ""
+        stack: list[tuple[Path, str]] = []
+        for kind, payload in summary.iter_call_targets(node):
+            dep = self._resolve(summary, kind, payload)
+            if dep:
+                stack.append(dep)
+        return self._walk(stack, [segment] if segment else [], set())
+
+    def _walk(
+        self,
+        stack: list[tuple[Path, str]],
+        sources: list[str],
+        visited: set[tuple[Path, str]],
+    ) -> list[str]:
+        """Append the source of every function on *stack* and its callees."""
         while stack:
             fp, name = stack.pop()
             key = (fp, name)
@@ -386,9 +464,10 @@ def hash_task_source(fn: Any) -> str:
     """Hash *fn* and all user-defined functions it transitively calls.
 
     Only functions resolvable within the same package root are included;
-    standard-library and third-party callees are ignored.  Falls back to
+    standard-library and third-party callees are ignored.  A lambda is hashed
+    as its own source segment plus the functions it calls.  Falls back to
     hashing the raw source of *fn* alone when AST-based collection fails
-    (e.g. lambdas, dynamically-defined functions, or C extensions).
+    (e.g. dynamically-defined functions or C extensions).
     """
     fn = inspect.unwrap(fn)  # follow __wrapped__ chains (e.g. _KptnCallable)
     sources: list[str] = []

@@ -43,9 +43,9 @@ from kptn.exceptions import ProfileError
 from kptn.profiles.loader import ProfileLoader
 from kptn_server.project import (
     PROFILE_CONFIG_FILENAME,
-    RUN_LOG_RELATIVE_DIR,
     UI_DATABASE_RELATIVE_PATH,
 )
+from kptn_server.run_files import INDEX_FILENAME, local_runs_dir, runs_dir_of
 
 _MANIFEST_FILENAME = "pyproject.toml"
 
@@ -100,6 +100,17 @@ class ProjectEntry:
     ``owned`` is whether it belongs to the person this server runs for. Only
     an owned project's run store is ever opened, and only an owned project's
     pipeline is ever imported.
+
+    ``run_log_dir`` is where the project's runs publish their files:
+    ``.kptn/state/runs``, or its ``settings.shared_logs`` directory. A shared one
+    outside the projects root is never read -- it is named by somebody
+    else's ``kptn.yaml`` and could point anywhere the reader can see -- and
+    ``run_log_error`` then says why.
+
+    ``removed`` marks a working directory that has been deleted but left its
+    runs in a shared logs directory. It has no ``database_path`` and nothing
+    to load: its ``root`` and ``run_log_dir`` are that logs directory, and it
+    is only ever served read-only, under ``/view/<slug>``, whoever owns it.
     """
 
     slug: str
@@ -107,10 +118,12 @@ class ProjectEntry:
     release: str
     display_name: str
     profiles: tuple[str, ...]
-    database_path: Path
+    database_path: Path | None
     run_log_dir: Path
     error: str | None = None
     owned: bool = True
+    run_log_error: str | None = None
+    removed: bool = False
 
 
 class ProjectRegistry:
@@ -130,6 +143,8 @@ class ProjectRegistry:
         person's, as it always was -- someone else starting the next release
         first must not take a person's own checkouts off their list. Only
         when they have none anywhere is it the latest release with anyone's.
+        A removed working directory of theirs does not count: there is
+        nothing in it to run.
         """
         self.release = None
         self._entries = {}
@@ -141,7 +156,7 @@ class ProjectRegistry:
                 continue
             if fallback is None:
                 fallback = (release, entries)
-            if any(entry.owned for entry in entries):
+            if any(entry.owned and not entry.removed for entry in entries):
                 fallback = (release, entries)
                 break
 
@@ -217,7 +232,55 @@ class ProjectRegistry:
             entry = self._describe(child, release, owned=self._is_mine(child.name))
             if entry is not None:
                 found.append(entry)
-        return found
+        return found + self._removed_in(release, found)
+
+    def _removed_in(self, release: str, live: list[ProjectEntry]) -> list[ProjectEntry]:
+        """Deleted working directories whose runs a shared logs directory kept.
+
+        The shared logs roots are the ones the release's live working
+        directories name -- the setting is in ``kptn.yaml``, and a deleted
+        directory's ``kptn.yaml`` went with it -- and only those the
+        registry already confined to the projects root. Every subdirectory
+        of one that holds an ``index.json`` and has no working directory of
+        its name is listed. Links are not followed: a name here is a
+        directory the registry saw itself, never a path from a file.
+        """
+        names = {entry.slug for entry in live}
+        roots = sorted(
+            {
+                entry.run_log_dir.parent
+                for entry in live
+                if entry.run_log_error is None
+                and entry.run_log_dir != local_runs_dir(entry.root)
+            }
+        )
+        removed: dict[str, ProjectEntry] = {}
+        for root in roots:
+            try:
+                children = sorted(root.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                name = child.name
+                if name in names or name in removed or name.startswith("."):
+                    continue
+                if child.is_symlink() or not child.is_dir():
+                    continue
+                index = child / INDEX_FILENAME
+                if index.is_symlink() or not index.is_file():
+                    continue
+                removed[name] = ProjectEntry(
+                    slug=name,
+                    root=child,
+                    release=release,
+                    display_name=name,
+                    profiles=(),
+                    database_path=None,
+                    run_log_dir=child,
+                    owned=self._is_mine(name),
+                    removed=True,
+                )
+        return list(removed.values())
 
     def _is_mine(self, name: str) -> bool:
         """Exactly my name, or my name and an underscore -- not a prefix.
@@ -245,6 +308,7 @@ class ProjectRegistry:
         root = workdir.resolve()
         error: str | None = None
         profiles: tuple[str, ...] = ()
+        shared_logs: str | None = None
 
         try:
             with open(manifest, "rb") as handle:
@@ -259,11 +323,22 @@ class ProjectRegistry:
 
         if error is None:
             try:
-                profiles = tuple(
-                    ProfileLoader.load(root / PROFILE_CONFIG_FILENAME).profiles
-                )
+                loaded = ProfileLoader.load(root / PROFILE_CONFIG_FILENAME)
             except ProfileError as exc:
                 error = str(exc)
+            else:
+                profiles = tuple(loaded.profiles)
+                shared_logs = loaded.settings.shared_logs
+
+        run_log_dir = runs_dir_of(root, shared_logs)
+        run_log_error: str | None = None
+        if shared_logs is not None and not run_log_dir.is_relative_to(
+            self.projects_root.resolve()
+        ):
+            run_log_error = (
+                f"settings.shared_logs puts this project's runs in {run_log_dir}, "
+                f"outside {self.projects_root}, so they are not read here."
+            )
 
         return ProjectEntry(
             slug=workdir.name,
@@ -272,9 +347,10 @@ class ProjectRegistry:
             display_name=workdir.name,
             profiles=profiles,
             database_path=root / UI_DATABASE_RELATIVE_PATH,
-            run_log_dir=root / RUN_LOG_RELATIVE_DIR,
+            run_log_dir=run_log_dir,
             error=error,
             owned=owned,
+            run_log_error=run_log_error,
         )
 
 

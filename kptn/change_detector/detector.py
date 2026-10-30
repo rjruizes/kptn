@@ -13,6 +13,7 @@ from kptn.graph.nodes import (
     ParallelNode,
     PipelineNode,
     RTaskNode,
+    SourceNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -27,7 +28,9 @@ class _ReadableStateStore(Protocol):
 
 logger = logging.getLogger(__name__)
 
-_NON_TASK_NODES = (ParallelNode, StageNode, NoopNode, ConfigNode, PipelineNode, MapNode)
+_NON_TASK_NODES = (
+    ParallelNode, StageNode, NoopNode, ConfigNode, PipelineNode, MapNode, SourceNode,
+)
 
 
 def _hash_outputs(node: AnyNode) -> str | None:

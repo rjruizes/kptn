@@ -1,6 +1,5 @@
 settings:
   db: sqlite
-  db_path: .kptn/kptn.db
 
 profiles:
   success:

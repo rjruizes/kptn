@@ -17,6 +17,7 @@ from kptn.graph.nodes import (
     ParallelNode,
     PipelineNode,
     RTaskNode,
+    SourceNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -29,7 +30,25 @@ from kptn.change_detector.detector import is_stale
 from kptn.exceptions import HashError, TaskError
 from kptn.runner.console import ConsoleEventSink
 from kptn.runner.events import EventEmitter, EventKind, JSONValue
-from kptn.runner.checkpoint import get_db_path, save_checkpoint, find_restore_candidate, restore_checkpoint
+from kptn.runner.checkpoint import (
+    find_restore_candidate,
+    get_db_path,
+    has_pipeline_state,
+    restore_checkpoint,
+    save_checkpoint,
+)
+from kptn.sources.build import (
+    BRONZE_DIR,
+    build_table,
+    is_current,
+    plan_source,
+    remove_stale_tables,
+    state_value,
+)
+from kptn.sources.checks import warn_at
+from kptn.sources.rejects import NO_TABLE, RejectedFile, count_rejects, rejects_path, write_rejects
+from kptn.sources.shared import SharedBronze, link
+from kptn.sources.views import apply_search_path, register_views
 from kptn.state_store.protocol import StateStoreBackend
 
 logger = logging.getLogger(__name__)
@@ -125,8 +144,10 @@ def _emit_task_finished(
     started_at: float,
     cached: bool = False,
     error: str | None = None,
+    shared: str | None = None,
+    rejected: int | None = None,
 ) -> None:
-    payload: dict[str, bool | float | str] = {
+    payload: dict[str, bool | float | int | str] = {
         "mode": mode,
         "status": status,
         "duration_seconds": perf_counter() - started_at,
@@ -134,6 +155,10 @@ def _emit_task_finished(
     }
     if error is not None:
         payload["error"] = error
+    if shared is not None:
+        payload["shared"] = shared
+    if rejected is not None:
+        payload["rejected"] = rejected
     emitter.emit(EventKind.TASK_FINISHED, task_name=task_name, **payload)
 
 
@@ -289,29 +314,181 @@ def _try_restore(
     ordered: "list[AnyNode]",
     resolved: "ResolvedGraph",
     duckdb_factory: "Callable[[], Any]",
+    emitter: "EventEmitter | None" = None,
 ) -> None:
+    """Restore the pipeline database from a checkpoint if it was deleted.
+
+    Reports what the run starts from as a ``database`` event: the file, and
+    the checkpoint it was restored from when it was. That is how the UI
+    learns where a project's database and its checkpoints live -- it cannot
+    open the factory itself without taking the database's lock.
+    """
     conn = duckdb_factory()
     db_path = get_db_path(conn)
     if db_path is None:
         return
+    restored = _restore_into(conn, ordered, resolved, db_path)
+    if emitter is not None:
+        emitter.emit(
+            EventKind.DATABASE,
+            path=str(db_path.resolve()),
+            checkpoint=str(restored.resolve()) if restored is not None else None,
+        )
+
+
+def _restore_into(
+    conn: Any,
+    ordered: "list[AnyNode]",
+    resolved: "ResolvedGraph",
+    db_path: Path,
+) -> Path | None:
+    """Restore *db_path* from its furthest valid checkpoint, if it holds no
+    state for this pipeline; return the checkpoint restored, if any."""
     # Only restore if the database file was deleted (and recreated fresh by the factory).
     # A pre-existing database will have rows in _kptn.task_state for this pipeline;
     # a freshly created one will have an empty table (CREATE TABLE IF NOT EXISTS preserves
     # existing rows, so a real database retains its prior state through factory re-init).
-    try:
-        row_count = conn.execute(
-            "SELECT count(*) FROM _kptn.task_state WHERE storage_key=? AND pipeline_name=?",
-            (resolved.storage_key, resolved.pipeline),
-        ).fetchone()[0]
-        if row_count > 0:
-            return
-    except Exception:
-        pass  # _kptn.task_state absent (separate state store); fall through to candidate check
+    # _kptn.task_state absent (separate state store) falls through to the
+    # candidate check. kptn.runner.checkpoint.starting_point mirrors this
+    # decision, read-only, for the UI: keep the two in step.
+    if has_pipeline_state(conn, resolved.storage_key, resolved.pipeline):
+        return None
     candidate = find_restore_candidate(ordered, resolved.storage_key, resolved.pipeline, db_path)
     if candidate is None:
-        return
+        return None
     restore_checkpoint(conn, candidate, db_path)
     logger.info("Restored checkpoint from %s — pipeline DB rewound", candidate)
+    return candidate
+
+
+def _execute_source(
+    node: SourceNode,
+    *,
+    resolved: ResolvedGraph,
+    state_store: StateStoreBackend,
+    config_kwargs: dict[str, Any],
+    emitter: EventEmitter,
+    root: Path,
+    force: bool,
+    no_cache: bool,
+    groups: list[str] | None,
+    shared: SharedBronze | None = None,
+    duckdb_factory: "Callable[[], Any] | None" = None,
+) -> bool:
+    """Bring every table of *node* up to date, then serve each as a
+    ``raw_<source>.<table>`` view on *duckdb_factory*'s connection. True if
+    any table changed.
+
+    A source is judged only on its own files, check files and code; upstream
+    dirtiness is deliberately ignored, so a rebuilt schema does not force a
+    re-read of unchanged files. Its views are recreated on every run, cached
+    or not, so a schema rebuilt upstream gets them back; that changes no
+    data, so it never dirties downstream by itself.
+
+    With *shared*, a table that is not current is linked from the shared
+    bronze when its key is there, and otherwise built into it and linked. ``force`` and ``no_cache`` build a local file and never publish.
+
+    Files the source's ``check=`` rejects, and files ``table=`` assigns to no table, are
+    left out with a warning and recorded for the ``raw_<source>._rejected`` view.
+    """
+    try:
+        plans, no_table = plan_source(node.name, node.spec, config_kwargs, root=root)
+    except Exception as exc:  # includes errors raised by a files= or table= callable
+        started_at = _emit_task_started(emitter, node.name, mode="source", groups=groups, count=0)
+        _emit_task_finished(
+            emitter, node.name, mode="source", status="failed", started_at=started_at, error=str(exc)
+        )
+        raise TaskError(f"Source '{node.name}': {exc}") from exc
+
+    started_at = _emit_task_started(
+        emitter, node.name, mode="source", groups=groups, count=len(plans)
+    )
+    records = {p.table for p in plans if p.rejects is not None}
+    if no_table:
+        write_rejects(
+            [RejectedFile(None, f.rel, "table= gave it no table") for f in no_table],
+            rejects_path(root, node.name, NO_TABLE),
+        )
+        records.add(NO_TABLE)
+        warn_at(
+            f"Source {node.name!r}: {len(no_table)} file(s) feed no table, such as "
+            f"{no_table[0].rel}; see raw_{node.name}._rejected.",
+            node.spec.declared_at,
+        )
+    changed = bool(
+        remove_stale_tables(node.name, {p.table for p in plans}, root=root, rejects=records)
+    )
+    sharing = None if force or no_cache else shared
+    for plan in plans:
+        if not force and not no_cache and is_current(
+            plan, state_store, resolved.storage_key, resolved.pipeline
+        ):
+            _emit_task_skipped(emitter, plan.state_name, mode="source_table", groups=groups)
+            continue
+        hit = sharing.lookup(plan) if sharing is not None else None
+        table_started = _emit_task_started(
+            emitter, plan.state_name, mode="source_table", groups=groups,
+            **({"shared": "restored"} if hit is not None else {}),
+        )
+        outcome: str | None = None
+        rejected: int | None = None
+        try:
+            with emitter.task_scope(plan.state_name):
+                if sharing is not None:  # always, when there is a hit
+                    if hit is None:
+                        target, outcome = sharing.publish(plan, node.spec, root=root)
+                    else:
+                        target, outcome = hit, "restored"
+                    if plan.rejects is not None:
+                        link(plan.rejects, sharing.rejects(plan))
+                    link(plan.parquet, target)
+                else:
+                    build_table(plan, node.spec, root=root)
+                if plan.rejects is not None:
+                    rejected = count_rejects(plan.rejects)
+                    if rejected:
+                        warn_at(
+                            f"{node.name}.{plan.table}: skipped {rejected} of "
+                            f"{len(plan.files)} files; see raw_{node.name}._rejected.",
+                            node.spec.declared_at,
+                        )
+                # Through the link, for a shared table: the entry never changes.
+                value = state_value(plan)
+        except Exception as exc:
+            _emit_task_finished(
+                emitter, plan.state_name, mode="source_table", status="failed",
+                started_at=table_started, error=str(exc),
+            )
+            _emit_task_finished(
+                emitter, node.name, mode="source", status="failed",
+                started_at=started_at, error=f"table '{plan.table}' failed",
+            )
+            raise TaskError(f"Source '{node.name}', table '{plan.table}': {exc}") from exc
+        if not no_cache:
+            state_store.write_hash(resolved.storage_key, resolved.pipeline, plan.state_name, value)
+        _emit_task_finished(
+            emitter, plan.state_name, mode="source_table", status="succeeded",
+            started_at=table_started, shared=outcome, rejected=rejected,
+        )
+        changed = True
+
+    if duckdb_factory is not None:
+        try:
+            with emitter.task_scope(node.name):
+                conn = duckdb_factory()
+                apply_search_path(conn, root / BRONZE_DIR)  # direct execute() callers too
+                register_views(conn, root / BRONZE_DIR, node.name)
+        except Exception as exc:
+            _emit_task_finished(
+                emitter, node.name, mode="source", status="failed",
+                started_at=started_at, error=str(exc),
+            )
+            raise TaskError(f"Source '{node.name}': {exc}") from exc
+
+    _emit_task_finished(
+        emitter, node.name, mode="source", status="succeeded", started_at=started_at, cached=not changed
+    )
+    return changed
 
 
 def execute(
@@ -326,6 +503,7 @@ def execute(
     force: bool = False,
     extra_kwargs: "dict[str, Any] | None" = None,
     emitter: EventEmitter | None = None,
+    shared: SharedBronze | None = None,
 ) -> "Any | None":
     """Execute the resolved pipeline graph.
 
@@ -355,6 +533,10 @@ def execute(
         emitter:
             Optional structured event emitter. When omitted, execution emits the
             existing console output through the default console sink.
+        shared:
+            The shared bronze source tables are restored from and published
+            to; ``None`` builds every table in the working directory. Ignored
+            when *force* or *no_cache* is set.
 
     Returns the DuckDB connection when ``keep_db_open=True`` and a factory was
     provided; ``None`` otherwise.
@@ -384,7 +566,7 @@ def execute(
     dirty_names: set[str] = set()
 
     if duckdb_factory is not None and not no_cache and not force:
-        _try_restore(ordered, resolved, duckdb_factory)
+        _try_restore(ordered, resolved, duckdb_factory, emitter)
 
     for node in ordered:
         upstream_dirty = any(p.name in dirty_names for p in predecessors[node.name])
@@ -508,6 +690,27 @@ def execute(
                     started_at=started_at,
                 )
             if any_item_ran_stale:
+                dirty_names.add(node.name)
+            continue
+
+        # SourceNode — table by table. Upstream dirtiness never rebuilds a
+        # table (see helper), but it passes through: the views it recreates
+        # may sit in a schema an upstream task just rebuilt.
+        if isinstance(node, SourceNode):
+            changed = _execute_source(
+                node,
+                resolved=resolved,
+                state_store=state_store,
+                config_kwargs=config_kwargs,
+                emitter=emitter,
+                root=Path(cwd),
+                force=force,
+                no_cache=no_cache,
+                groups=group_paths.get(node.name),
+                shared=shared,
+                duckdb_factory=duckdb_factory,
+            )
+            if changed or upstream_dirty:
                 dirty_names.add(node.name)
             continue
 

@@ -1,6 +1,9 @@
 """The run files a colleague's server can read.
 
-Two kinds of file, both under ``<project>/.kptn/runs/``:
+Two kinds of file, both under ``<project>/.kptn/state/runs/`` -- or, when
+``kptn.yaml`` sets ``shared_logs`` and that directory exists, under
+``<shared_logs>/<working directory name>/``, where they outlive the working
+directory (see :func:`runs_dir_for`):
 
 ``<run_id>.jsonl``
     Every event of one run, one JSON object per line, appended in sequence
@@ -33,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import uuid
 from contextlib import suppress
@@ -41,6 +45,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence, cast
 
+from kptn.exceptions import ProfileError
+from kptn.layout import LEGACY_RUNS_DIR, RUNS_DIR
+from kptn.profiles.loader import ProfileLoader
 from kptn.runner.events import EventKind
 
 if TYPE_CHECKING:
@@ -72,6 +79,15 @@ MAX_INDEX_BYTES = 4 * 1024 * 1024
 RUN_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 
 _TASK_OUTCOMES = ("succeeded", "failed")
+
+#: Where run files go when ``kptn.yaml`` names no ``shared_logs``.
+LOCAL_RUNS_DIR = RUNS_DIR
+
+#: Explicit modes for shared run logs, whatever the umask. Every account
+#: creates its own subdirectory in the root, which whoever set it up made
+#: group-writable; only the owner writes inside their own.
+LOG_DIR_MODE = 0o2755
+LOG_FILE_MODE = 0o644
 
 
 class RunFileError(Exception):
@@ -132,11 +148,12 @@ def truncate(path: Path, size: int) -> None:
         os.truncate(path, size)
 
 
-def write_atomically(path: Path, data: bytes) -> None:
+def write_atomically(path: Path, data: bytes, *, mode: int | None = None) -> None:
     """Replace *path* with *data* so that a reader sees the old file or the new one.
 
     The temporary name is unique per process and call, so two writers never
     share one; whichever renames last wins, and both renamed a whole file.
+    *mode*, when given, is set on the file before it is renamed into place.
     """
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
@@ -144,11 +161,130 @@ def write_atomically(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+            if mode is not None:
+                os.fchmod(handle.fileno(), mode)
         os.replace(temporary, path)
     except BaseException:
         with suppress(OSError):
             os.unlink(temporary)
         raise
+
+
+def copy_run_file(source: Path, runs_dir: Path) -> None:
+    """Copy an earlier run's file into *runs_dir*, unless one is there already.
+
+    For the runs recorded before ``settings.shared_logs`` was turned on or
+    off: the index goes beside the newest run, and a reader looks for every
+    run it lists there. Copied, not moved -- ``ui.db`` still reads the
+    original by byte offset. A run's file is complete once the run ends, so
+    a copy already there is never refreshed.
+    """
+    target = runs_dir / source.name
+    if target.exists() or not source.is_file():
+        return
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        shutil.copyfile(source, temporary)
+        os.chmod(temporary, LOG_FILE_MODE)
+        os.replace(temporary, target)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(temporary)
+        raise
+
+
+# -- where run files live ----------------------------------------------------
+
+
+def shared_logs_root(project_root: Path, setting: str | None) -> Path | None:
+    """The shared logs root *setting* names, resolved; None when unset.
+
+    Relative to *project_root*, the directory holding ``kptn.yaml``, as
+    ``shared_bronze`` is. Touches nothing beyond ``resolve()``.
+    """
+    if setting is None:
+        return None
+    root = Path(setting).expanduser()
+    if not root.is_absolute():
+        root = project_root / root
+    return root.resolve()
+
+
+def runs_dir_of(project_root: Path, setting: str | None) -> Path:
+    """Where *project_root*'s run files go under the ``shared_logs`` *setting*.
+
+    The shared logs directory is used only where it exists: one ``kptn.yaml``
+    serves a server where it was set up and a laptop where it never is.
+    For a reader: creates nothing, unlike :func:`runs_dir_for`.
+    """
+    shared = shared_logs_root(project_root, setting)
+    if shared is None or not shared.is_dir():
+        return local_runs_dir(project_root)
+    return shared / project_root.name
+
+
+def local_runs_dir(project_root: Path) -> Path:
+    """``.kptn/state/runs``, or ``.kptn/runs`` where only that exists.
+
+    A working directory no kptn has run in since its run files moved to
+    ``.kptn/state/`` still has them in ``.kptn/runs``. Its owner's next run
+    moves them; a colleague's server only reads, so it reads them there.
+    """
+    runs = project_root / LOCAL_RUNS_DIR
+    legacy = project_root / LEGACY_RUNS_DIR
+    if not runs.is_dir() and legacy.is_dir():
+        return legacy
+    return runs
+
+
+def runs_dir_for(project_root: Path) -> Path:
+    """Where the next recorded run of *project_root* writes its files.
+
+    ``<shared_logs>/<working directory name>`` when ``kptn.yaml`` sets
+    ``shared_logs`` and that directory exists, else ``.kptn/state/runs``;
+    created either way. The shared root itself is never created: whoever sets it up
+    gives it the pipeline group, and its existence is what moves the logs.
+
+    A ``kptn.yaml`` that does not load falls back to ``.kptn/state/runs``: the run
+    fails on that same error when it loads its profile, and that failure is
+    logged where its owner can read it.
+    """
+    shared = shared_logs_root(project_root, _shared_logs_setting(project_root))
+    if shared is None or not shared.is_dir():
+        runs = project_root / LOCAL_RUNS_DIR
+        runs.mkdir(parents=True, exist_ok=True)
+        return runs
+    runs = shared / project_root.name
+    _mkdir(runs, LOG_DIR_MODE)
+    return runs
+
+
+def missing_shared_logs(project_root: Path) -> str | None:
+    """What to tell a recorded run whose ``kptn.yaml`` names a shared logs
+    directory that does not exist, or None when there is nothing to say."""
+    setting = _shared_logs_setting(project_root)
+    shared = shared_logs_root(project_root, setting)
+    if shared is None or shared.is_dir():
+        return None
+    return f"[LOGS] {setting} does not exist, so this run's log stays in {LOCAL_RUNS_DIR}"
+
+
+def _shared_logs_setting(project_root: Path) -> str | None:
+    try:
+        return ProfileLoader.load(project_root / "kptn.yaml").settings.shared_logs
+    except ProfileError:
+        return None
+
+
+def _mkdir(path: Path, mode: int) -> None:
+    """Create one directory with *mode*, whatever the umask. One that already
+    exists, perhaps another account's, is left as it is: chmod on it would
+    fail."""
+    try:
+        path.mkdir()
+    except FileExistsError:
+        return
+    os.chmod(path, mode)
 
 
 # -- the index ---------------------------------------------------------------
@@ -206,20 +342,26 @@ def build_index(
     records: Sequence[RunRecord],
     tallies: Mapping[str, Mapping[tuple[str, str | None], int]],
     *,
+    carried: Sequence[IndexedRun] = (),
     published_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """The ``index.json`` document for *records*, newest first as given.
+    """The ``index.json`` document for *records* and *carried*, newest first.
+
+    *carried* are rows an earlier index listed for runs this database never
+    stored -- the runs of a working directory that was deleted and recreated
+    under the same name, whose logs stay in one shared logs directory. They
+    are written back as they were read; nothing here can know more about
+    them. At most :data:`INDEX_LIMIT` rows are kept, by ``created_at``.
 
     Worker PIDs are left out on purpose: they name processes in the owner's
     pod, and a reader in another pod could only misuse them.
     """
-    return {
-        "schema": INDEX_SCHEMA,
-        "project_root": str(project_root),
-        "published_at": _iso(published_at or datetime.now(timezone.utc)),
-        "runs": [
+    rows: list[tuple[datetime | None, dict[str, Any]]] = [
+        (
+            record.created_at,
             {
                 "run_id": record.run_id,
+                "number": record.number,
                 "pipeline": record.pipeline,
                 "profile": record.profile,
                 "force": record.force,
@@ -231,16 +373,51 @@ def build_index(
                 "current_task": record.current_task,
                 "exit_code": record.exit_code,
                 "counters": counters(tallies.get(record.run_id, {})),
-            }
-            for record in records
-        ],
+            },
+        )
+        for record in records
+    ]
+    rows.extend((run.created_at, _indexed_row(run)) for run in carried)
+    # Stable, so records keep the database's order among equal times.
+    rows.sort(key=lambda pair: _sortable(pair[0]), reverse=True)
+    return {
+        "schema": INDEX_SCHEMA,
+        "project_root": str(project_root),
+        "published_at": _iso(published_at or datetime.now(timezone.utc)),
+        "runs": [row for _created, row in rows[:INDEX_LIMIT]],
     }
+
+
+def _indexed_row(run: IndexedRun) -> dict[str, Any]:
+    """*run* as the index row it was read from: the inverse of ``_indexed_run``."""
+    return {
+        "run_id": run.run_id,
+        "number": run.number,
+        "pipeline": run.pipeline,
+        "profile": run.profile,
+        "force": run.force,
+        "status": run.status,
+        "created_at": _iso(run.created_at),
+        "started_at": _iso(run.started_at),
+        "finished_at": _iso(run.finished_at),
+        "heartbeat_at": _iso(run.heartbeat_at),
+        "current_task": run.current_task,
+        "exit_code": run.exit_code,
+        "counters": dict(run.counters),
+    }
+
+
+def _sortable(value: datetime | None) -> datetime:
+    """*value* comparable with any other: aware, and a missing time oldest."""
+    if value is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def write_index(runs_dir: Path, document: Mapping[str, Any]) -> None:
     runs_dir.mkdir(parents=True, exist_ok=True)
     data = json.dumps(document, ensure_ascii=False, indent=1).encode("utf-8")
-    write_atomically(runs_dir / INDEX_FILENAME, data)
+    write_atomically(runs_dir / INDEX_FILENAME, data, mode=LOG_FILE_MODE)
 
 
 @dataclass(frozen=True)
@@ -263,6 +440,8 @@ class IndexedRun:
     current_task: str | None
     exit_code: int | None
     counters: dict[str, int] = field(default_factory=dict)
+    #: ``None`` in an index published before runs were numbered.
+    number: int | None = None
 
 
 def read_index(runs_dir: Path) -> list[IndexedRun]:
@@ -313,6 +492,7 @@ def _indexed_run(value: object) -> IndexedRun | None:
         if isinstance(count, int) and not isinstance(count, bool)
     }
     exit_code = row.get("exit_code")
+    number = row.get("number")
     return IndexedRun(
         run_id=run_id,
         pipeline=_text(row.get("pipeline")) or "",
@@ -329,6 +509,7 @@ def _indexed_run(value: object) -> IndexedRun | None:
             **{key: 0 for key in ("tasks", "skipped", "warnings", "succeeded", "failed", "unfinished")},
             **counted,
         },
+        number=number if isinstance(number, int) and not isinstance(number, bool) and number > 0 else None,
     )
 
 
@@ -427,15 +608,15 @@ def _decode_line(line: bytes) -> FileEvent | None:
 # -- untrusted files ---------------------------------------------------------
 
 
-def published_runs_dir(project_root: Path) -> Path:
-    """``<project_root>/.kptn/runs``, refusing one reached through a symlink.
+def published_runs_dir(runs_dir: Path) -> Path:
+    """*runs_dir*, refusing one reached through a symlink.
 
-    *project_root* must already be resolved (the registry resolves every
-    root). A ``.kptn`` or ``runs`` that is a link could point anywhere the
-    *reader* can see -- their own pod's home directory included -- so the
-    path has to be the literal one.
+    *runs_dir* must already be resolved up to the directory the project
+    names: the registry resolves every root, and a shared logs root. A
+    ``.kptn``, ``runs`` or per-project logs directory that is a link could
+    point anywhere the *reader* can see -- their own pod's home directory
+    included -- so the path has to be the literal one.
     """
-    runs_dir = project_root / ".kptn" / "runs"
     if os.path.realpath(runs_dir) != str(runs_dir):
         raise RunFileError(f"{runs_dir} is reached through a symlink")
     return runs_dir
@@ -498,19 +679,28 @@ __all__ = [
     "INDEX_PUBLISH_INTERVAL_SECONDS",
     "INDEX_SCHEMA",
     "IndexedRun",
+    "LOCAL_RUNS_DIR",
+    "LOG_DIR_MODE",
+    "LOG_FILE_MODE",
     "RUN_FILE_SUFFIX",
     "RUN_ID_RE",
     "RunFileError",
     "append_lines",
     "build_index",
+    "copy_run_file",
     "counters",
     "encode_event",
+    "missing_shared_logs",
     "published_runs_dir",
     "read_events",
     "read_index",
     "read_span_text",
     "read_untrusted",
     "run_file_text",
+    "local_runs_dir",
+    "runs_dir_for",
+    "runs_dir_of",
+    "shared_logs_root",
     "truncate",
     "write_atomically",
     "write_index",

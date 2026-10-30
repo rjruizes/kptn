@@ -10,12 +10,17 @@
   Task names and reasons are pipeline-authored text and reach the page through
   Jinja's autoescaping, like everything else in this UI.
 #}
-{% extends "base.html" %}
+{% extends "workspace.html" %}
 
 {% block title %}Plan - {{ project.display_name }} - kptn{% endblock %}
 
+{#- Choosing another profile here shows its plan. #}
+{% block profile_nav %}{{ project_base }}/plan{% endblock %}
 
-{% block content %}
+{% block main_label %}Plan{% endblock %}
+
+{% block main %}
+<div class="page-scroll">
 <section class="panel" id="plan">
   <header class="console__bar">
     <h2>Plan</h2>
@@ -27,6 +32,9 @@
 
   <p class="muted">
     What <code>kptn run</code> would do next. Nothing on this page runs anything.
+    {#- A pipeline with a DuckDB database keeps its task state there; this
+        says which file -- or checkpoint -- the plan was read from. #}
+    {%- if state_note %} <span id="plan-state">{{ state_note }}</span>{% endif %}
   </p>
 
   {% if rows %}
@@ -48,4 +56,5 @@
   <p class="muted">This profile resolves to no executable tasks.</p>
   {% endif %}
 </section>
+</div>
 {% endblock %}

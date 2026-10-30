@@ -2,7 +2,7 @@
 
 A detached worker process appends run lifecycle events here; the FastAPI UI
 reads the same database. All UI state lives on disk under
-``<project_root>/.kptn/ui.db`` and ``<project_root>/.kptn/runs/`` so a run
+``<project_root>/.kptn/state/ui.db`` and ``<project_root>/.kptn/state/runs/`` so a run
 survives a browser, notebook server, or FastAPI restart -- nothing is kept in process
 memory.
 
@@ -46,6 +46,8 @@ from kptn_server.run_files import (
     INDEX_LIMIT,
     INDEX_PUBLISH_INTERVAL_SECONDS,
     RUN_FILE_SUFFIX,
+    IndexedRun,
+    RunFileError,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,7 +55,11 @@ _LOGGER = logging.getLogger(__name__)
 JSONValue = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
-_INITIAL_MIGRATION = _MIGRATIONS_DIR / "001_runs.sql"
+#: ``NNN_name.sql``, applied in order; each ends by recording its ``NNN`` in
+#: ``schema_version``.
+_MIGRATIONS = sorted(
+    (int(path.name[:3]), path) for path in _MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql")
+)
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
@@ -120,6 +126,9 @@ class RunRequest:
 @dataclass(frozen=True)
 class RunRecord:
     run_id: str
+    #: The run's place in its project's history, from 1: what the UI calls
+    #: it. The run id stays its key.
+    number: int
     project_root: Path
     pipeline: str
     profile: str | None
@@ -242,6 +251,18 @@ def _normalize_warning_text(text: str) -> str:
     """
     without_ansi = _ANSI_RE.sub("", text)
     return _TIMESTAMP_RE.sub("<TS>", without_ansi)
+
+
+def _statements(sql: str) -> list[str]:
+    """A migration script's statements, one each, comments and all."""
+    statements: list[str] = []
+    pending = ""
+    for line in sql.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            statements.append(pending.strip())
+            pending = ""
+    return statements
 
 
 def _dt_to_text(value: datetime | None) -> str | None:
@@ -403,41 +424,68 @@ class RunStore:
             self._path, timeout=5.0, isolation_level=None, check_same_thread=False
         )
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+        self._enable_wal(conn)
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         self._ensure_schema(conn)
         return conn
 
     @staticmethod
-    def _ensure_schema(conn: sqlite3.Connection) -> None:
+    def _enable_wal(conn: sqlite3.Connection) -> None:
+        """Switch to WAL, retrying while another connection holds the lock.
+
+        Two connections opening a brand-new database at once (the server and
+        a worker, say) both switch its journal mode, and SQLite can fail that
+        switch with ``database is locked`` at once rather than wait out the
+        busy timeout. Retried for as long as that timeout would have waited.
+        """
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                if exc.sqlite_errorcode != sqlite3.SQLITE_BUSY or time.monotonic() > deadline:
+                    raise
+            time.sleep(0.01)
+
+    @staticmethod
+    def _schema_version(conn: sqlite3.Connection) -> int:
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
         ).fetchone()
-        if row is not None:
+        if row is None:
+            return 0
+        return conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
+
+    @classmethod
+    def _ensure_schema(cls, conn: sqlite3.Connection) -> None:
+        """Bring the database up to the newest migration.
+
+        The version is read again under ``BEGIN IMMEDIATE`` before anything
+        is applied: several processes open a new or older database at once
+        (the server, a worker, ``kptn run``), and the one that waited for the
+        write lock must find the work done rather than repeat it. Each
+        migration's statements run one at a time inside that transaction --
+        ``executescript`` would commit it first -- so a database is never
+        left half-migrated.
+        """
+        if cls._schema_version(conn) >= _MIGRATIONS[-1][0]:
             return
-        sql = _INITIAL_MIGRATION.read_text()
-        # executescript() commits any pending transaction before it starts,
-        # then runs the given statements in sequence. To make the
-        # check-then-create atomic across processes/connections racing to
-        # initialize a brand-new database, wrap the migration itself in an
-        # explicit BEGIN IMMEDIATE/COMMIT inside the same script: the first
-        # connection to acquire the write lock creates the schema and
-        # commits; a connection that was blocked waiting for the lock then
-        # re-runs the same script against an already-migrated database and
-        # deterministically fails on "table schema_version already exists",
-        # which we treat as "someone else already did this" rather than an
-        # error.
-        script = f"BEGIN IMMEDIATE;\n{sql}\nCOMMIT;\n"
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.executescript(script)
-        except sqlite3.OperationalError as exc:
-            if "already exists" not in str(exc):
-                raise
+            current = cls._schema_version(conn)
+            for version, path in _MIGRATIONS:
+                if version > current:
+                    for statement in _statements(path.read_text()):
+                        conn.execute(statement)
+            conn.execute("COMMIT")
+        except BaseException:
             try:
                 conn.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+            raise
 
     # -- row <-> dataclass conversion -----------------------------------------
 
@@ -445,6 +493,7 @@ class RunStore:
     def _row_to_run(row: sqlite3.Row) -> RunRecord:
         return RunRecord(
             run_id=row["run_id"],
+            number=row["number"],
             project_root=Path(row["project_root"]),
             pipeline=row["pipeline"],
             profile=row["profile"],
@@ -480,9 +529,16 @@ class RunStore:
         canonical_root = Path(request.project_root).resolve()
         run_id = uuid.uuid4().hex
         created_at = datetime.now(timezone.utc)
-        runs_dir = canonical_root / ".kptn" / "runs"
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        log_path = runs_dir / f"{run_id}{RUN_FILE_SUFFIX}"
+        # Decided once per run and recorded as ``log_path``: everything after
+        # this -- appends, the console, the index -- follows the recorded path.
+        log_path = run_files.runs_dir_for(canonical_root) / f"{run_id}{RUN_FILE_SUFFIX}"
+        # Created here, with an explicit mode, so a colleague can read it
+        # whatever this process's umask; appends then open an existing file.
+        descriptor = os.open(log_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, run_files.LOG_FILE_MODE)
+        try:
+            os.fchmod(descriptor, run_files.LOG_FILE_MODE)
+        finally:
+            os.close(descriptor)
 
         conn = self._acquire()
         try:
@@ -497,17 +553,22 @@ class RunStore:
                     f"project {canonical_root} already has an active run: {existing['run_id']}"
                 )
 
+            number = conn.execute(
+                "SELECT COALESCE(MAX(number), 0) + 1 FROM runs WHERE project_root = ?",
+                (str(canonical_root),),
+            ).fetchone()[0]
             conn.execute(
                 """
                 INSERT INTO runs (
-                    run_id, project_root, pipeline, profile, force, status,
+                    run_id, number, project_root, pipeline, profile, force, status,
                     created_at, started_at, finished_at, worker_pid,
                     worker_started_at, heartbeat_at, current_task, exit_code,
                     log_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)
                 """,
                 (
                     run_id,
+                    number,
                     str(canonical_root),
                     request.pipeline,
                     request.profile,
@@ -527,13 +588,16 @@ class RunStore:
                 conn.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+            log_path.unlink(missing_ok=True)
             raise
         finally:
             self._release(conn)
 
+        self._gather_run_files(canonical_root, log_path.parent)
         self.publish_index(canonical_root)
         return RunRecord(
             run_id=run_id,
+            number=number,
             project_root=canonical_root,
             pipeline=request.pipeline,
             profile=request.profile,
@@ -1081,7 +1145,14 @@ class RunStore:
             run_files.truncate(log_path, size)
 
     def publish_index(self, project_root: Path | str, *, force: bool = True) -> None:
-        """Rewrite ``<project_root>/.kptn/runs/index.json`` from this database.
+        """Rewrite the project's ``index.json`` from this database.
+
+        It goes beside the newest run's file -- ``.kptn/state/runs/`` or the shared
+        logs directory, whichever that run was recorded to -- so a change to
+        ``settings.shared_logs`` takes effect from the next run, and this,
+        called every few seconds, never rereads ``kptn.yaml``. That run copies
+        its predecessors' files over (:meth:`_gather_run_files`). A project
+        with no runs has nothing to publish.
 
         Unforced calls are rate-limited to one per
         :data:`~kptn_server.run_files.INDEX_PUBLISH_INTERVAL_SECONDS` per
@@ -1117,10 +1188,16 @@ class RunStore:
                 (key, INDEX_LIMIT),
             ).fetchall()
             records = [self._row_to_run(row) for row in rows]
+            if not records:
+                conn.execute("COMMIT")
+                return
+            runs_dir = records[0].log_path.parent
             tallies = self._tallies(conn, [record.run_id for record in records])
             run_files.write_index(
-                root / ".kptn" / "runs",
-                run_files.build_index(root, records, tallies),
+                runs_dir,
+                run_files.build_index(
+                    root, records, tallies, carried=self._carried(conn, runs_dir)
+                ),
             )
             conn.execute("COMMIT")
         except Exception as exc:  # noqa: BLE001 - publishing must never fail a caller
@@ -1132,6 +1209,74 @@ class RunStore:
         finally:
             self._release(conn)
 
+    def _gather_run_files(self, project_root: Path, runs_dir: Path) -> None:
+        """Copy the files of the runs the index will list into *runs_dir*.
+
+        The index goes beside the newest run, and a reader looks for every
+        run it lists there. Runs recorded before ``settings.shared_logs`` was
+        turned on or off have their files in the other directory, and without
+        a copy a colleague would see them with no output. Called as a run is
+        created, while the run lock keeps every earlier run finished.
+
+        Never raises: a run starts whether or not its predecessors' files
+        could be copied.
+        """
+        conn = self._acquire()
+        try:
+            rows = conn.execute(
+                """
+                SELECT log_path FROM runs WHERE project_root = ?
+                ORDER BY created_at DESC, run_id DESC LIMIT ?
+                """,
+                (str(project_root), INDEX_LIMIT),
+            ).fetchall()
+        finally:
+            self._release(conn)
+        failed: list[str] = []
+        for row in rows:
+            source = Path(row["log_path"])
+            if source.parent == runs_dir:
+                continue
+            try:
+                run_files.copy_run_file(source, runs_dir)
+            except OSError as exc:
+                failed.append(f"{source.name}: {exc.strerror or exc}")
+        if failed:
+            _LOGGER.warning(
+                "could not copy %d earlier run file(s) of %s into %s, so other "
+                "people's kptn ui will show those runs without output: %s",
+                len(failed),
+                project_root,
+                runs_dir,
+                "; ".join(failed),
+            )
+
+    @staticmethod
+    def _carried(conn: sqlite3.Connection, runs_dir: Path) -> list[IndexedRun]:
+        """Rows of the index in *runs_dir* for runs this database never stored.
+
+        A working directory deleted and recreated under the same name shares
+        one shared logs directory with its earlier self; its new ``ui.db``
+        knows nothing of the earlier runs, and only the index still lists
+        them. Without carrying them, the first publish would forget them.
+        An index that is missing or cannot be trusted carries nothing.
+        """
+        try:
+            previous = run_files.read_index(runs_dir)
+        except (FileNotFoundError, RunFileError, OSError):
+            return []
+        if not previous:
+            return []
+        ids = [run.run_id for run in previous]
+        known = {
+            row[0]
+            for row in conn.execute(
+                f"SELECT run_id FROM runs WHERE run_id IN ({','.join('?' * len(ids))})",
+                ids,
+            )
+        }
+        return [run for run in previous if run.run_id not in known]
+
     def ensure_index(self, project_root: Path | str) -> None:
         """Publish ``index.json`` if the project has none yet.
 
@@ -1139,7 +1284,18 @@ class RunStore:
         it until its next run, and until then a colleague would see no
         history at all.
         """
-        if not (Path(project_root) / ".kptn" / "runs" / INDEX_FILENAME).exists():
+        conn = self._acquire()
+        try:
+            row = conn.execute(
+                """
+                SELECT log_path FROM runs WHERE project_root = ?
+                ORDER BY created_at DESC, run_id DESC LIMIT 1
+                """,
+                (str(Path(project_root)),),
+            ).fetchone()
+        finally:
+            self._release(conn)
+        if row is not None and not (Path(row["log_path"]).parent / INDEX_FILENAME).exists():
             self.publish_index(project_root)
 
     def _report_publish_failure(self, root: Path, exc: Exception) -> None:
@@ -1217,15 +1373,27 @@ class RunStore:
         project_root: Path | str | None = None,
         *,
         limit: int | None = None,
+        profile: str | None = None,
     ) -> list[RunRecord]:
+        """Runs newest first. *profile* narrows them to one profile's, in
+        the profile selector's terms: ``""`` is the runs made with no
+        profile, and ``None`` -- the default -- is every run."""
         conn = self._acquire()
         try:
             query = "SELECT * FROM runs"
+            where: list[str] = []
             params: list[object] = []
             if project_root is not None:
                 canonical_root = Path(project_root).resolve()
-                query += " WHERE project_root = ?"
+                where.append("project_root = ?")
                 params.append(str(canonical_root))
+            if profile == "":
+                where.append("profile IS NULL")
+            elif profile is not None:
+                where.append("profile = ?")
+                params.append(profile)
+            if where:
+                query += " WHERE " + " AND ".join(where)
             query += " ORDER BY created_at DESC, run_id DESC"
             if limit is not None:
                 query += " LIMIT ?"
@@ -1274,6 +1442,24 @@ class RunStore:
             self._release(conn)
         return [self._row_to_event(row) for row in rows]
 
+    def database_reported(self, run_id: str) -> str | None:
+        """The database file *run_id* reported opening, if it reported one.
+
+        A run reports it once, before its first task, so the scan in sequence
+        order stops a few rows in; ``json_extract`` reads the path without
+        parsing the payload here.
+        """
+        conn = self._acquire()
+        try:
+            row = conn.execute(
+                "SELECT json_extract(payload_json, '$.path') FROM run_events "
+                "WHERE run_id = ? AND kind = ? ORDER BY sequence LIMIT 1",
+                (run_id, EventKind.DATABASE.value),
+            ).fetchone()
+        finally:
+            self._release(conn)
+        return row[0] if row and isinstance(row[0], str) and row[0] else None
+
     def event_counts(self, run_id: str) -> dict[tuple[str, str | None], int]:
         """Per-(kind, task status) event tallies for *run_id*, aggregated in SQL.
 
@@ -1283,7 +1469,7 @@ class RunStore:
         "task", how many tasks never finished) is the caller's, so that the
         derivation stays in one place above this layer.
 
-        This exists because the run-history page needs counts for every listed
+        This exists because the sidebar's Runs pane needs counts for every listed
         run, and hydrating them was quadratic in the wrong thing: a ``log``
         event is one row per captured output span, so a project with fifty
         real runs of a few thousand output lines each turned one page load

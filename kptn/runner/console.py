@@ -5,6 +5,9 @@ from typing import TextIO
 
 from kptn.runner.events import EventKind, RunEvent
 
+#: What a succeeded table's publish to the shared bronze did, in the console's words.
+_SHARE_WORDS = {"published": "published", "linked": "linked to an identical build"}
+
 
 class ConsoleEventSink:
     def __init__(
@@ -18,7 +21,21 @@ class ConsoleEventSink:
     def emit(self, event: RunEvent) -> None:
         if event.kind is EventKind.TASK_STARTED:
             mode = event.payload.get("mode", "run")
-            if mode == "map":
+            if mode == "source_table" and event.payload.get("shared") == "restored":
+                print(
+                    self._timestamped("[RESTORE]", event, " — from shared bronze"),
+                    file=self.out,
+                    flush=True,
+                )
+            elif mode == "source":
+                count = event.payload["count"]
+                tables = "table" if count == 1 else "tables"
+                print(
+                    self._timestamped("[SOURCE]", event, f" — {count} {tables}"),
+                    file=self.out,
+                    flush=True,
+                )
+            elif mode == "map":
                 print(
                     f"[MAP] {self._task_name(event)} — expanding over {event.payload['count']} items",
                     file=self.out,
@@ -43,6 +60,34 @@ class ConsoleEventSink:
             print(
                 self._timestamped("[FAIL]", event, f" — {event.payload['error']}"),
                 file=self.err,
+                flush=True,
+            )
+            return
+
+        if (
+            event.kind is EventKind.TASK_FINISHED
+            and event.payload.get("status") == "succeeded"
+            and event.payload.get("rejected")
+        ):
+            count = event.payload["rejected"]
+            files = "file" if count == 1 else "files"
+            source = str(event.task_name).split("[", 1)[0]
+            print(
+                self._timestamped(
+                    "[REJECT]", event, f" — {count} {files} left out; see raw_{source}._rejected"
+                ),
+                file=self.out,
+                flush=True,
+            )
+
+        if (
+            event.kind is EventKind.TASK_FINISHED
+            and event.payload.get("status") == "succeeded"
+            and event.payload.get("shared") in _SHARE_WORDS
+        ):
+            print(
+                self._timestamped("[SHARE]", event, f" — {_SHARE_WORDS[str(event.payload['shared'])]}"),
+                file=self.out,
                 flush=True,
             )
 

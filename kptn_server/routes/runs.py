@@ -47,8 +47,9 @@ pipeline output is untrusted text and must never reach the DOM as live markup.
 
 Four more endpoints complete the surface.
 
-``GET /runs``
-    The project's run history, newest first, straight out of the store.
+``GET /`` and ``GET /runs``
+    The newest run of the chosen profile -- the run page is where a project's
+    runs are listed, in its sidebar -- or, with none, the page to start one.
 
 ``GET /runs/{run_id}/log``
     The run's log, rendered from its file the way the CLI printed it. **The path comes from the run row and from nowhere
@@ -89,18 +90,22 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 
+from kptn.inspection import OutlineEntry, pipeline_outline
 from kptn.runner.events import EventKind
-from kptn_server.console_layout import (
-    FOLD_TASK,
-    OPEN_TASKS,
-    ConsoleLayout,
-    Fold,
-    Placement,
-)
+from kptn_server.console_layout import ConsoleLayout, Placement
 from kptn_server.context import ui
+from kptn_server.next_start import delete_start, next_start
 from kptn_server.log_render import render_run_log
 from kptn_server.processes import STALE_WORKER_GRACE_SECONDS
+from kptn_server.run_outline import (
+    RunOutline,
+    build_outline,
+    format_duration,
+    outline_frame,
+    prime_outline,
+)
 from kptn_server.run_files import RUN_FILE_SUFFIX, counters, read_span_text
+from kptn_server.run_list import run_days
 from kptn_server.routes.support import (
     error_response,
     is_fragment_request,
@@ -120,7 +125,6 @@ from kptn_server.run_store import (
     RunStore,
     RunStoreError,
     StoredEvent,
-    WarningGroup,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -160,7 +164,7 @@ STATUS_EVENT_NAME = "run_status"
 #: Adding a region here without teaching app.js about it is caught by a test,
 #: because the failure has no symptom of its own.
 REGION_EVENT_TARGETS: Mapping[str, str] = MappingProxyType(
-    {"run_header": "run-header"}
+    {"run_header": "run-header", "run_info": "run-info", "run_notice": "run-notice"}
 )
 
 #: How many runs ``GET /runs`` renders. The history is unbounded on disk and
@@ -332,7 +336,11 @@ def _label(event: StoredEvent) -> str:
 
 
 def console_event(
-    event: StoredEvent, log_path: Path, *, in_task: bool = False
+    event: StoredEvent,
+    log_path: Path,
+    *,
+    in_task: bool = False,
+    hidden: bool = False,
 ) -> dict[str, Any]:
     """Everything the event template needs, and nothing it has to compute.
 
@@ -340,17 +348,21 @@ def console_event(
     the SSE stream render byte-identical fragments -- the browser appends what
     a reload would have rendered.
 
-    *in_task* says the row sits inside its own task's fold (see
+    *in_task* says the row sits inside its own task's section (see
     :mod:`kptn_server.console_layout`), whose heading already names the task.
+    *hidden* keeps the row in the page -- the counters and the stream's cursor
+    count every event -- without showing it.
     """
     is_log = event.kind == EventKind.LOG.value
     text = log_text(log_path, event) if is_log else _summary(event)
+    shown = [] if hidden else _display_lines(event, text)
     return {
         "sequence": event.sequence,
         "kind": event.kind,
         "label": _label(event),
         "task": event.task_name,
         "in_task": in_task,
+        "hidden": hidden,
         # The instant, unambiguous, for the ``datetime`` attribute...
         "timestamp": _isoformat(event.timestamp),
         # ...and the developer's own wall clock for the text beside it. Events
@@ -364,32 +376,57 @@ def console_event(
         # colour a failure differently by -- and a failure rendered in the
         # success green says the opposite of what happened.
         "status": "" if is_log else str(event.payload.get("status") or ""),
-        # Captured output is a block: multi-line and whitespace-significant.
-        # A summary is a few words, and belongs on the row it describes.
         "is_log": is_log,
         "text": text,
-        # Lines of output, which a task fold's heading adds up. Counted here
+        # What the log shows for this event, one entry per line. Numbered
+        # across the whole run: ``first_line`` is filled in when a whole
+        # history is built, and by app.js for a row the stream appends.
+        "shown": shown,
+        "first_line": None,
+        # Lines of output, which a section's heading adds up. Counted here
         # so the page and the stream count the same way.
-        "lines": _line_count(text) if is_log else 0,
-        # How long a finished task took, for its fold's heading.
+        "lines": len(shown),
+        # How long a finished task took, for its section's heading.
         "duration": _duration(event),
+        # What the shared bronze did for a source table, for its heading.
+        "shared": str(event.payload.get("shared") or "")
+        if event.kind == EventKind.TASK_FINISHED.value
+        else "",
     }
+
+
+def _display_lines(event: StoredEvent, text: str) -> list[str]:
+    """The lines the log shows for one event."""
+    if event.kind == EventKind.LOG.value:
+        return text.splitlines() or ([text] if text else [])
+    if event.kind == EventKind.WARNING.value:
+        return [text] if text else ["warning"]
+    if event.kind == EventKind.RUN_STARTED.value:
+        return ["run started"]
+    if event.kind == EventKind.RUN_FINISHED.value:
+        status = str(event.payload.get("status") or "finished")
+        detail = str(event.payload.get("detail") or "")
+        return [f"run {status}"] + (detail.splitlines() if detail else [])
+    if event.kind == EventKind.DATABASE.value:
+        # What the run started from: the file it continued, or the checkpoint
+        # it rewound the file to.
+        database = Path(str(event.payload.get("path") or "database")).name
+        checkpoint = event.payload.get("checkpoint")
+        if isinstance(checkpoint, str) and checkpoint:
+            return [f"restored {database} from checkpoint {Path(checkpoint).name}"]
+        return [f"database {database}"]
+    if event.kind == EventKind.TASK_FINISHED.value:
+        error = str(event.payload.get("error") or "")
+        status = str(event.payload.get("status") or "finished")
+        return [f"task {status}"] + (error.splitlines() if error else [])
+    return [_label(event) + (f" {text}" if text else "")]
 
 
 def _duration(event: StoredEvent) -> str:
     """A finished task's run time, in the units a reader thinks in."""
     if event.kind != EventKind.TASK_FINISHED.value:
         return ""
-    seconds = event.payload.get("duration_seconds")
-    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
-        return ""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    minutes, secs = divmod(int(seconds), 60)
-    if minutes < 60:
-        return f"{minutes}m {secs:02d}s"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}h {minutes:02d}m"
+    return format_duration(event.payload.get("duration_seconds"))
 
 
 def _line_count(text: str) -> int:
@@ -397,48 +434,40 @@ def _line_count(text: str) -> int:
     return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
 
-# -- the console's folds ---------------------------------------------------
+# -- the console's sections -------------------------------------------------
 
 
 def build_console(
     stored: Sequence[StoredEvent], log_path: Path
 ) -> list[Any]:
-    """A run's whole history as the console's tree of folds and rows.
+    """A run's whole history as the log's sections and the run's own rows.
 
     The same :class:`~kptn_server.console_layout.ConsoleLayout` the stream
     places events with, so a reload shows the structure the live page built.
-    Each fold's ``open`` is what ``app.js`` would have left it as by now:
-    only the newest :data:`~kptn_server.console_layout.OPEN_TASKS` task
-    folds, and only the groups the newest event sits in, stay open -- except
-    around a failure, which is never folded away.
+    Every shown line is numbered across the run, as app.js goes on numbering
+    the lines a stream appends.
     """
     layout = ConsoleLayout()
     top: list[Any] = []
-    tasks: list[Fold] = []
-    groups: list[Fold] = []
-    last: Placement | None = None
+    number = 1
 
     for event in stored:
         placement = layout.place(event)
-        for fold in placement.opens:
-            (fold.parent.children if fold.parent is not None else top).append(fold)
-            (tasks if fold.kind == FOLD_TASK else groups).append(fold)
-        row = console_event(event, log_path, in_task=placement.in_task)
+        top.extend(placement.opens)
+        row = console_event(
+            event, log_path, in_task=placement.in_task, hidden=placement.hidden
+        )
+        if row["shown"]:
+            row["first_line"] = number
+            number += len(row["shown"])
         container = placement.container
         (container.children if container is not None else top).append(row)
-        if container is not None and container.kind == FOLD_TASK:
-            container.lines += row["lines"]
-            if event.kind == EventKind.WARNING.value:
-                container.warnings += 1
+        if container is not None:
+            container.shown += len(row["shown"])
+            if event.kind == EventKind.LOG.value:
+                container.lines += row["lines"]
         if placement.finishes is not None:
             placement.finishes.outcome = row
-        last = placement
-
-    current = set(last.container.ancestors()) if last and last.container else set()
-    for index, fold in enumerate(tasks):
-        fold.open = index >= len(tasks) - OPEN_TASKS or fold.failed
-    for fold in groups:
-        fold.open = fold in current or fold.failed
     return top
 
 
@@ -461,12 +490,14 @@ def render_event(
     but text.
 
     Where it goes is the server's decision too, from *placement*: ``opens``
-    are the folds to add first (each an empty shell, appended to the element
+    are the sections to add first (each an empty shell, appended to the element
     ``parent`` names unless the page already has it), ``parent`` is the id the
-    row is appended to, and ``outcome`` replaces a task fold's heading
+    row is appended to, and ``outcome`` replaces a section heading's
     outcome once the task has finished.
     """
-    prepared = console_event(event, log_path, in_task=placement.in_task)
+    prepared = console_event(
+        event, log_path, in_task=placement.in_task, hidden=placement.hidden
+    )
     # Jinja macros are attributes of a template's module at runtime; a
     # ``TemplateModule`` has no static surface for them.
     module = templates.get_template("_event.html").module
@@ -479,16 +510,16 @@ def render_event(
         "parent": placement.parent_id,
         "opens": [
             {
-                "id": fold.id,
-                "parent": fold.parent_id,
-                "html": str(module.fold_shell(fold)),  # ty: ignore[unresolved-attribute]
+                "id": section.id,
+                "parent": section.parent_id,
+                "html": str(module.section_shell(section)),  # ty: ignore[unresolved-attribute]
             }
-            for fold in placement.opens
+            for section in placement.opens
         ],
         "outcome": (
             {
                 "id": f"{finishes.id}-outcome",
-                "html": str(module.fold_outcome(finishes, prepared)),  # ty: ignore[unresolved-attribute]
+                "html": str(module.section_outcome(finishes, prepared)),  # ty: ignore[unresolved-attribute]
             }
             if finishes is not None
             else None
@@ -570,11 +601,15 @@ def render_region(
             "is_terminal": record.status in TERMINAL_STATUSES,
             "force_finish_offered": looks_wedged(record),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
-            # The counters live in this region, and this frame replaces it
-            # whole. Without them the numbers would blank the instant a run
-            # went terminal under an open stream -- invisible on a reload,
-            # which is where a reader would go looking for the bug.
-            "counters": counters(store.event_counts(record.run_id)),
+            "project_base": project_base,
+        }
+    elif name == "run_info":
+        context = {"run": record, "is_terminal": record.status in TERMINAL_STATUSES}
+    elif name == "run_notice":
+        context = {
+            "run": record,
+            "force_finish_offered": looks_wedged(record),
+            "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
             "project_base": project_base,
         }
     else:
@@ -836,7 +871,7 @@ def project_run(request: Request, run_id: str) -> RunRecord | None:
     """The run with this id *belonging to the project this app serves*.
 
     ``get_run`` is keyed by run id alone and is therefore global to the
-    database. One ``.kptn/ui.db`` holds one project today, but the store is
+    database. One ``.kptn/state/ui.db`` holds one project today, but the store is
     keyed by project root throughout -- ``create_run`` locks on it,
     ``list_runs`` filters on it -- precisely because nothing structurally
     stops two contexts from sharing a database. Every run-scoped route goes
@@ -880,6 +915,12 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
 
     log_path = Path(record.log_path)
     stored = store.events_after(run_id, 0)
+    outline = build_outline(
+        _outline_entries(request, record.profile),
+        stored,
+        terminal=record.status in TERMINAL_STATUSES,
+    )
+    items = build_console(stored, log_path)
     return ui(request).templates.TemplateResponse(
         request,
         "run.html",
@@ -889,17 +930,36 @@ def run_page(request: Request, run_id: str) -> HTMLResponse:
             # Not from the URL: a run knows its own profile, and "show me the
             # plan for this run" is the obvious move from a finished one.
             "selected_profile": record.profile,
-            "items": build_console(stored, log_path),
-            # The console bar's counters. From the same aggregate the history
-            # page uses, rather than from the events hydrated just above: one
-            # counting path, so the two pages cannot disagree about one run.
-            "counters": counters(store.event_counts(run_id)),
+            "runs_pane": runs_pane(request, record.profile, current=record.run_id),
+            "items": items,
+            "outline": outline.views(),
+            # The rail's filters, which are the run's tallies too. app.js
+            # recounts them off the rail as a live run moves it.
+            "outline_counts": outline.filter_counts(),
+            "outline_selected": outline.selected(),
             "force_finish_confirmation": FORCE_FINISH_CONFIRMATION,
             "force_finish_offered": looks_wedged(record),
             "is_terminal": record.status in TERMINAL_STATUSES,
             "last_sequence": stored[-1].sequence if stored else 0,
         },
     )
+
+
+def _outline_entries(request: Request, profile: str | None) -> list[OutlineEntry]:
+    """The steps a run with *profile* takes, for the sidebar -- or none.
+
+    Read from the project's pipeline as it is now, which for an old run may
+    have changed since: tasks the run reported that the pipeline no longer
+    has are added from the run's own events (see ``RunOutline``). A pipeline
+    that cannot be loaded leaves the sidebar to the events alone rather than
+    costing the reader the run page.
+    """
+    try:
+        with ui(request).project() as project:
+            return pipeline_outline(project.pipeline, project.config, profile)
+    except Exception:  # noqa: BLE001 -- any failure to load means "no outline"
+        _LOGGER.debug("no pipeline outline for the run page", exc_info=True)
+        return []
 
 
 def looks_wedged(record: RunRecord, *, now: datetime | None = None) -> bool:
@@ -934,140 +994,79 @@ def looks_wedged(record: RunRecord, *, now: datetime | None = None) -> bool:
     return elapsed > STALE_WORKER_GRACE_SECONDS
 
 
-# -- counts and the warning summary ---------------------------------------
-
-
-def warning_summary(groups: Sequence[WarningGroup]) -> dict[str, Any]:
-    """A run's warnings, grouped for display and linked to every occurrence.
-
-    Grouping is *presentation only*: the store keeps every warning event, and
-    every one of their sequences is turned into an anchor here. A summary that
-    linked only the first occurrence would hide the repeat its own count is
-    advertising.
-
-    ``task_count`` counts the distinct tasks that warned. Warnings raised
-    outside any task (at pipeline import time, say, before any task exists)
-    have no task to attribute, so they are counted in ``total`` and in
-    ``unattributed`` but not against any task -- and the headline says so
-    rather than folding them into a count of warnings "in" tasks they were
-    never in.
-
-    Wording is decided here rather than in the template so that pluralization
-    lives in one testable place, and so the run page and the history row read
-    identically.
-    """
-    total = sum(group.count for group in groups)
-    attributed = sum(group.count for group in groups if group.task_name)
-    tasks = {group.task_name for group in groups if group.task_name}
-    return {
-        "total": total,
-        "task_count": len(tasks),
-        "attributed": attributed,
-        "unattributed": total - attributed,
-        "headline": _warning_headline(attributed, len(tasks), total - attributed),
-        "groups": [_warning_group(group) for group in groups],
-    }
-
-
-def _warning_headline(attributed: int, task_count: int, unattributed: int) -> str:
-    """The headline for a run's warnings.
-
-    Three shapes, because a run can warn from inside tasks, from outside them,
-    or both, and the mixed case is the one that goes quietly wrong: counting
-    every warning as being "in" the tasks that warned reports a total against
-    a task list that does not account for all of it.
-    """
-    if not attributed and not unattributed:
-        return "No warnings"
-    outside = f"{unattributed} outside any task"
-    if not unattributed:
-        return f"{_plural(attributed, 'warning')} in {_plural(task_count, 'task')}"
-    if not attributed:
-        return f"{_plural(unattributed, 'warning')} outside any task"
-    return (
-        f"{_plural(attributed, 'warning')} in {_plural(task_count, 'task')}, {outside}"
-    )
-
-
-def _warning_group(group: WarningGroup) -> dict[str, Any]:
-    # ``occurrence_sequences`` is the authoritative list. The fallback covers
-    # a group whose sequences were not recorded: one anchor to the occurrence
-    # the group does know about beats no way back to the console at all, and
-    # nothing here invents a sequence that was never stored.
-    sequences = group.occurrence_sequences or (group.first_sequence,)
-    return {
-        "task": group.task_name,
-        "category": group.category,
-        "sample_message": group.sample_message,
-        "count": group.count,
-        "occurrence_label": _plural(group.count, "occurrence"),
-        "occurrences": [
-            {"sequence": sequence, "anchor": f"#event-{sequence}"}
-            for sequence in sequences
-        ],
-    }
-
-
-def _plural(count: int, noun: str) -> str:
-    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
-
-
-# -- GET /runs -------------------------------------------------------------
+# -- GET / -- the landing page, and the Runs pane --------------------------
 
 
 @router.get("/", response_class=HTMLResponse)
 @router.get("/runs", response_class=HTMLResponse)
-def run_history(request: Request, profile: str | None = None) -> HTMLResponse:
-    """This project's run history, newest first -- and the UI's landing page.
+def landing(request: Request, profile: str | None = None) -> Response:
+    """The UI's landing page: the newest run of the chosen profile.
 
-    Served at ``/`` as well as ``/runs``: there is no separate run console
-    page any more. Starting a run is a control in the app bar rather than a
-    destination, so the page you land on is the one that tells you what has
-    been run. ``/runs`` stays a route because links and bookmarks point at
-    it.
+    There is no run history page: the run page lists the profile's runs in
+    its sidebar, so landing on the newest one is landing on the history too.
+    Without a ``?profile=`` it is the newest run of any profile, and the
+    selector then shows that run's; ``?profile=`` (blank) is the runs made
+    with no profile, as the selector names them. ``/runs`` stays a route
+    because links and bookmarks point at it.
 
-    It accepts ``?profile=`` but does not filter by it. The profile is
-    carried so the *next* page keeps it -- without this the history was
-    where a profile went to die, and Run -> Runs -> Plan arrived with none.
-    The list stays every run of every profile, which is why each row shows
-    its own, and the app bar says so in text rather than offering a control
-    this page could not honour.
+    With no such run, the page to start one: the sidebar's Run and Plan and
+    an empty Runs pane.
 
-    Read out of the store on every request, which is what makes the page
-    durable rather than remembered: a run recorded by a server that has since
-    restarted, or by a detached worker while no server was up at all, is
-    still here.
-
-    The order is the store's (``created_at DESC, run_id DESC``) and is passed
-    straight through -- neither this function nor the template re-sorts, so
-    there is exactly one place the ordering can be wrong.
-
-    Two aggregate queries per listed run, bounded by :data:`HISTORY_LIMIT`.
-    Neither hydrates the run's events: ``log`` events are one row per captured
-    output span, so counting them in Python would make this page -- the one a
-    developer lands on -- do a dataclass construction and a JSON parse per
-    line of pipeline output the project has ever produced.
+    The redirect is relative and unprefixed, as ``POST /runs``'s is:
+    resolved against ``<base>/`` or ``<base>/runs`` alike it lands on
+    ``<base>/runs/<id>``, with or without a proxy in front.
     """
     project = ui(request).entry
     if profile and profile not in project.profiles:
         return unknown_profile(request, profile, nav_active="runs")
-    store: RunStore = ui(request).store
-    runs = [
-        {
-            "run": record,
-            "counters": counters(store.event_counts(record.run_id)),
-            "warnings": warning_summary(store.warning_groups(record.run_id)),
-        }
-        for record in store.list_runs(project.root, limit=HISTORY_LIMIT)
-    ]
+    newest = ui(request).store.list_runs(project.root, limit=1, profile=profile)
+    if newest:
+        return RedirectResponse(url=f"runs/{newest[0].run_id}", status_code=303)
+    selected = requested_profile(profile)
     return ui(request).templates.TemplateResponse(
         request,
-        "runs.html",
+        "landing.html",
         {
             "nav_active": "runs",
-            "runs": runs,
-            "selected_profile": requested_profile(profile),
+            "selected_profile": selected,
+            "runs_pane": runs_pane(request, selected),
         },
+    )
+
+
+def runs_pane(request: Request, profile: str | None, *, current: str | None = None) -> dict[str, Any]:
+    """The sidebar's Runs pane for *profile* -- ``None`` being the runs made
+    with no profile -- with *current* the run the page shows.
+
+    One aggregate query per succeeded run, for its warnings: the one fact
+    the pane shows that the run row does not hold.
+    """
+    current_ui = ui(request)
+    store: RunStore = current_ui.store
+    runs = store.list_runs(current_ui.entry.root, limit=HISTORY_LIMIT, profile=profile or "")
+    query = {"profile": profile or ""}
+    if current:
+        query["current"] = current
+    return {
+        "days": run_days(runs, lambda run: counters(store.event_counts(run.run_id))["warnings"]),
+        "count": len(runs),
+        "current": current,
+        "url": f"{current_ui.project_base}/run-list?{urllib.parse.urlencode(query)}",
+        "empty": "No runs with this profile yet. Run or Plan to start one.",
+    }
+
+
+@router.get("/run-list", response_class=HTMLResponse)
+def run_list(request: Request, profile: str | None = None, current: str | None = None) -> HTMLResponse:
+    """The Runs pane's list, as a fragment: fetched again by app.js when a
+    run starts or ends, so the pane shows it without a reload."""
+    project = ui(request).entry
+    if profile and profile not in project.profiles:
+        return unknown_profile(request, profile, nav_active="runs")
+    return ui(request).templates.TemplateResponse(
+        request,
+        "_run_list.html",
+        {"runs_pane": runs_pane(request, requested_profile(profile), current=current)},
     )
 
 
@@ -1191,6 +1190,104 @@ def stop_run(request: Request, run_id: str):
     return RedirectResponse(url=f"../{run_id}", status_code=303)
 
 
+# -- the sidebar's state card ---------------------------------------------
+
+
+@router.get("/next-start", response_class=HTMLResponse)
+def next_start_card(request: Request, profile: str | None = None) -> HTMLResponse:
+    """The run page's state card: what the next run of *profile* starts from.
+
+    A fragment only, fetched by app.js once the run page is up -- and again
+    when a run ends, a profile is chosen, or a file is deleted -- so reading
+    the files never holds up the page. Empty when the pipeline has no DuckDB
+    database for a run to start from.
+    """
+    return _next_start_response(request, profile)
+
+
+@router.post("/next-start/delete")
+async def delete_next_start(request: Request):
+    """Delete the file the next run starts from, then say what it starts from now.
+
+    Takes the *name* the card showed and deletes only the file kptn names
+    as the starting point now (:func:`kptn_server.next_start.delete_start`),
+    so no path the request names can reach anything else, and a stale card
+    cannot delete what has taken its file's place. Refused while a run is in
+    progress: that run has the database open, and may be about to restore or
+    save a checkpoint.
+
+    app.js posts it as a fragment request and swaps in the card that comes
+    back; a plain form post returns to the page it came from.
+    """
+    current = ui(request)
+    if not _is_form_encoded(request):
+        return _error_response(
+            request,
+            status_code=415,
+            title="Unsupported request body",
+            detail="This takes an application/x-www-form-urlencoded body with a 'name' field.",
+        )
+    name = await _submitted_field(request, "name") or ""
+    profile = requested_profile(await _submitted_field(request, "profile"))
+    deleted = False
+    if current.store.active_run(current.entry.root) is None:
+        try:
+            with current.project() as project:
+                if profile is None or profile in project.profiles:
+                    deleted = delete_start(project, current.store, profile, name)
+        except OSError as exc:
+            return _error_response(
+                request,
+                status_code=500,
+                title=f"{name} could not be deleted",
+                detail=str(exc),
+            )
+    if is_fragment_request(request):
+        return _next_start_response(request, profile, status_code=200 if deleted else 409)
+    if not deleted:
+        return _error_response(
+            request,
+            status_code=409,
+            title=f"{name} was not deleted",
+            detail=(
+                "It is not what the next run starts from now, or a run is in "
+                "progress. Reload the run page to see what the next run starts from."
+            ),
+        )
+    return RedirectResponse(url=_back(request), status_code=303)
+
+
+def _next_start_response(
+    request: Request, profile: str | None, *, status_code: int = 200
+) -> HTMLResponse:
+    current = ui(request)
+    card = None
+    try:
+        with current.project() as project:
+            if profile is None or profile in project.profiles:
+                card = next_start(project, current.store, requested_profile(profile))
+    except Exception:  # noqa: BLE001 -- a project that will not load has no card
+        _LOGGER.debug("no state card", exc_info=True)
+    html = current.templates.get_template("_next_start.html").render(
+        card=card, profile=profile or "", project_base=current.project_base
+    )
+    return HTMLResponse(html, status_code=status_code)
+
+
+def _back(request: Request) -> str:
+    """The page the reader deleted from, by the path its Referer names.
+
+    Only the path and query: the request is known to come from this
+    application's own pages (``kptn_server.origin``), and a path cannot
+    leave its origin. Without one, the run history.
+    """
+    parts = urllib.parse.urlsplit(request.headers.get("referer", ""))
+    if parts.path.startswith("/") and not parts.path.startswith("//"):
+        return parts.path + (f"?{parts.query}" if parts.query else "")
+    # ``..`` from ``<base>/next-start/delete`` is ``<base>/``.
+    return "../"
+
+
 # -- POST /runs/{run_id}/force-finish -------------------------------------
 
 
@@ -1279,6 +1376,7 @@ async def event_frames(
     project_base: str,
     *,
     after: int = 0,
+    outline_entries: Sequence[OutlineEntry] | None = None,
 ) -> AsyncIterator[str]:
     """Yield SSE frames for *run_id*, starting after sequence *after*.
 
@@ -1296,9 +1394,12 @@ async def event_frames(
     cursor = after
     last_output_at = _monotonic()
     layout = ConsoleLayout()
+    outline = RunOutline(outline_entries) if outline_entries is not None else None
     if cursor > 0:
         history = await asyncio.to_thread(store.events_after, run_id, 0)
         layout = prime_layout(history, cursor)
+        if outline_entries is not None:
+            outline = prime_outline(outline_entries, history, cursor)
 
     while True:
         record = await asyncio.to_thread(store.get_run, run_id)
@@ -1311,11 +1412,12 @@ async def event_frames(
         events = await asyncio.to_thread(store.events_after, run_id, cursor)
         log_path = Path(record.log_path)
         for event in events:
-            yield _event_frame(
-                render_event(templates, event, log_path, layout.place(event)),
-                event.kind,
-                event.sequence,
-            )
+            payload = render_event(templates, event, log_path, layout.place(event))
+            changed = outline.apply(event) if outline is not None else None
+            if outline is not None and changed is not None:
+                # The sidebar card this event changed, re-rendered whole.
+                payload["outline"] = outline_frame(templates, outline, changed)
+            yield _event_frame(payload, event.kind, event.sequence)
             cursor = event.sequence
 
         if is_terminal:
@@ -1346,7 +1448,8 @@ async def event_frames(
 def run_events(request: Request, run_id: str, after: str | None = None):
     """Stream this run's events, resuming from a cursor the client supplies."""
     store: RunStore = ui(request).store
-    if project_run(request, run_id) is None:
+    record = project_run(request, run_id)
+    if record is None:
         return _no_such_run(request, run_id)
 
     return StreamingResponse(
@@ -1356,6 +1459,7 @@ def run_events(request: Request, run_id: str, after: str | None = None):
             run_id,
             ui(request).project_base,
             after=_cursor(request, after),
+            outline_entries=_outline_entries(request, record.profile),
         ),
         media_type="text/event-stream",
         headers={

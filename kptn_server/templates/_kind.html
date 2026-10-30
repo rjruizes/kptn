@@ -1,0 +1,22 @@
+{#
+  A step's kind, as the walkthrough and a task's detail page name it, and the
+  icon that marks data ingest: a source, its tables, and the stage holding
+  them. A small cylinder, the usual sign for stored
+  data, so the ingest steps stand out in a long walkthrough and in the run
+  console. Words always stay beside it: the icon is decoration and is hidden
+  from assistive technology.
+#}
+{% macro ingest_icon(class="kind__icon") -%}
+<svg class="{{ class }}" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"
+     fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+  <ellipse cx="8" cy="3.75" rx="5" ry="1.75"/>
+  <path d="M3 3.75v8.5c0 .97 2.24 1.75 5 1.75s5-.78 5-1.75v-8.5"/>
+  <path d="M3 8c0 .97 2.24 1.75 5 1.75S13 8.97 13 8"/>
+</svg>
+{%- endmacro %}
+
+{% macro kind_label(kind, ingest=false) -%}
+<span class="kind kind--{{ kind }}">
+  {%- if ingest %}{{ ingest_icon() }}{% endif -%}
+  {{ kind }}</span>
+{%- endmacro %}

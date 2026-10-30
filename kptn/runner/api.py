@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from kptn.graph.nodes import ConfigNode
+from kptn.graph.nodes import ConfigNode, SourceNode
 from kptn.graph.pipeline import Pipeline
 from kptn.profiles.loader import ProfileLoader
 from kptn.profiles.resolved import ResolvedGraph
@@ -13,7 +13,11 @@ from kptn.profiles.resolver import ProfileResolver
 from kptn.runner.console import ConsoleEventSink
 from kptn.runner.executor import execute
 from kptn.runner.events import EventEmitter, EventKind, EventSink
+from kptn.runner.plan import config_values_for_plan
 from kptn.runner.plan import plan as _plan
+from kptn.layout import BRONZE_DIR, DEFAULT_STORAGE_KEY, migrate_layout
+from kptn.sources.shared import missing_shared_bronze, resolve_shared_bronze, shared_bronze_for
+from kptn.sources.views import with_search_path
 from kptn.state_store.factory import init_state_store
 from kptn.state_store.protocol import StateStoreBackend
 
@@ -21,6 +25,12 @@ if TYPE_CHECKING:
     import duckdb
 
 logger = logging.getLogger(__name__)
+
+
+def _migrate_layout(project_root: Path) -> None:
+    """Move an earlier kptn's files to ``.kptn/state/`` and ``.kptn/_bronze/``."""
+    for notice in migrate_layout(project_root):
+        print(notice, flush=True)
 
 
 def _find_duckdb_factory(pipeline: Pipeline):
@@ -61,6 +71,7 @@ def resolve_pipeline(
     project_root: Path,
     profile: str | None,
 ) -> tuple[ResolvedGraph, StateStoreBackend]:
+    _migrate_layout(project_root)
     config = ProfileLoader.load(project_root / "kptn.yaml")
 
     if profile is not None:
@@ -69,7 +80,7 @@ def resolve_pipeline(
         resolved = ResolvedGraph(
             graph=pipeline,
             pipeline=pipeline.name,
-            storage_key=config.settings.db_path or ".kptn/kptn.db",
+            storage_key=config.settings.db_path or DEFAULT_STORAGE_KEY,
         )
 
     resolved = _gate(resolved)
@@ -137,6 +148,7 @@ def run(
     from kptn.profiles.schema import KptnConfig
 
     cwd = Path.cwd()
+    layout_notices = migrate_layout(cwd)
 
     try:
         config = ProfileLoader.load(cwd / "kptn.yaml")
@@ -145,18 +157,30 @@ def run(
             raise
         config = KptnConfig()  # sensible defaults; state store won't be used
 
+    # Built source tables are shared between working directories when
+    # kptn.yaml names a shared bronze that exists and KPTN_SHARED_BRONZE is
+    # not "off".
+    shared = resolve_shared_bronze(config.settings.shared_bronze, cwd)
+    shared_notice = missing_shared_bronze(config.settings.shared_bronze, cwd)
+
     if profile is not None:
         resolved = ProfileResolver(config).compile(pipeline, profile)
     else:
         resolved = ResolvedGraph(
             graph=pipeline,
             pipeline=pipeline.name,
-            storage_key=config.settings.db_path or ".kptn/kptn.db",
+            storage_key=config.settings.db_path or DEFAULT_STORAGE_KEY,
         )
 
     resolved = _gate(resolved)
 
     duckdb_factory, duckdb_alias = _find_duckdb_factory(pipeline)
+    if duckdb_factory is not None and any(
+        isinstance(n, SourceNode) for n in pipeline.nodes
+    ):
+        # Every connection, including the one tasks receive by alias, must
+        # resolve the views' paths, relative to .kptn/_bronze/.
+        duckdb_factory = with_search_path(duckdb_factory, cwd / BRONZE_DIR)
 
     # no_cache without a profile: skip the state store entirely.
     # When a profile IS specified the config system is needed, so the
@@ -177,6 +201,12 @@ def run(
         sink,
     )
     emitter.emit(EventKind.RUN_STARTED)
+    for notice in layout_notices:
+        print(notice, flush=True)
+    if shared_notice is not None:
+        # Printed, not emitted: a run started from the UI captures it into
+        # the run's log, and it is the normal state of a laptop, not a warning.
+        print(shared_notice, flush=True)
 
     try:
         result = execute(
@@ -190,6 +220,7 @@ def run(
             force=force,
             extra_kwargs=kwargs or None,
             emitter=emitter,
+            shared=shared,
         )
     except Exception as exc:
         emitter.emit(EventKind.RUN_FINISHED, status="failed", error=str(exc))
@@ -214,4 +245,9 @@ def plan(
         Optional profile name to resolve from ``kptn.yaml``.
     """
     resolved, state_store = resolve_pipeline(pipeline, Path.cwd(), profile)
-    _plan(resolved, state_store)
+    _plan(
+        resolved,
+        state_store,
+        config_values=config_values_for_plan(pipeline),
+        shared=shared_bronze_for(Path.cwd()),
+    )

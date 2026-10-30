@@ -1,0 +1,32 @@
+{#
+  The Runs pane's list (kptn_server.run_list): the profile's runs, newest
+  first, under the day each was made. Rendered into the page, and fetched
+  again whole from ``data-url`` by app.js when a run starts or ends, which
+  sets the pane header's count from ``data-count``.
+
+  Each run is a link to its page, so a run opens in a new tab like any
+  link; the page's own is ``aria-current``. A colleague's pane lists every
+  profile's runs, so each row there names its profile.
+#}
+{% from "_status.html" import status_icon %}
+<div class="runlist" id="run-list" data-url="{{ runs_pane.url }}" data-count="{{ runs_pane.count }}">
+  {%- for day in runs_pane.days %}
+  <h3 class="runlist__day">{{ day.label }}</h3>
+  <ul class="runlist__runs">
+    {%- for row in day.rows %}
+    <li>
+      <a class="runrow" href="{{ project_base }}/runs/{{ row.run_id }}" title="{{ row.title }}" data-run-id="{{ row.run_id }}"
+         {%- if row.run_id == runs_pane.current %} aria-current="page"{% endif %}>
+        {{ status_icon(row.icon, warned=row.warned) }}
+        <span class="runrow__id">{{ row.label }}</span>
+        {%- if runs_pane.profiles %}<span class="runrow__profile">{{ row.profile or "no profile" }}</span>{% endif %}
+        {%- if row.not_reporting %}<span class="runrow__stale" data-not-reporting>not reporting</span>{% endif %}
+        <span class="runrow__t">{{ row.time }}</span>
+      </a>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- else %}
+  <p class="pane-empty">{{ runs_pane.empty }}</p>
+  {%- endfor %}
+</div>

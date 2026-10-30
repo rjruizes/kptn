@@ -24,6 +24,7 @@ from kptn.graph.nodes import (
     ParallelNode,
     PipelineNode,
     RTaskNode,
+    SourceNode,
     SqlTaskNode,
     StageNode,
     TaskNode,
@@ -36,13 +37,14 @@ from kptn.profiles.schema import KptnConfig
 
 # Nodes that represent a unit of actual work (or a dynamic fan-out of work),
 # as opposed to structural sentinels (Stage/Parallel/Pipeline/Noop/Config).
-_EXECUTABLE_NODE_TYPES = (TaskNode, SqlTaskNode, RTaskNode, MapNode)
+_EXECUTABLE_NODE_TYPES = (TaskNode, SqlTaskNode, RTaskNode, MapNode, SourceNode)
 
 _KIND_NAMES: dict[type, str] = {
     TaskNode: "python",
     SqlTaskNode: "sql",
     RTaskNode: "r",
     MapNode: "map",
+    SourceNode: "source",
     ParallelNode: "parallel",
     StageNode: "stage",
     PipelineNode: "pipeline",
@@ -73,6 +75,26 @@ class InspectionItem:
     docs_error: str | None
     predecessors: tuple[str, ...]
     successors: tuple[str, ...]
+    #: Part of data ingest: a source, a views step, or a stage holding a
+    #: source. The UI marks these with one icon.
+    ingest: bool = False
+
+
+@dataclass(frozen=True)
+class OutlineEntry:
+    """One executable step of a pipeline, in run order, with where it sits.
+
+    ``groups`` are the stages and nested pipelines enclosing the step,
+    outermost first -- the same path the runner puts in each task event's
+    ``payload["groups"]``, so a run's events can be matched to the outline.
+    Parallel groups are not among them: the runner executes their branches
+    one after another, and the outline lists them that way.
+    """
+
+    name: str
+    kind: str
+    groups: tuple[str, ...]
+    bypassed: bool
 
 
 @dataclass(frozen=True)
@@ -123,17 +145,17 @@ def _split_docs(
 
 
 def _spec_for(node: AnyNode) -> Any | None:
-    """Return the TaskSpec/SqlTaskSpec/RTaskSpec backing a node, if any.
+    """Return the spec backing a node, if any.
 
-    ``TaskNode``/``SqlTaskNode``/``RTaskNode`` all carry their spec directly
-    as ``node.spec`` (the same attribute ``kptn/runner/executor.py`` reads,
+    ``TaskNode``/``SqlTaskNode``/``RTaskNode`` and ``SourceNode`` all carry
+    their spec directly as ``node.spec`` (the same attribute ``kptn/runner/executor.py`` reads,
     e.g. ``node.spec.outputs``) — the pre-wrap ``__kptn__`` attribute only
     exists on the decorator-produced handles (``_KptnCallable``,
     ``_SqlTaskHandle``, ``_RTaskHandle``), not on the node objects
     themselves. ``MapNode`` is the exception: it stores the original
     __kptn__-tagged callable in ``node.task``.
     """
-    if isinstance(node, (TaskNode, SqlTaskNode, RTaskNode)):
+    if isinstance(node, (TaskNode, SqlTaskNode, RTaskNode, SourceNode)):
         return node.spec
     if isinstance(node, MapNode):
         return getattr(node.task, "__kptn__", None)
@@ -206,7 +228,55 @@ def _source_for(node: AnyNode) -> tuple[Path | None, int | None]:
         return (Path(source_file) if source_file else None), lineno
     if isinstance(node, (SqlTaskNode, RTaskNode)):
         return Path(node.path), None
+    if isinstance(node, SourceNode) and node.spec.declared_at is not None:
+        # Where kptn.source(...) was called, not kptn's own code.
+        filename, lineno = node.spec.declared_at
+        return Path(filename), lineno
     return None, None
+
+
+def _resolved_graph(
+    pipeline: Pipeline, config: KptnConfig, profile: str | None
+) -> tuple[Graph, frozenset[str]]:
+    """The graph a run with *profile* executes, and the names it bypasses."""
+    if profile is not None:
+        resolved = ProfileResolver(config).compile(pipeline, profile)
+        graph: Graph = resolved.graph
+        bypassed_names = resolved.bypassed_names
+    else:
+        graph = pipeline
+        bypassed_names = frozenset()
+    return gate_disjunctive(graph), bypassed_names
+
+
+def pipeline_outline(
+    pipeline: Pipeline,
+    config: KptnConfig,
+    profile: str | None,
+) -> list[OutlineEntry]:
+    """Every executable step a run with *profile* would take, in run order.
+
+    The shape the run page's sidebar draws: steps in order, each with the
+    stages and nested pipelines around it. Like :func:`inspect_pipeline`, it
+    only reads the graph.
+    """
+    # Shared with the runner, so the outline's groups are the events' groups.
+    from kptn.runner.executor import _group_paths
+
+    graph, bypassed_names = _resolved_graph(pipeline, config, profile)
+    ordered = topo_sort(graph)
+    root = pipeline.name if isinstance(pipeline, Pipeline) else ""
+    paths = _group_paths(ordered, root)
+    return [
+        OutlineEntry(
+            name=node.name,
+            kind=_KIND_NAMES.get(type(node), type(node).__name__),
+            groups=tuple(paths.get(node.name, ())),
+            bypassed=node.name in bypassed_names,
+        )
+        for node in ordered
+        if isinstance(node, _EXECUTABLE_NODE_TYPES)
+    ]
 
 
 def inspect_pipeline(
@@ -233,16 +303,7 @@ def inspect_pipeline(
     reads the graph and its node specs; it never executes tasks or mutates
     the pipeline.
     """
-    if profile is not None:
-        resolved = ProfileResolver(config).compile(pipeline, profile)
-        graph: Graph = resolved.graph
-        bypassed_names = resolved.bypassed_names
-    else:
-        graph = pipeline
-        bypassed_names = frozenset()
-
-    graph = gate_disjunctive(graph)
-
+    graph, bypassed_names = _resolved_graph(pipeline, config, profile)
     ordered = topo_sort(graph)
 
     predecessors: dict[int, list[str]] = {id(n): [] for n in graph.nodes}
@@ -250,6 +311,8 @@ def inspect_pipeline(
     for src, dst in graph.edges:
         successors[id(src)].append(dst.name)
         predecessors[id(dst)].append(src.name)
+
+    source_names = {n.name for n in graph.nodes if isinstance(n, SourceNode)}
 
     items: list[InspectionItem] = []
     sequence = 0
@@ -283,6 +346,8 @@ def inspect_pipeline(
                 docs_error=docs_error,
                 predecessors=tuple(predecessors[id(node)]),
                 successors=tuple(successors[id(node)]),
+                ingest=isinstance(node, SourceNode)
+                or (isinstance(node, StageNode) and bool(node.members & source_names)),
             )
         )
 

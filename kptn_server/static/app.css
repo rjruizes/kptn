@@ -6,18 +6,28 @@
  */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
-  --ink: #16202b;
-  --ink-muted: #5c6b7a;
+  --ink: #1c2228;
+  --ink-muted: #5b6570;
+  --ink-faint: #8a939c;
   --surface: #ffffff;
-  --surface-sunken: #f4f6f8;
-  --line: #d6dde4;
-  --accent: #1f6feb;
+  --surface-sunken: #f6f7f8;
+  --surface-hover: #eceef0;
+  /* The app bar's own ground. */
+  --chrome: #f6f7f8;
+  --line: #e2e5e8;
+  --accent: #2b5bd7;
+  --accent-bg: #e7edfc;
   --accent-ink: #ffffff;
   --danger: #b42318;
-  --warning: #9a5b00;
-  --ok: #1a7f37;
+  --danger-bg: #fbe9e7;
+  --warning: #965f06;
+  --warning-bg: rgba(150, 95, 6, 0.13);
+  /* A warned line's background: quieter than a pill's. */
+  --warning-line: rgba(150, 95, 6, 0.07);
+  --ok: #2d7a40;
+  --ok-bg: #e5f2e8;
   --radius: 6px;
   /* One measure for the whole app: the app bar's contents and the page
    * content line up on the same left and right edges. */
@@ -29,19 +39,55 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
+/* Dark follows the system unless the reader chose light in Settings, and is
+ * forced when they chose dark: ``data-theme`` on <html>, set before the page
+ * paints (_theme.html). The two blocks hold the same values. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --ink: #e6edf3;
-    --ink-muted: #9aa7b2;
-    --surface: #161b22;
-    --surface-sunken: #0d1117;
-    --line: #30363d;
-    --accent: #4493f8;
-    --accent-ink: #0d1117;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --ink: #e6e9ec;
+    --ink-muted: #a3acb5;
+    --ink-faint: #737d87;
+    --surface: #15181b;
+    --surface-sunken: #1b1f23;
+    --surface-hover: #252a2f;
+    --chrome: #1b1f23;
+    --line: #2c3237;
+    --accent: #86a7f6;
+    --accent-bg: #1f2a45;
+    --accent-ink: #15181b;
     --danger: #ff7b72;
-    --warning: #d29922;
-    --ok: #3fb950;
+    --danger-bg: #3a1d1c;
+    --warning: #e3ae52;
+    --warning-bg: rgba(227, 174, 82, 0.16);
+    --warning-line: rgba(227, 174, 82, 0.08);
+    --ok: #6cc183;
+    --ok-bg: #1a2f21;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ink: #e6e9ec;
+  --ink-muted: #a3acb5;
+  --ink-faint: #737d87;
+  --surface: #15181b;
+  --surface-sunken: #1b1f23;
+  --surface-hover: #252a2f;
+  --chrome: #1b1f23;
+  --line: #2c3237;
+  --accent: #86a7f6;
+  --accent-bg: #1f2a45;
+  --accent-ink: #15181b;
+  --danger: #ff7b72;
+  --danger-bg: #3a1d1c;
+  --warning: #e3ae52;
+  --warning-bg: rgba(227, 174, 82, 0.16);
+  --warning-line: rgba(227, 174, 82, 0.08);
+  --ok: #6cc183;
+  --ok-bg: #1a2f21;
 }
 
 * {
@@ -74,28 +120,75 @@ pre {
 
 /* -- app bar ------------------------------------------------------------ */
 
-/* The bar itself is full-bleed -- its surface and rule run the width of the
- * window -- while ``__inner`` holds the contents to the same measure as
- * ``.app-main``, so the nav's right edge and the Profile label's left edge
- * sit over the content below them rather than out in the margins. */
+/* Across the full width of the window: where you are on the left -- kptn,
+ * the project, the profile, a path -- and the reader's settings at the
+ * right. */
 .app-bar {
-  padding: 12px var(--content-gutter);
-  background: var(--surface);
+  padding: 8px 16px;
+  background: var(--chrome);
   border-bottom: 1px solid var(--line);
 }
 
 .app-bar__inner {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px 24px;
   align-items: center;
-  max-width: calc(var(--content-width) - 2 * var(--content-gutter));
-  margin: 0 auto;
+  gap: 10px;
+}
+
+.app-bar__start {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.app-bar__brand {
+  margin-right: 8px;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.app-bar__brand:hover {
+  color: var(--ink);
+}
+
+/* Whole: when the bar runs short, the profile's box gives way first. */
+.app-bar__project {
+  flex: none;
+  overflow: hidden;
+  color: var(--ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-bar__sep {
+  color: var(--ink-faint);
+}
+
+.app-bar__end {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-bar__brand:focus-visible,
+.iconbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Marks a colleague's project, shown from its published files: there is
    nothing on these pages that can act on a run. */
 .app-bar__readonly {
+  font-family: var(--font-ui);
   font-size: 0.85em;
   padding: 1px 8px;
   border: 1px solid var(--line);
@@ -103,42 +196,66 @@ pre {
   color: var(--ink-muted);
 }
 
+/* An icon alone, borderless: the settings gear, the rail's toggle. */
+.iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.iconbtn:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.iconbtn svg {
+  width: 19px;
+  height: 19px;
+}
+
 /* -- project picker ------------------------------------------------------ */
 
-/* A <details> styled as a dropdown: the summary looks like the profile
- * <select> beside it, and the menu hangs below it over the page. */
-/* ``r1 / <picker>``: the release, then the project within it. */
+/* ``r1 / <picker>``: the release, then the project within it, in the mono
+ * face the names are written in. The picker is a <details> dressed as the
+ * profile's select box, its menu hanging below it over the page. */
 .project-picker-path {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-faint);
 }
 
 .project-picker-path__release {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
   color: var(--ink-muted);
-}
-
-.project-picker-path__separator {
-  color: var(--line);
-  font-size: 1.2em;
 }
 
 .project-picker {
   position: relative;
+  min-width: 0;
 }
 
 .project-picker__summary {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 300px;
-  height: var(--control-height);
-  padding: 0 10px;
+  max-width: 260px;
+  padding: 5px 30px 5px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a939c' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center / 14px;
+  color: var(--ink);
+  line-height: 1.5;
   cursor: pointer;
   list-style: none;
   white-space: nowrap;
@@ -148,48 +265,52 @@ pre {
   display: none;
 }
 
-.project-picker__summary::after {
-  content: "";
-  flex-shrink: 0;
-  margin-left: 2px;
-  border: 4px solid transparent;
-  border-top-color: var(--ink-muted);
-  transform: translateY(2px);
-}
-
-.project-picker[open] > .project-picker__summary::after {
-  transform: translateY(-2px) rotate(180deg);
+.project-picker__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .project-picker__current {
   overflow: hidden;
+  font-size: 1em;
   text-overflow: ellipsis;
 }
 
 .project-picker__prompt {
   color: var(--ink-muted);
+  font-family: var(--font-ui);
 }
 
 .project-picker__menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
   z-index: 20;
   min-width: 300px;
   max-width: min(480px, calc(100vw - 2 * var(--content-gutter)));
   max-height: 70vh;
   overflow-y: auto;
-  padding: 8px;
+  padding: 4px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  font-family: var(--font-ui);
+  font-size: 13px;
 }
 
 .project-picker__divider {
-  margin: 6px 0;
+  margin: 4px 0;
   border: 0;
   border-top: 1px solid var(--line);
+}
+
+/* Names a group of the picker's list: the removed working directories. */
+.project-picker__heading {
+  margin: 4px 10px 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .project-picker__list {
@@ -200,20 +321,20 @@ pre {
 
 .project-picker__item {
   display: block;
-  padding: 5px 8px;
-  border-radius: var(--radius);
+  padding: 7px 10px;
+  border-radius: 5px;
   color: var(--ink);
   text-decoration: none;
 }
 
 a.project-picker__item:hover,
 a.project-picker__item:focus-visible {
-  background: var(--surface-sunken);
+  background: var(--surface-hover);
 }
 
 .project-picker__item[aria-current="page"] {
-  background: var(--surface-sunken);
-  font-weight: 600;
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .project-picker__item--broken {
@@ -223,122 +344,131 @@ a.project-picker__item:focus-visible {
 .project-picker__error {
   display: block;
   overflow: hidden;
-  font-size: 0.8em;
+  font-size: 0.85em;
   color: var(--danger);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .project-picker__empty {
-  margin: 4px 8px;
+  margin: 6px 10px;
 }
 
-.app-bar__profile {
-  display: flex;
-  gap: var(--control-gap);
-  align-items: center;
-}
+/* -- controls in the app bar and the sidebar ------------------------------ */
 
-.app-bar__profile label {
-  color: var(--ink-muted);
-  white-space: nowrap;
-}
-
-/* Profile, Run, Plan: one group, so they read as three steps on the same
- * subject rather than three unrelated controls. The forms are layout-neutral
- * wrappers -- each exists only to give its button a method and an action. */
-.app-bar__controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--control-gap);
-}
-
-.app-bar__run,
-.app-bar__plan {
-  margin: 0;
-}
-
-/* A <select> and a <button> with identical padding still come out different
- * heights -- the select is sized by the platform's own control metrics, the
- * button by its content box -- which left the buttons overhanging the select
- * by 2px. An explicit height on all three is the only thing that makes them
- * one crisp row, so it is set here rather than on the global control rules:
- * the buttons elsewhere in the UI (Stop, Force-finish, Download raw log) are
- * sized by their content and should stay that way.
- *
- * ``flex-shrink: 0`` on the buttons keeps their labels on one line when the
- * bar gets tight; the select is the element that gives up width instead. */
-.app-bar__controls select,
-.app-bar__controls button {
-  height: var(--control-height);
-  padding-block: 0;
-}
-
-.app-bar__controls button {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-/* Long profile names (``asa24_validate_ingest``) would otherwise let the
- * selector push the nav off the bar. */
-.app-bar__controls select {
-  min-width: 0;
-  max-width: 220px;
-}
-
-/* Why the bar's controls are refused, sitting with them rather than beside
- * the nav. No `display` of its own: `hidden` has to keep working, and the
- * poller toggles exactly that. */
-.app-bar__busy {
-  color: var(--ink-muted);
-  text-decoration: none;
-  border-bottom: 1px dotted currentColor;
-}
-
-.app-bar__busy:hover {
-  color: var(--ink);
-}
-
-.app-bar__nav {
-  display: flex;
-  gap: 4px;
-  margin-left: auto;
-}
-
-.app-bar__nav a {
-  padding: 5px 10px;
-  border-radius: var(--radius);
-  color: var(--ink-muted);
-  text-decoration: none;
-}
-
-.app-bar__nav a:hover {
-  background: var(--surface-sunken);
-  color: var(--ink);
-}
-
-.app-bar__nav a[aria-current="page"] {
-  background: var(--surface-sunken);
-  color: var(--ink);
-  font-weight: 600;
-}
-
-/* The gear: an icon button sized and coloured like the nav links beside it,
- * not a bordered control -- it opens a preference, it does not act on a run. */
-.app-bar__settings {
+/* A select in a bordered box with its label inside, the chevron drawn by
+ * the stylesheet so it is the same in every browser. */
+.selbox {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  padding: 5px 8px;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+.selbox select {
+  min-width: 0;
+  max-width: 220px;
+  padding: 5px 30px 5px 0;
   border: 0;
-  background: transparent;
+  border-radius: 0;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a939c' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center / 14px;
+  color: var(--ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.selbox select:focus {
+  outline: none;
+}
+
+.selbox:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.selbox select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* The profile, as the last segment of the app bar's path. */
+.selbox--path {
+  padding-left: 8px;
+}
+
+.selbox--path select {
+  font-family: var(--font-mono);
+}
+
+.btngroup {
+  display: inline-flex;
+}
+
+.btngroup .btn {
+  border-radius: 0;
+}
+
+.btngroup > .btn:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.btngroup > .btn:last-child {
+  margin-left: -1px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.btngroup .btn svg {
   color: var(--ink-muted);
 }
 
-.app-bar__settings:hover {
-  background: var(--surface-sunken);
-  color: var(--ink);
+.btngroup .btn:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+.btn--run,
+.btngroup .btn--run svg {
+  color: var(--accent);
+}
+
+.btn--run {
+  font-weight: 500;
+}
+
+.btn--run:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+@media (max-width: 760px) {
+  .app-bar {
+    padding: 8px 10px;
+  }
+
+  /* The run's tools take a row of their own, under the path. */
+  .app-bar__inner {
+    flex-wrap: wrap;
+  }
+
+  .app-bar__tools {
+    order: 3;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .app-bar__brand,
+  .project-picker-path__release,
+  .project-picker-path__separator {
+    display: none;
+  }
 }
 
 /* -- settings modal ----------------------------------------------------- */
@@ -386,6 +516,68 @@ a.project-picker__item:focus-visible {
 
 .settings__close:hover {
   color: var(--ink);
+}
+
+/* Appearance: three choices as one segmented control, the chosen one
+ * raised. Real radios underneath, so the keyboard and a screen reader get
+ * a radio group. */
+.settings__theme {
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.settings__theme legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-sunken);
+}
+
+.segmented label {
+  position: relative;
+  cursor: pointer;
+}
+
+.segmented input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.segmented span {
+  display: block;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.segmented label:hover span {
+  color: var(--ink);
+}
+
+.segmented input:checked + span {
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.segmented input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .settings__option {
@@ -535,66 +727,81 @@ button:disabled {
 
 .status {
   display: inline-block;
-  padding: 1px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   background: var(--surface-sunken);
-  border: 1px solid var(--line);
+  color: var(--ink-muted);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
+  text-transform: capitalize;
 }
 
 .status--succeeded {
+  background: var(--ok-bg);
   color: var(--ok);
 }
 
 .status--failed,
 .status--errored {
+  background: var(--danger-bg);
   color: var(--danger);
+}
+
+.status--running,
+.status--queued {
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .status--stopped,
 .status--interrupted,
 .status--stop_requested {
+  background: var(--warning-bg);
   color: var(--warning);
 }
 
-/* -- the run console ---------------------------------------------------- */
+/* -- the run page ------------------------------------------------------- */
 
-/* Inline, because it renders inside the run panel's heading. On the 409 page
+/* As tall as the window: the run bar on top, then the rail and the log side
+ * by side, each scrolling on its own. A long run never makes the page itself
+ * scroll, so the rail is always beside the log it navigates. */
+.page--run {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.page--run .app-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* The main area beside the sidebar: the log or the page, under any notice. */
+.run-page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.run-page > .console {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Inline, because it sits beside the run's id in the Run pane. On the 409 page
  * it is the whole body and stands on its own line, which an inline-flex box
  * does just as well. */
 .run-status {
   display: inline-flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
-}
-
-/* The run panel's heading is a breadcrumb: the crumbs sit on one line, and
- * the separator is quieter than either of them. */
-/* The breadcrumb on the left, Retry hard against the right edge. */
-.run-header__top {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
-  margin-bottom: 12px;
-}
-
-.run-header__crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
   gap: 8px;
-  margin: 0;
-}
-
-.run-header__retry {
-  margin: 0 0 0 auto;
-}
-
-.run-header__crumb-separator {
-  color: var(--ink-muted);
+  font-size: 13px;
   font-weight: 400;
 }
 
@@ -603,249 +810,1290 @@ button:disabled {
   color: var(--warning);
 }
 
-/* The run's own controls and its console are one card, and now read as one:
- * no rule between them. The header's counters and log download already say
- * where its half ends, so a border only drew a seam across a single surface.
- * The spacing stays -- the output must not collide with the controls. */
-.run-panel .console {
-  margin-top: 14px;
+.run-status__task {
+  color: var(--ink-muted);
+  font-size: 12px;
 }
 
-.console__bar {
+/* -- the run's tools, in the app bar (_run_header.html) -- */
+
+.app-bar__tools {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 14px;
-  margin-bottom: 10px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
-/* The console is the one scrolling region in the UI: a long run must not turn
- * the whole page into a mile of output. */
-/* No height and no scroller of its own: the console is as long as the run,
- * and the page is what scrolls. A box that scrolled internally put a second
- * scrollbar inside the first, and left the output in a 60vh window while the
- * page around it stood still. */
-.console__events {
+.app-bar__tools form {
+  display: flex;
   margin: 0;
-  padding: 0;
-  list-style: none;
+}
+
+/* The sidebar's button leads the bar, pulled back so the icon, not its
+ * hover square, lines up with the edge. */
+.app-bar__side {
+  margin-left: -6px;
+}
+
+/* Which run, ahead of its tools -- shown only when the sidebar, whose Run
+ * pane says it otherwise, is hidden. */
+.run-bar__ctx {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  margin-right: 6px;
+  font-size: 14px;
+}
+
+.run-bar__ctx strong {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+body.no-side .run-bar__ctx {
+  display: flex;
+}
+
+/* The profile's box gives way to the tools, but not to nothing. */
+.selbox--path {
+  min-width: 110px;
+}
+
+/* Short of room, the tools are icons: their words stay their names, for a
+ * screen reader, and their tooltips. */
+@media (max-width: 1000px) {
+  .app-bar__tools .btn__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .app-bar__tools .btn {
+    gap: 3px;
+    padding: 5px 8px;
+  }
+}
+
+/* Above the log: the force-finish hatch, and the read-only view's notes
+ * about a run that has gone quiet or cannot be read. */
+.run-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.run-notice[hidden] {
+  display: none;
+}
+
+.run-notice p {
+  margin: 0;
+}
+
+/* The main area of a page with no log: the plan, or no run yet. */
+.page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--content-gutter);
+}
+
+.page-empty {
+  margin: 40px 12px;
+  color: var(--ink-faint);
+  font-size: 13px;
+  text-align: center;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--surface-hover);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn:disabled:hover {
+  background: var(--surface);
+}
+
+.btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.btn .btn__caret {
+  width: 13px;
+  height: 13px;
+  color: var(--ink-faint);
+}
+
+.btn--square {
+  padding: 5px 7px;
+}
+
+.btn--danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}
+
+/* A button's dropdown: View's options, and the "..." menu. app.js opens one
+ * at a time and closes it on Escape or a click elsewhere. */
+.menu-wrap {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  min-width: 190px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.menu[hidden] {
+  display: none;
+}
+
+.menu form {
+  margin: 0;
+}
+
+.view-opt,
+.menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.view-opt:hover,
+.menu-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.menu-item svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--ink-muted);
+}
+
+.menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.view-opt input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.view-opt__box {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--ink-faint);
+  border-radius: 4px;
+  color: var(--surface);
+}
+
+.view-opt__box svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+}
+
+.view-opt input:checked + .view-opt__box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.view-opt input:checked + .view-opt__box svg {
+  opacity: 1;
+}
+
+.view-opt input:focus-visible + .view-opt__box {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* -- the workspace: the sidebar and the main area -- */
+
+.run-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The sidebar hidden from the app bar's button (app.js marks <body>):
+ * the main area takes the whole width. */
+body.no-side .run-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body.no-side .side {
+  display: none;
+}
+
+/* Three panes down the sidebar -- Next run, Runs, Run -- each folding by
+ * its header, the open ones sharing the height and scrolling on their own. */
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
   background: var(--surface-sunken);
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pane--runs {
+  flex: 1;
+}
+
+.pane--run {
+  flex: 1.6;
+}
+
+.pane.is-closed {
+  flex: none;
+}
+
+.pane.is-closed > .pane-b {
+  display: none;
+}
+
+.pane-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pane-h:hover {
+  background: var(--surface-hover);
+}
+
+.pane-h:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pane-h__chev {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--ink-faint);
+  transition: transform 0.15s ease;
+}
+
+.pane.is-closed .pane-h__chev {
+  transform: rotate(-90deg);
+}
+
+.pane-h__n {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.pane-b {
+  min-height: 0;
+  overflow: auto;
+}
+
+.pane-empty {
+  margin: 12px;
+  color: var(--ink-faint);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* -- Next run: what it starts from (_next_start.html), then Run and Plan -- */
+
+.next {
+  margin: 2px 10px 12px;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+/* Lit for a moment when a delete hands the card to what comes next. */
+.next.swap {
+  animation: st-swap 1.6s ease-out;
+}
+
+@keyframes st-swap {
+  0%,
+  30% {
+    background: var(--accent-bg);
+  }
+
+  100% {
+    background: var(--surface);
+  }
+}
+
+.state[hidden] {
+  display: none;
+}
+
+.state + .next__go {
+  margin-top: 10px;
+}
+
+.state[hidden] + .next__go {
+  margin-top: 0;
+}
+
+.next__go {
+  display: flex;
+  margin: 0;
+}
+
+.next__go .btn {
+  flex: 1;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  gap: 5px;
+  font-size: 12.5px;
+  line-height: 1;
+}
+
+.next__go .btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Why Run and Plan are refused, and the way to the run that holds the
+ * lock. No `display` of its own: the poller toggles `hidden`. */
+.next__busy {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+
+.next__busy[hidden] {
+  display: none;
+}
+
+.next__busy:hover {
+  color: var(--ink);
+}
+
+/* The trash is pinned beside the label and the name's first line, not
+ * centred on the text: a delete hands the card to a checkpoint whose name
+ * may wrap, and the button must not move from under the pointer. */
+.statecard {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.st-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.st-lbl {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.st-db {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.st-db svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 3px;
+  color: var(--accent);
+}
+
+.st-db .st-db__ckpt {
+  color: var(--ink-muted);
+}
+
+/* Wraps rather than truncates: a checkpoint's name is mostly its task's. */
+.st-db__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.st-facts {
+  color: var(--ink-muted);
+  font-size: 12.5px;
+}
+
+.st-form {
+  display: flex;
+  flex: none;
+  margin: 4px 0 0;
+}
+
+/* The trash: a first click arms it -- red, "Delete?" -- and a second
+ * deletes (app.js). */
+.st-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.st-del svg {
+  width: 16px;
+  height: 16px;
+}
+
+.st-del:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--danger);
+}
+
+.st-del:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.st-del:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.st-del .st-confirm {
+  display: none;
+}
+
+.st-del.armed,
+.st-del.armed:hover {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.st-del.armed .st-confirm {
+  display: inline;
+}
+
+/* -- Runs: the profile's runs, by day (_run_list.html) -- */
+
+.runlist__day {
+  margin: 8px 14px 2px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.runlist__runs {
+  margin: 0;
+  padding: 0 6px;
+  list-style: none;
+}
+
+.runlist__runs:last-child {
+  padding-bottom: 16px;
+}
+
+.runrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--ink);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.runrow:hover {
+  background: var(--surface-hover);
+}
+
+.runrow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.runrow[aria-current="page"] {
+  background: var(--accent-bg);
+}
+
+.runrow[aria-current="page"] .runrow__id {
+  color: var(--accent);
+}
+
+.runrow__id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runrow__profile,
+.runrow__stale {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runrow__stale {
+  color: var(--warning);
+  font-family: var(--font-ui);
+}
+
+.runrow__t {
+  color: var(--ink-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* -- Run: the run on the page (_run_info.html), its filters and tasks -- */
+
+.rinfo {
+  padding: 2px 12px 10px;
+}
+
+.rinfo__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.rinfo__id {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.rinfo__meta {
+  color: var(--ink-faint);
+  font-size: 12.5px;
+}
+
+.rail {
+  padding: 0 8px 20px;
+}
+
+/* The filters, which are the run's tallies too: a count over a word. */
+.rail-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.rail-filter {
+  padding: 6px 2px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: center;
+  cursor: pointer;
+}
+
+.rail-filter b {
+  display: block;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.rail-filter--warn b {
+  color: var(--warning);
+}
+
+.rail-filter--err b {
+  color: var(--danger);
+}
+
+.rail-filter:hover {
+  background: var(--surface-hover);
+}
+
+.rail-filter[aria-pressed="true"] {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  color: var(--ink);
+}
+
+.rail-filter:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rail-filter:disabled:hover {
+  background: none;
+}
+
+.rail-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* What a filter leaves out. app.js sets ``hidden``; the rail's own display
+ * rules would otherwise win over it. */
+.rail-step[hidden],
+.rail-item[hidden],
+.rail-label[hidden],
+.rail-kids[hidden],
+.rail__empty[hidden] {
+  display: none;
+}
+
+.rail__empty {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-item:hover {
+  background: var(--surface-hover);
+}
+
+.rail-item.is-active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.rail-item__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-item__dur {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+}
+
+.rail-item.is-active .rail-item__dur {
+  color: var(--accent);
+}
+
+/* A task the cache answered reads as quieter than one that ran. */
+.rail-item[data-state="cached"]:not(.is-active) .rail-item__name {
+  color: var(--ink-faint);
+}
+
+/* Every top-level row -- a task or a group -- keeps a narrow gutter at its
+ * left, so their names share one edge. A group's caret sits in the
+ * gutter, over the row's own button, and folds the tasks beneath it; the
+ * line down the side of those tasks drops from the caret's centre. */
+.rail-step > .rail-item,
+.rail-item--group {
+  padding-left: 22px;
+}
+
+.rail-group {
+  position: relative;
+}
+
+.rail-item--group {
+  font-weight: 500;
+}
+
+.rail-caret {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-faint);
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.rail-caret:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.rail-caret:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.rail-caret svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.15s ease;
+}
+
+.rail-step.is-folded .rail-caret svg {
+  transform: rotate(-90deg);
+}
+
+.rail-step.is-folded > .rail-kids {
+  display: none;
+}
+
+.rail-item__count {
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+}
+
+.rail-label {
+  padding: 8px 10px 2px;
+  color: var(--ink-muted);
   font-family: var(--font-mono);
   font-size: 12px;
 }
 
-.event {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 8px;
-  border-bottom: 1px solid var(--line);
+.rail-label__state {
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: 11px;
 }
 
-.event:last-child {
-  border-bottom: none;
+.rail-kids {
+  margin-left: 11px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
 }
 
-.event__seq,
-.event__clock {
-  color: var(--ink-muted);
+.rail-kids .rail-kids {
+  margin-left: 10px;
 }
 
-.event__kind {
-  font-weight: 600;
+.rail-item:focus-visible,
+.btn:focus-visible,
+.sec-h:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
-.event__task {
+/* How a task went, in the rail and in the log's headings (_status.html). */
+.status-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--ink-faint);
+}
+
+.status-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.status-icon--succeeded {
+  color: var(--ok);
+}
+
+.status-icon--failed {
+  color: var(--danger);
+}
+
+.status-icon--running {
   color: var(--accent);
 }
 
-/* Captured output starts on the row that labels it and takes the rest of
-   the width, rather than claiming a line of its own: a single line of task
-   output is the common case, and a row whose text always began underneath
-   its own timestamp read like two entries instead of one.
+.status-icon--warned,
+.status-icon--interrupted,
+.status-icon--stopped {
+  color: var(--warning);
+}
 
-   ``pre-wrap`` and ``min-width: 0`` keep the multi-line case honest -- real
-   pipeline output is whitespace-significant, and a flex item needs the zero
-   minimum before it is allowed to wrap inside its track at all. */
-.event__text {
-  flex: 1 1 auto;
+.status-icon--pill {
+  gap: 4px;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  background: var(--warning-bg);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.status-icon--running svg {
+  animation: status-spin 1s linear infinite;
+}
+
+/* The log: one continuous scroll of the run's lines and its sections. */
+.console {
+  position: relative;
   min-width: 0;
-  margin: 0;
+  overflow: auto;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.console__empty {
+  margin: 16px 24px;
+  font-family: var(--font-ui);
+}
+
+.ev[hidden] {
+  display: none;
+}
+
+.ln {
+  display: flex;
+  padding: 1px 24px 1px 18px;
+}
+
+.sec__lines .ln {
+  padding-left: 42px;
+}
+
+.ln:hover {
+  background: var(--surface-sunken);
+}
+
+.ln__no {
+  flex: none;
+  width: 40px;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.ln__ts {
+  flex: none;
+  width: 72px;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.ln__tx {
+  flex: 1;
+  min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-/* A summary ("cached", "succeeded 1.23s") is a few words about the row it
-   sits on, so it stays on that row and wraps only when it has to. */
-.event__summary {
-  color: var(--ink-muted);
-  min-width: 0;
-  word-break: break-word;
-}
-
-.event--warning .event__kind,
-.event--stderr .event__kind {
-  color: var(--warning);
-}
-
-/* Coloured by outcome, never by kind: "task finished" is the same kind for a
-   success and a failure, and colouring the kind painted every failure in the
-   success green. Statuses with no rule here (stopped, interrupted) stay the
-   default ink rather than borrowing a colour that would overstate them. */
-.event--succeeded .event__kind {
-  color: var(--ok);
-}
-
-.event--failed .event__kind {
-  color: var(--danger);
-}
-
-/* -- console folds ------------------------------------------------------- */
-
-/* A fold is a row like any other, whose heading opens onto more rows: one
-   per pipeline or stage, one per task. Its body is indented behind a guide
-   line, as an editor draws folded code, so nesting reads at a glance. */
-.fold {
-  border-bottom: 1px solid var(--line);
-}
-
-.fold:last-child {
-  border-bottom: none;
-}
-
-.fold__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 8px;
-  cursor: pointer;
-  list-style: none;
-}
-
-.fold__head::-webkit-details-marker {
+.console.no-timestamps .ln__ts,
+.console.no-numbers .ln__no {
   display: none;
 }
 
-.fold__head:hover {
-  background: color-mix(in srgb, var(--line) 35%, var(--surface-sunken));
+.ev--warning .ln {
+  background: var(--warning-line);
 }
 
-/* An open task's heading stays at the top of the screen while its output
-   scrolls under it, so the reader always knows whose lines these are -- and
-   has its outcome, its counts, and the jump to its end within reach. Sticky
-   inside its own <details>, so it lets go once the task's output has
-   scrolled past. Opaque, because the rows pass beneath it; the shadow is
-   the line its body's top border draws until it scrolls away. */
-.fold--task > details[open] > .fold__head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--surface-sunken);
-  box-shadow: 0 1px 0 var(--line);
-}
-
-.fold--task > details[open] > .fold__head:hover {
-  background: color-mix(in srgb, var(--line) 35%, var(--surface-sunken));
-}
-
-/* The arrow: a disclosure triangle that turns down when the fold is open. */
-.fold__head::before {
-  content: "\25B8";
-  display: inline-block;
-  width: 1ch;
-  color: var(--ink-muted);
-  transition: transform 0.1s ease-out;
-}
-
-details[open] > .fold__head::before {
-  transform: rotate(90deg);
-}
-
-.fold__name {
-  font-weight: 600;
-}
-
-.fold--task > details > .fold__head .fold__name {
-  color: var(--accent);
-}
-
-/* A fold holding a failure says so on its heading, open or not, so a
-   failed task inside a folded pipeline is not hidden behind a quiet line. */
-.fold:has(.event--failed) > details > .fold__head .fold__name {
-  color: var(--danger);
-}
-
-.fold__outcome,
-.fold__count {
-  color: var(--ink-muted);
-}
-
-.fold__status--succeeded {
-  color: var(--ok);
-}
-
-.fold__status--failed {
-  color: var(--danger);
-}
-
-.fold__count--warnings {
+.ev--warning .ln__tx {
   color: var(--warning);
 }
 
-/* Pushed to the far end of the heading, and quiet until the heading is
-   pointed at: it is a shortcut, not part of what the line says. */
-.fold__jump {
-  display: inline-flex;
-  align-self: center;
-  margin-left: auto;
-  padding: 2px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: none;
+/* Output a task wrote to stderr: tracebacks, and the echo of a warning whose
+ * own line above says it plainly. Quieter than ordinary output. */
+.ev--stderr .ln__tx {
   color: var(--ink-muted);
-  font: inherit;
-  cursor: pointer;
-  opacity: 0.6;
 }
 
-.fold__head:hover .fold__jump,
-.fold__jump:focus-visible {
-  opacity: 1;
+.ev--failed .ln__tx {
+  color: var(--danger);
 }
 
-.fold__jump:hover {
-  border-color: var(--line);
-  color: var(--accent);
+.ev--run_started .ln,
+.ev--run_finished .ln:first-child {
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
-.fold__body {
-  position: relative;
-  margin: 0 0 0 12px;
-  padding: 0;
-  list-style: none;
+.ev--run_started .ln__tx,
+.ev--run_finished .ln:first-child .ln__tx {
+  font-weight: 500;
+}
+
+.ev--run_finished.ev--succeeded .ln__tx {
+  color: var(--ok);
+}
+
+.sec {
   border-top: 1px solid var(--line);
-  border-left: 1px solid var(--line);
 }
 
-/* The indent beside a fold's rows, guide line included, is a control: it
-   closes the fold. Laid over the margin rather than taking room of its own,
-   and lit on hover so it can be found. */
-.fold__gutter {
-  position: absolute;
+.sec:last-of-type {
+  border-bottom: 1px solid var(--line);
+}
+
+/* The log narrowed by the rail's filters (app.js sets ``data-show``).
+ * Rules on the sections rather than a pass over them, so a section the
+ * stream adds is filtered the moment it lands. */
+.console[data-show="ran"] .sec[data-state="cached"],
+.console[data-show="cached"] .sec:not([data-state="cached"]),
+.console[data-show="issues"] .sec[data-warnings="0"]:not([data-state="failed"]):not([data-state="interrupted"]) {
+  display: none;
+}
+
+/* The heading folds its section, and stays at the top of the log while the
+ * section's lines scroll beneath it. */
+.sec-h {
+  position: sticky;
   top: 0;
-  bottom: 0;
-  left: -13px;
-  width: 13px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 24px 9px 18px;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: left;
   cursor: pointer;
 }
 
-.fold__gutter:hover {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  box-shadow: inset -2px 0 var(--accent);
+button.sec-h:hover {
+  background: var(--surface-sunken);
+}
+
+.sec-h__chev {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--ink-faint);
+  transition: transform 0.15s ease;
+}
+
+.sec.is-closed .sec-h__chev {
+  transform: rotate(-90deg);
+}
+
+/* A folded section's lines are ``hidden="until-found"`` rather than
+ * ``display: none``: the browser's find still searches them, and opens the
+ * section on a match (app.js). The box stays, so drop its padding. */
+.sec__lines[hidden] {
+  padding: 0;
+}
+
+/* The path and the name wrap together, as one line of text, when the log
+ * is narrow -- inside a long snake_case name too, which has no space to
+ * break at -- and the outcome at the right never wraps. */
+.sec-h__title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sec-h__path {
+  color: var(--ink-faint);
+}
+
+.sec-h__name {
+  font-weight: 500;
+}
+
+.sec[data-state="failed"] .sec-h__name {
+  color: var(--danger);
+}
+
+.sec-h__end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.sec-h__meta {
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.sec-h .status-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sec-h .status-icon--pill svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sec__lines {
+  padding: 4px 0 8px;
+}
+
+/* A section with nothing to show is its heading alone, which says "no
+   output": no fold to offer, and no empty body under it. */
+.sec.is-empty .sec__lines {
+  display: none;
+}
+
+.sec.is-empty .sec-h {
+  cursor: default;
+}
+
+.sec.is-empty .sec-h:hover {
+  background: var(--surface);
+}
+
+.sec.is-empty .sec-h__chev {
+  visibility: hidden;
+}
+
+/* A cached section never ran: its heading is not a button, does not stick,
+ * and its name reads as quieter than a task's that ran. */
+.sec[data-state="cached"] .sec-h {
+  position: static;
+}
+
+.sec[data-state="cached"] .sec-h__name {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+/* The section a rail click took the log to, lit for a moment. */
+@keyframes sec-selected-head {
+  0%,
+  35% {
+    background: var(--accent-bg);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  100% {
+    background: var(--surface);
+    box-shadow: inset 3px 0 0 transparent;
+  }
+}
+
+@keyframes sec-selected-lines {
+  0%,
+  35% {
+    background: var(--accent-bg);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  100% {
+    background: transparent;
+    box-shadow: inset 3px 0 0 transparent;
+  }
+}
+
+@keyframes sec-selected-name {
+  0%,
+  35% {
+    color: var(--accent);
+  }
+
+  100% {
+    color: var(--ink);
+  }
+}
+
+.sec.is-selected .sec-h {
+  animation: sec-selected-head 2.5s ease-out forwards;
+}
+
+.sec.is-selected .sec-h__name {
+  animation: sec-selected-name 2.5s ease-out forwards;
+}
+
+.sec.is-selected .sec__lines {
+  animation: sec-selected-lines 2.5s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sec.is-selected .sec-h,
+  .sec.is-selected .sec-h__name,
+  .sec.is-selected .sec__lines {
+    animation-timing-function: step-end;
+  }
+
+  .sec-h__chev,
+  .rail-caret svg,
+  .pane-h__chev {
+    transition: none;
+  }
+
+  .status-icon--running svg {
+    animation: none;
+  }
+
+  .next.swap {
+    animation-timing-function: step-end;
+  }
+}
+
+@media (max-width: 760px) {
+  .run-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  /* Above the log, the sidebar scrolls as one column rather than sharing
+   * its little height out between the panes; the Runs list keeps a few
+   * rows' height of its own. */
+  .side {
+    max-height: 45vh;
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .pane {
+    flex: none;
+  }
+
+  .pane-b {
+    overflow: visible;
+  }
+
+  .pane--runs .pane-b {
+    max-height: 170px;
+    overflow: auto;
+  }
+
+  .ln {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .sec__lines .ln {
+    padding-left: 36px;
+  }
+
+  .ln__no {
+    width: 36px;
+  }
+
+  .ln__ts,
+  .view-opt--timestamps {
+    display: none;
+  }
+
+  .sec-h {
+    padding: 9px 12px;
+  }
+
+  .sec-h__meta {
+    display: none;
+  }
 }
 
 .notice--error {
@@ -878,7 +2126,7 @@ details[open] > .fold__head::before {
  * the page has to read that way before it is opened.
  */
 .run-actions__abandon {
-  margin-top: 14px;
+  margin-top: 4px;
   border: 1px solid var(--line);
   border-left: 3px solid var(--danger);
   border-radius: var(--radius);
@@ -917,23 +2165,6 @@ details[open] > .fold__head::before {
   border-radius: var(--radius);
   background: var(--surface);
   width: 14ch;
-}
-
-/* Both sit in the run header's top row beside Retry. No margin of their own:
- * the row's own ``gap`` does the spacing. The counters take the
- * ``margin-left: auto`` so the tallies sit out at the right, away from the
- * buttons -- reading matter, not another control. */
-.run-header__log {
-  margin: 0;
-}
-
-.run-header__counters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-left: auto;
-  color: var(--ink-muted);
-  font-size: 12px;
 }
 
 /* -- warnings ----------------------------------------------------------- */
@@ -1058,6 +2289,25 @@ details[open] > .fold__head::before {
 
 .walkthrough__row--bypassed code {
   color: var(--ink-muted);
+}
+
+/* A step's kind; a source adds an icon before the word (see _kind.html). */
+.kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.kind__icon {
+  flex: none;
+}
+
+/* The same icon inline with a name: an ingest stage's heading, and a
+   source, table or views step in the run console. */
+.ingest-icon {
+  vertical-align: -2px;
+  margin-right: 4px;
 }
 
 .badge {

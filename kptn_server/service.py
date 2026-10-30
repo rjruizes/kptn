@@ -148,6 +148,16 @@ def _resolve_duckdb_output_table(tasks_conf: Any, table_name: str) -> Optional[s
     return fallback
 
 
+def _apply_bronze_search_path(conn: object, project_dir: Path) -> None:
+    """Let the preview connection resolve ``raw.*`` source views."""
+    from kptn.sources.build import BRONZE_DIR
+    from kptn.sources.views import apply_search_path
+
+    bronze = project_dir / BRONZE_DIR
+    if bronze.is_dir():
+        apply_search_path(conn, bronze)
+
+
 def _duckdb_connection_from_runtime_config(
     runtime_config: RuntimeConfig,
 ) -> tuple[Optional[object], Optional[str]]:
@@ -363,6 +373,7 @@ def get_duckdb_table_columns(config_path: Path, table_name: str) -> dict[str, An
         conn, conn_message = _duckdb_connection_from_runtime_config(runtime_config)
         if conn is None:
             return {"message": conn_message or "DuckDB connection unavailable"}
+        _apply_bronze_search_path(conn, project_dir)
 
         resolved_table = _resolve_duckdb_output_table(tasks_conf, table_name or "")
         if not resolved_table:
@@ -409,6 +420,7 @@ def get_duckdb_preview(
         conn, conn_message = _duckdb_connection_from_runtime_config(runtime_config)
         if conn is None:
             return {"message": conn_message or "DuckDB connection unavailable"}
+        _apply_bronze_search_path(conn, project_dir)
 
         if sql is not None:
             prepared_sql, error = _prepare_client_sql(sql, limit=limit)
