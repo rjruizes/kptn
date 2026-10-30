@@ -424,11 +424,30 @@ class RunStore:
             self._path, timeout=5.0, isolation_level=None, check_same_thread=False
         )
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+        self._enable_wal(conn)
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         self._ensure_schema(conn)
         return conn
+
+    @staticmethod
+    def _enable_wal(conn: sqlite3.Connection) -> None:
+        """Switch to WAL, retrying while another connection holds the lock.
+
+        Two connections opening a brand-new database at once (the server and
+        a worker, say) both switch its journal mode, and SQLite can fail that
+        switch with ``database is locked`` at once rather than wait out the
+        busy timeout. Retried for as long as that timeout would have waited.
+        """
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                if exc.sqlite_errorcode != sqlite3.SQLITE_BUSY or time.monotonic() > deadline:
+                    raise
+            time.sleep(0.01)
 
     @staticmethod
     def _schema_version(conn: sqlite3.Connection) -> int:
