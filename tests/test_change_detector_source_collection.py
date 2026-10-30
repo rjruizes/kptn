@@ -312,6 +312,25 @@ def test_two_lambdas_on_one_line_hash_differently(lambda_pkg) -> None:
     assert hash_task_source(defs.A) != hash_task_source(defs.B)
 
 
+def test_outer_lambda_hash_tracks_its_own_default(lambda_pkg) -> None:
+    # The outer lambda's code starts at the inner ``lambda`` keyword, so a
+    # span match alone would hash the inner lambda and miss the default.
+    pkg = lambda_pkg({"defs.py": "T = lambda x, offset=1: (lambda y: x + y + offset)\n"})
+    defs = pkg.import_module("defs")
+    before = hash_task_source(defs.T)
+    pkg.write("defs.py", "T = lambda x, offset=2: (lambda y: x + y + offset)\n")
+    defs = pkg.reload("defs")
+    assert hash_task_source(defs.T) != before
+
+
+def test_nested_lambdas_hash_their_own_source(lambda_pkg) -> None:
+    pkg = lambda_pkg({"defs.py": "T = lambda x: (lambda x: x + 1)\n"})
+    defs = pkg.import_module("defs")
+    collector = hasher_mod._SourceCollector(pkg.root.parent)
+    assert collector.collect(defs.T) == ["lambda x: (lambda x: x + 1)"]
+    assert collector.collect(defs.T(0)) == ["lambda x: x + 1"]
+
+
 def test_lambda_hash_stable_across_comment_edits(lambda_pkg) -> None:
     pkg = lambda_pkg({"defs.py": "T = lambda f: f.upper()\n"})
     defs = pkg.import_module("defs")

@@ -168,6 +168,17 @@ def _find_package_root(file_path: Path) -> Path:
     return current
 
 
+def _lambda_params(node: ast.Lambda) -> tuple[str, ...]:
+    """*node*'s parameter names in ``co_varnames`` order."""
+    a = node.args
+    names = [p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs)]
+    if a.vararg:
+        names.append(a.vararg.arg)
+    if a.kwarg:
+        names.append(a.kwarg.arg)
+    return tuple(names)
+
+
 # Line breaks as the tokenizer counts them, so ``lineno`` indexes the result.
 # ``str.splitlines`` also breaks on form feeds and other separators, which would
 # shift every function after one.
@@ -231,15 +242,19 @@ class _ModuleSummary:
         """The ``ast.Lambda`` that compiled to *fn*, or None.
 
         Located by the earliest source position of *fn*'s code object, taking
-        the innermost lambda whose span contains it, so two lambdas on one line
-        are distinguished. Zero-width positions are skipped: the ``RESUME``
+        the innermost lambda whose *body* contains it and whose parameters are
+        the code object's, so two lambdas on one line are distinguished. The
+        body rather than the whole lambda: a lambda that returns a lambda
+        starts its code at the inner ``lambda`` keyword, which lies outside
+        the inner one's body. Zero-width positions are skipped: the ``RESUME``
         instruction every code object starts with sits at column 0.
         """
         if self.tree is None:
             return None
+        code = fn.__code__
         positions = [
             (line, col)
-            for line, end_line, col, end_col in fn.__code__.co_positions()
+            for line, end_line, col, end_col in code.co_positions()
             if line is not None
             and col is not None
             and (line, col) != (end_line, end_col)
@@ -247,15 +262,22 @@ class _ModuleSummary:
         if not positions:
             return None
         target = min(positions)
+        n_params = (
+            code.co_argcount
+            + code.co_kwonlyargcount
+            + bool(code.co_flags & inspect.CO_VARARGS)
+            + bool(code.co_flags & inspect.CO_VARKEYWORDS)
+        )
+        params = code.co_varnames[:n_params]
         best: ast.Lambda | None = None
         for node in ast.walk(self.tree):
-            if not isinstance(node, ast.Lambda) or node.end_lineno is None:
+            if not isinstance(node, ast.Lambda) or node.body.end_lineno is None:
                 continue
-            start = (node.lineno, node.col_offset)
-            end = (node.end_lineno, node.end_col_offset or 0)
-            if start <= target <= end and (
-                best is None or start >= (best.lineno, best.col_offset)
-            ):
+            start = (node.body.lineno, node.body.col_offset)
+            end = (node.body.end_lineno, node.body.end_col_offset or 0)
+            if not start <= target <= end or _lambda_params(node) != params:
+                continue
+            if best is None or start >= (best.body.lineno, best.body.col_offset):
                 best = node
         return best
 
