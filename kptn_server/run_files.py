@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import uuid
 from contextlib import suppress
@@ -163,6 +164,29 @@ def write_atomically(path: Path, data: bytes, *, mode: int | None = None) -> Non
             if mode is not None:
                 os.fchmod(handle.fileno(), mode)
         os.replace(temporary, path)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(temporary)
+        raise
+
+
+def copy_run_file(source: Path, runs_dir: Path) -> None:
+    """Copy an earlier run's file into *runs_dir*, unless one is there already.
+
+    For the runs recorded before ``settings.shared_logs`` was turned on or
+    off: the index goes beside the newest run, and a reader looks for every
+    run it lists there. Copied, not moved -- ``ui.db`` still reads the
+    original by byte offset. A run's file is complete once the run ends, so
+    a copy already there is never refreshed.
+    """
+    target = runs_dir / source.name
+    if target.exists() or not source.is_file():
+        return
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        shutil.copyfile(source, temporary)
+        os.chmod(temporary, LOG_FILE_MODE)
+        os.replace(temporary, target)
     except BaseException:
         with suppress(OSError):
             os.unlink(temporary)
@@ -663,6 +687,7 @@ __all__ = [
     "RunFileError",
     "append_lines",
     "build_index",
+    "copy_run_file",
     "counters",
     "encode_event",
     "missing_shared_logs",

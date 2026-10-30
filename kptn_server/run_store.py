@@ -574,6 +574,7 @@ class RunStore:
         finally:
             self._release(conn)
 
+        self._gather_run_files(canonical_root, log_path.parent)
         self.publish_index(canonical_root)
         return RunRecord(
             run_id=run_id,
@@ -1130,8 +1131,9 @@ class RunStore:
         It goes beside the newest run's file -- ``.kptn/state/runs/`` or the shared
         logs directory, whichever that run was recorded to -- so a change to
         ``settings.shared_logs`` takes effect from the next run, and this,
-        called every few seconds, never rereads ``kptn.yaml``. A project with
-        no runs has nothing to publish.
+        called every few seconds, never rereads ``kptn.yaml``. That run copies
+        its predecessors' files over (:meth:`_gather_run_files`). A project
+        with no runs has nothing to publish.
 
         Unforced calls are rate-limited to one per
         :data:`~kptn_server.run_files.INDEX_PUBLISH_INTERVAL_SECONDS` per
@@ -1187,6 +1189,48 @@ class RunStore:
             self._report_publish_failure(root, exc)
         finally:
             self._release(conn)
+
+    def _gather_run_files(self, project_root: Path, runs_dir: Path) -> None:
+        """Copy the files of the runs the index will list into *runs_dir*.
+
+        The index goes beside the newest run, and a reader looks for every
+        run it lists there. Runs recorded before ``settings.shared_logs`` was
+        turned on or off have their files in the other directory, and without
+        a copy a colleague would see them with no output. Called as a run is
+        created, while the run lock keeps every earlier run finished.
+
+        Never raises: a run starts whether or not its predecessors' files
+        could be copied.
+        """
+        conn = self._acquire()
+        try:
+            rows = conn.execute(
+                """
+                SELECT log_path FROM runs WHERE project_root = ?
+                ORDER BY created_at DESC, run_id DESC LIMIT ?
+                """,
+                (str(project_root), INDEX_LIMIT),
+            ).fetchall()
+        finally:
+            self._release(conn)
+        failed: list[str] = []
+        for row in rows:
+            source = Path(row["log_path"])
+            if source.parent == runs_dir:
+                continue
+            try:
+                run_files.copy_run_file(source, runs_dir)
+            except OSError as exc:
+                failed.append(f"{source.name}: {exc.strerror or exc}")
+        if failed:
+            _LOGGER.warning(
+                "could not copy %d earlier run file(s) of %s into %s, so other "
+                "people's kptn ui will show those runs without output: %s",
+                len(failed),
+                project_root,
+                runs_dir,
+                "; ".join(failed),
+            )
 
     @staticmethod
     def _carried(conn: sqlite3.Connection, runs_dir: Path) -> list[IndexedRun]:

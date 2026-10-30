@@ -92,6 +92,49 @@ def test_the_index_follows_the_newest_run_after_the_setting_changes(tmp_path: Pa
     assert [run.run_id for run in read_index(_logs(tmp_path))] == [after.run_id, before.run_id]
 
 
+def test_turning_shared_logs_on_copies_earlier_runs_beside_the_index(tmp_path: Path) -> None:
+    project = _project(tmp_path, yaml=None)
+    store = _store(project)
+    before = _finished_run(store, project)
+    (project / "kptn.yaml").write_text(SHARED_LOGS_YAML)
+    (tmp_path / "r7" / "_kptn_logs").mkdir()
+    _finished_run(store, project)
+
+    copied = _logs(tmp_path) / before.log_path.name
+    assert copied.read_bytes() == before.log_path.read_bytes()
+    assert stat.S_IMODE(copied.stat().st_mode) == LOG_FILE_MODE
+    assert before.log_path.exists()  # ui.db still reads the original
+    assert store.get_run(before.run_id).log_path == before.log_path
+
+
+def test_turning_shared_logs_off_copies_earlier_runs_back(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    store = _store(project)
+    before = _finished_run(store, project)
+    (project / "kptn.yaml").write_text("settings: {}\n")
+    after = _finished_run(store, project)
+
+    local = project.resolve() / ".kptn" / "state" / "runs"
+    assert after.log_path.parent == local
+    assert (local / before.log_path.name).read_bytes() == before.log_path.read_bytes()
+    assert [run.run_id for run in read_index(local)] == [after.run_id, before.run_id]
+
+
+def test_a_copy_already_there_is_left_alone(tmp_path: Path) -> None:
+    project = _project(tmp_path, yaml=None)
+    store = _store(project)
+    before = _finished_run(store, project)
+    (project / "kptn.yaml").write_text(SHARED_LOGS_YAML)
+    (tmp_path / "r7" / "_kptn_logs").mkdir()
+    _finished_run(store, project)
+    copied = _logs(tmp_path) / before.log_path.name
+    copied.write_text("kept\n")
+
+    _finished_run(store, project)
+
+    assert copied.read_text() == "kept\n"
+
+
 def test_ensure_index_writes_beside_the_newest_run(tmp_path: Path) -> None:
     project = _project(tmp_path)
     store = _store(project)

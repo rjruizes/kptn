@@ -362,6 +362,19 @@ def test_their_runs_are_read_from_their_shared_logs(projects_root: Path, theirs:
     assert "hello &lt;b&gt;world&lt;/b&gt;" in page.text
 
 
+def test_runs_from_before_shared_logs_keep_their_output(projects_root: Path, theirs: Path) -> None:
+    before = publish_run(theirs, lines=("from before\n",))
+    _share_logs(theirs)
+    publish_run(theirs)
+    client = TestClient(create_multi_app(projects_root, USER))
+
+    page = client.get(f"/view/{OTHER}/runs/{before.run_id}")
+    download = client.get(f"/view/{OTHER}/runs/{before.run_id}/log")
+
+    assert "from before" in page.text
+    assert download.status_code == 200 and b"from before" in download.content
+
+
 def test_shared_logs_outside_the_projects_root_are_not_read(
     projects_root: Path, theirs: Path, tmp_path: Path
 ) -> None:
