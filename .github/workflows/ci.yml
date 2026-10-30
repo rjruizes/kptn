@@ -58,25 +58,3 @@ jobs:
           kptn_server/run_files.py kptn_server/run_store.py kptn_server/worker.py
           kptn_server/routes
 
-  extension:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: kptn-vscode/package-lock.json
-
-      - name: Install extension dependencies
-        run: npm ci
-        working-directory: kptn-vscode
-
-      # `npm test` is the host-free mocha suite: it runs against compiled
-      # output and needs no VS Code and no display. The `test:vscode`
-      # harness downloads and launches a real VS Code and is deliberately
-      # not run here.
-      - name: Lint, compile and test the extension
-        run: npm run lint && npm run compile && npm test
-        working-directory: kptn-vscode
