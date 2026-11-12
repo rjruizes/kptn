@@ -17,6 +17,11 @@ RAW_SCHEMA_PREFIX = "raw_"
 
 _NESTED_TYPE_IDS = frozenset({"struct", "list", "map", "array", "union"})
 
+#: The most SELECTs one ``UNION ALL BY NAME`` joins. DuckDB parses a chain of
+#: unions as nested expressions and refuses one nested 1000 deep, which a
+#: table of about 1000 files reaches; lifting that limit crashes it instead.
+_UNION_WIDTH = 250
+
 
 def _sql_str(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
@@ -105,8 +110,27 @@ def _prefix(source: str, table: str) -> str:
 
 
 def union_view(conn: duckdb.DuckDBPyConnection, source: str, table: str, selects: list[str]) -> str:
-    """Create ``raw_<source>."<table>"`` as the ``UNION ALL BY NAME`` of *selects*."""
+    """Create ``raw_<source>."<table>"`` as the ``UNION ALL BY NAME`` of *selects*.
+
+    More than ``_UNION_WIDTH`` selects are unioned in groups, each written to
+    a table, and the groups' tables unioned in turn: the same columns, in the
+    same order, and the rows still in file order, which unions nested as
+    views or subqueries do not keep.
+    """
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name(source)}")
+    prefix = _prefix(source, table)
+    level = 0
+    while len(selects) > _UNION_WIDTH:
+        groups: list[str] = []
+        for start in range(0, len(selects), _UNION_WIDTH):
+            group = f"_kptn_source_union_{prefix}_{level}_{start // _UNION_WIDTH}"
+            conn.execute(
+                f"CREATE OR REPLACE TABLE {group} AS "
+                + " UNION ALL BY NAME ".join(selects[start : start + _UNION_WIDTH])
+            )
+            groups.append(f"SELECT * FROM {group}")
+        selects = groups
+        level += 1
     name = view_name(source, table)
     conn.execute(f"CREATE OR REPLACE VIEW {name} AS " + " UNION ALL BY NAME ".join(selects))
     return name
