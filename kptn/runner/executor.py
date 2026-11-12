@@ -45,7 +45,8 @@ from kptn.sources.build import (
     remove_stale_tables,
     state_value,
 )
-from kptn.sources.checks import warn_at
+from kptn.sources.checks import ChecksFailed, warn_at
+from kptn.sources.records import write_warnings
 from kptn.sources.rejects import NO_TABLE, RejectedFile, count_rejects, rejects_path, write_rejects
 from kptn.sources.shared import SharedBronze, link
 from kptn.sources.views import apply_search_path, register_views
@@ -439,8 +440,8 @@ def _execute_source(
                         target, outcome = sharing.publish(plan, node.spec, root=root)
                     else:
                         target, outcome = hit, "restored"
-                    if plan.rejects is not None:
-                        link(plan.rejects, sharing.rejects(plan))
+                    for record, shared_record in sharing.records(plan):
+                        link(record, shared_record)
                     link(plan.parquet, target)
                 else:
                     build_table(plan, node.spec, root=root)
@@ -455,6 +456,9 @@ def _execute_source(
                 # Through the link, for a shared table: the entry never changes.
                 value = state_value(plan)
         except Exception as exc:
+            if isinstance(exc, ChecksFailed) and plan.warnings is not None:
+                # The table is not replaced, but what warned is still recorded.
+                write_warnings(plan.table, exc.warnings, plan.warnings)
             _emit_task_finished(
                 emitter, plan.state_name, mode="source_table", status="failed",
                 started_at=table_started, error=str(exc),

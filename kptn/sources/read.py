@@ -8,6 +8,7 @@ from typing import Any, Callable
 import duckdb
 
 from kptn.sources.files import SourceFile
+from kptn.sources.records import FileColumn
 
 SOURCE_FILE_COLUMN = "_source_file"
 #: Each source's views live in their own schema, ``raw_<source>``, so two
@@ -86,6 +87,10 @@ def _text_select(rel: duckdb.DuckDBPyRelation, file: SourceFile, temp_view: str)
     return f"SELECT {', '.join(exprs)} FROM {temp_view}"
 
 
+def _file_columns(rel: duckdb.DuckDBPyRelation, file: SourceFile) -> list[FileColumn]:
+    return [FileColumn(file.rel, c.lower(), c) for c in rel.columns]
+
+
 def _file_relation(
     conn: duckdb.DuckDBPyConnection, file: SourceFile, read: Callable[[str], Any] | None
 ) -> duckdb.DuckDBPyRelation:
@@ -113,11 +118,13 @@ def create_table_view(
     table: str,
     files: list[SourceFile],
     read: Callable[[str], Any] | None = None,
+    columns: list[FileColumn] | None = None,
 ) -> str:
     """Create ``raw_<source>."<table>"`` over *files* and return its name.
 
     Files are combined in ``_source_file`` order with ``UNION ALL BY NAME``, so
-    the result does not depend on the order *files* arrive in.
+    the result does not depend on the order *files* arrive in. Each file's
+    columns are added to *columns*, when given.
     """
     if not files:
         raise ValueError(f"Table {source}.{table} has no files.")
@@ -128,6 +135,8 @@ def create_table_view(
         temp_view = f"_kptn_source_file_{prefix}_{i}"
         rel.create_view(temp_view, replace=True)
         selects.append(_text_select(rel, file, temp_view))
+        if columns is not None:
+            columns.extend(_file_columns(rel, file))
     return union_view(conn, source, table, selects)
 
 
@@ -138,9 +147,9 @@ def read_file_table(
     file: SourceFile,
     index: int,
     read: Callable[[str], Any] | None = None,
-) -> str:
+) -> tuple[str, list[FileColumn]]:
     """Read one file of a table into its own table, as ``create_table_view``
-    would serve it, and return that table's name.
+    would serve it, and return that table's name and the file's columns.
 
     The file is read in full here: DuckDB reads CSV lazily, so an error past
     the rows it samples would otherwise surface only when the whole table is
@@ -153,6 +162,7 @@ def read_file_table(
     rel.create_view(raw_view, replace=True)
     try:
         conn.execute(f"CREATE OR REPLACE TABLE {name} AS {_text_select(rel, file, raw_view)}")
+        columns = _file_columns(rel, file)
     finally:
         conn.execute(f"DROP VIEW IF EXISTS {raw_view}")
-    return name
+    return name, columns

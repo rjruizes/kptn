@@ -185,7 +185,7 @@ def test_label_names_the_check_file(tmp_path: Path) -> None:
     check.write_text("checks for a:\n  - row_count > 0\n")
     cache = _shared(tmp_path / "cache")
     plan = _plan(root)
-    with patch("kptn.sources.build.run_checks", return_value=True):
+    with patch("kptn.sources.build.run_checks", return_value=[]):
         cache.publish(plan, _spec(root), root=root)
     label = json.loads((cache.entry(plan) / ENTRY_LABEL).read_text())
     assert label["check_file"] == "checks/s/a.yml"

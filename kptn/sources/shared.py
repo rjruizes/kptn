@@ -7,6 +7,8 @@ Layout, under the root named by ``settings.shared_bronze``::
         entry.json                   what built it, from which files; never read by kptn
         <table>.parquet
         _rejected.parquet            the files check= left out, for a source with one
+        _warnings.parquet            the checks that warned, for a table with a check file
+        _columns.parquet             each file's columns, for a table with a check file
 
 An entry is immutable and complete whenever it exists. Several Unix accounts
 share one directory over NFS, so everything kptn creates here gets explicit
@@ -46,6 +48,8 @@ FILE_MODE = 0o664
 
 ENTRY_LABEL = "entry.json"
 ENTRY_REJECTS = "_rejected.parquet"
+ENTRY_WARNINGS = "_warnings.parquet"
+ENTRY_COLUMNS = "_columns.parquet"
 _TMP = ".tmp"
 
 Outcome = Literal["published", "linked"]
@@ -62,13 +66,30 @@ class SharedBronze:
     def lookup(self, plan: TablePlan) -> Path | None:
         """The entry's parquet, or None when no build of this key is shared."""
         parquet = self.entry(plan) / f"{plan.table}.parquet"
-        if plan.rejects is not None and not self.rejects(plan).is_file():
+        if not all(shared.is_file() for _, shared in self.records(plan)):
             return None
         return parquet if parquet.is_file() else None
 
     def rejects(self, plan: TablePlan) -> Path:
         """The entry's record of rejected files, for a source with ``check=``."""
         return self.entry(plan) / ENTRY_REJECTS
+
+    def warnings(self, plan: TablePlan) -> Path:
+        """The entry's record of the checks that warned, for a checked table."""
+        return self.entry(plan) / ENTRY_WARNINGS
+
+    def columns(self, plan: TablePlan) -> Path:
+        """The entry's record of each file's columns, for a checked table."""
+        return self.entry(plan) / ENTRY_COLUMNS
+
+    def records(self, plan: TablePlan) -> list[tuple[Path, Path]]:
+        """Each record *plan* keeps, as (its local path, its place in the entry)."""
+        pairs = (
+            (plan.rejects, self.rejects(plan)),
+            (plan.warnings, self.warnings(plan)),
+            (plan.columns, self.columns(plan)),
+        )
+        return [(local, shared) for local, shared in pairs if local is not None]
 
     def publish(self, plan: TablePlan, spec: SourceSpec, *, root: Path) -> tuple[Path, Outcome]:
         """Build *plan*'s table into the shared bronze. Returns the entry's parquet and
@@ -83,12 +104,20 @@ class SharedBronze:
         try:
             parquet = tmp / f"{plan.table}.parquet"
             rejects = tmp / ENTRY_REJECTS if plan.rejects is not None else None
-            build_table(plan, spec, root=root, dest=parquet, rejects_dest=rejects)
+            records = [tmp / shared.name for _, shared in self.records(plan)]
+            build_table(
+                plan,
+                spec,
+                root=root,
+                dest=parquet,
+                rejects_dest=tmp / ENTRY_REJECTS,
+                warnings_dest=tmp / ENTRY_WARNINGS,
+                columns_dest=tmp / ENTRY_COLUMNS,
+            )
             label = tmp / ENTRY_LABEL
             label.write_text(json.dumps(_label(plan, spec, parquet, rejects, root), indent=2) + "\n")
-            for f in (parquet, label, rejects):
-                if f is not None:
-                    os.chmod(f, FILE_MODE)
+            for f in (parquet, label, *records):
+                os.chmod(f, FILE_MODE)
             entry = self.entry(plan)
             _mkdir(entry.parent.parent)
             _mkdir(entry.parent)
