@@ -14,6 +14,7 @@ import duckdb
 from kptn.exceptions import TaskError
 from kptn.sources.files import SourceFile
 from kptn.sources.read import schema_name
+from kptn.sources.records import CheckWarning
 
 CHECKS_DIR = Path("checks")
 
@@ -32,6 +33,15 @@ def warn_at(message: str, declared_at: tuple[str, int] | None) -> None:
         warnings.warn(message, UserWarning, stacklevel=3)
 
 
+class ChecksFailed(TaskError):
+    """A table's check file failed. ``warnings`` holds the checks that only
+    warned, so a failed table can still record them."""
+
+    def __init__(self, message: str, warnings: list[CheckWarning]) -> None:
+        super().__init__(message)
+        self.warnings = warnings
+
+
 def _scan_in_schema(scan: Any, schema: str) -> None:
     # Soda resolves unqualified table names in one schema. Its public API has
     # no setter for DuckDB, so this mirrors what nph's _validate_with_soda does.
@@ -46,11 +56,12 @@ def run_checks(
     root: Path,
     declared_at: tuple[str, int] | None = None,
     file_checked: bool = False,
-) -> bool:
+) -> list[CheckWarning] | None:
     """Run the table's check file against ``raw_<source>.<table>`` on *conn*.
 
     Soda looks tables up in the source's schema, so a check file names the
-    table alone: ``checks for <table>:``.
+    table alone: ``checks for <table>:``. SQL a check writes out itself, such
+    as a ``group by`` query, names it in full: ``raw_<source>.<table>``.
 
     *declared_at* is where ``kptn.source(...)`` was called; a missing-check
     warning points there rather than into kptn. A table whose files a
@@ -58,10 +69,12 @@ def run_checks(
     gets no warning.
 
     Returns:
-        True if checks ran and passed; False if the table has no check file.
+        The checks that warned, in the check file's order, when checks ran
+        and none failed; None if the table has no check file.
 
     Raises:
-        TaskError: a check failed, or a check file exists but Soda is missing.
+        ChecksFailed: a check failed, or the scan hit an error.
+        TaskError: a check file exists but Soda is missing.
     """
     path = check_path(root, source, table)
     if not path.exists():
@@ -70,7 +83,7 @@ def run_checks(
                 f"No checks for {source}.{table}: add {path.relative_to(root)} to validate it.",
                 declared_at,
             )
-        return False
+        return None
     try:
         from soda.scan import Scan
     except ImportError as exc:
@@ -85,10 +98,15 @@ def run_checks(
     _scan_in_schema(scan, schema_name(source))
     scan.add_sodacl_yaml_file(str(path))
     scan.execute()
+    warned = [
+        CheckWarning(check.name)
+        for check in scan.get_checks_warn_or_fail()
+        if check.outcome is not None and check.outcome.name == "WARN"
+    ]
     if scan.has_check_fails() or scan.has_error_logs():
         detail = scan.get_checks_fail_text() or scan.get_logs_text()
-        raise TaskError(f"Checks failed for {source}.{table} ({path}):\n{detail}")
-    return True
+        raise ChecksFailed(f"Checks failed for {source}.{table} ({path}):\n{detail}", warned)
+    return warned
 
 
 def file_check_reason(

@@ -30,9 +30,9 @@ def test_check_path_convention(tmp_path: Path) -> None:
     assert check_path(tmp_path, "sales", "orders") == tmp_path / "checks" / "sales" / "orders.yml"
 
 
-def test_missing_check_file_warns_and_returns_false(tmp_path: Path) -> None:
+def test_missing_check_file_warns_and_returns_none(tmp_path: Path) -> None:
     with pytest.warns(UserWarning, match=r"checks/sales/orders\.yml"):
-        assert run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path) is False
+        assert run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path) is None
 
 
 def test_check_file_without_soda_is_an_error(tmp_path: Path, monkeypatch) -> None:
@@ -43,7 +43,7 @@ def test_check_file_without_soda_is_an_error(tmp_path: Path, monkeypatch) -> Non
         run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path)
 
 
-def test_passing_checks_return_true(tmp_path: Path) -> None:
+def test_passing_checks_return_no_warnings(tmp_path: Path) -> None:
     pytest.importorskip("soda.scan")
     _write_check(
         tmp_path,
@@ -52,7 +52,7 @@ def test_passing_checks_return_true(tmp_path: Path) -> None:
         "    fail:\n"
         "      when required column missing: [orderid, amount]\n",
     )
-    assert run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path) is True
+    assert run_checks(_conn_with_view(), source="sales", table="orders", root=tmp_path) == []
 
 
 def test_checks_name_columns_in_lowercase_whatever_the_header(tmp_path: Path) -> None:
@@ -70,7 +70,7 @@ def test_checks_name_columns_in_lowercase_whatever_the_header(tmp_path: Path) ->
         "      when required column missing: [orderid, amount]\n"
         "- missing_count(orderid) = 0\n",
     )
-    assert run_checks(conn, source="sales", table="orders", root=tmp_path) is True
+    assert run_checks(conn, source="sales", table="orders", root=tmp_path) == []
 
 
 def test_failing_checks_raise(tmp_path: Path) -> None:

@@ -304,6 +304,39 @@ A file that cannot be read, or that the check rejects, is left out with a warnin
 
 Files left out are listed in the view `raw_<source>._rejected`, with columns `table_name`, `_source_file` and `reason`, and kept in `.kptn/_bronze/<source>/_rejected/`. A source with `check=` keeps that list even when it is empty, so the view is always there. A fixed file changes its size or modification time, so its table rebuilds and picks it up. The check's code, and the functions it calls in your project, are part of each table's cache key, so a changed check rebuilds the tables; a check should depend on the file alone, since kptn cannot see other files it reads. Without `check=`, a file that cannot be read stops the run.
 
+### Checks that warn
+
+A check that fails stops the run and leaves the table as it was. A check that only warns (`warn: when > 0`) lets the table through, and kptn keeps what warned with the table, so the warnings are still there on later runs, when the table is cached and its checks do not run again.
+
+A table with a check file gets two records, served as views beside the source's tables:
+
+| View | Columns | Holds |
+|------|---------|-------|
+| `raw_<source>._warnings` | `table_name`, `check_name` | The checks that warned when each table was last built, by the name Soda reports. A `group by` check's name ends with its group, such as `is empty [m1]`. |
+| `raw_<source>._columns` | `table_name`, `_source_file`, `column_name`, `original_name` | The columns each file had: `column_name` as the table names it, in lowercase, and `original_name` as the file spells it. The table itself fills a column a file lacks with NULLs, so only this record says which files lacked it. |
+
+Both are written with the table, even when empty, under `.kptn/_bronze/<source>/_warnings/` and `_columns/`, and shared with it in a shared bronze. A table without a check file keeps neither. When a check fails, the table and its columns stay as they were, but `_warnings` records what warned in the failed build.
+
+While a table's checks run, `raw_<source>._columns` holds that table's columns, so a check can ask about them. SQL a check writes out itself names tables in full, `raw_<source>.<table>`; only `checks for <table>:` takes the name alone:
+
+```yaml
+checks for orders:
+- group by:
+    name: columns nobody listed
+    query: |
+      SELECT column_name, 1 AS new_column FROM raw_sales._columns
+      WHERE column_name NOT IN ('orderid', 'amount')
+      GROUP BY column_name
+    fields:
+    - column_name
+    checks:
+    - new_column:
+        name: is new
+        warn: when = 1
+```
+
+A task after the source reads `raw_<source>._warnings` like any other view, to report the warnings however the project wants.
+
 ### Loading a source in a test
 
 A task that reads a source's views can be tested without running the pipeline. `kptn.sources.load` reads the source's files into tables with the views' names, `raw_<source>.<table>`, on any DuckDB connection. The tables hold what a run's views would serve, and nothing is written under `.kptn/`.
@@ -324,7 +357,7 @@ def test_load_sales():
     ...
 ```
 
-Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Check files are skipped unless you pass `soda_checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory). A source's `check=` always runs, as it does in a run, since it decides which files the tables hold. Files left out are listed in a `raw_<source>._rejected` table. Tables of the same names are replaced.
+Paths in `files=` are relative to the current directory. When `files=` is a callable, such as `files=lambda base: f"{base}/sales"`, pass the values it takes by name as the third argument: `kptn.sources.load(conn, sales, {"base": str(tmp_path)})` reads `tmp_path/sales`. Check files are skipped unless you pass `soda_checks=True`, which runs them from `checks/<source>/` under `root=` (default: the current directory). A source's `check=` always runs, as it does in a run, since it decides which files the tables hold. Files left out are listed in a `raw_<source>._rejected` table. Tables of the same names are replaced. Tables with a check file also get `raw_<source>._columns`, and with `soda_checks=True` `raw_<source>._warnings`.
 
 ### Shared bronze
 

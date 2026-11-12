@@ -8,7 +8,8 @@ import pandas as pd
 import pytest
 
 from kptn.sources.files import SourceFile
-from kptn.sources.read import create_table_view
+import kptn.sources.read as read_module
+from kptn.sources.read import create_table_view, union_view
 
 
 def _file(root: Path, rel: str, text: str) -> SourceFile:
@@ -124,3 +125,27 @@ def test_tables_on_one_connection_keep_their_own_files(tmp_path: Path) -> None:
     first = create_table_view(conn, "s", "a", [a])
     create_table_view(conn, "s", "b", [b])
     assert _rows(conn, first) == [("1", "d/a.csv")]
+
+
+def test_a_union_past_duckdbs_expression_depth(tmp_path: Path) -> None:
+    # One chain of 1000 unions is nested past DuckDB's default depth limit.
+    selects = [f"SELECT '{i}' AS n" for i in range(1200)]
+    conn = duckdb.connect()
+    view = union_view(conn, "s", "t", selects)
+    assert conn.sql(f"SELECT count(*), count(DISTINCT n) FROM {view}").fetchone() == (1200, 1200)
+
+
+@pytest.mark.parametrize("width", [2, 3])
+def test_grouped_unions_match_one_union(tmp_path: Path, monkeypatch, width: int) -> None:
+    # Rows in file order, too: views or subqueries in place of the group
+    # tables scramble it.
+    files = [
+        _file(tmp_path, f"d/{i}.csv", f"id,{'abcdefg'[i % 7]}\n" + f"{i},v{i}\n" * 50)
+        for i in range(10)
+    ]
+    conn = duckdb.connect()
+    whole = conn.sql(f"SELECT * FROM {create_table_view(conn, 's', 'whole', files)}")
+    monkeypatch.setattr(read_module, "_UNION_WIDTH", width)  # 10 files nest 2 or 3 deep
+    grouped = conn.sql(f"SELECT * FROM {create_table_view(conn, 's', 'grouped', files)}")
+    assert grouped.columns == whole.columns
+    assert grouped.fetchall() == whole.fetchall()

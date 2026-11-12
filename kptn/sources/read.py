@@ -8,6 +8,7 @@ from typing import Any, Callable
 import duckdb
 
 from kptn.sources.files import SourceFile
+from kptn.sources.records import FileColumn
 
 SOURCE_FILE_COLUMN = "_source_file"
 #: Each source's views live in their own schema, ``raw_<source>``, so two
@@ -15,6 +16,11 @@ SOURCE_FILE_COLUMN = "_source_file"
 RAW_SCHEMA_PREFIX = "raw_"
 
 _NESTED_TYPE_IDS = frozenset({"struct", "list", "map", "array", "union"})
+
+#: The most SELECTs one ``UNION ALL BY NAME`` joins. DuckDB parses a chain of
+#: unions as nested expressions and refuses one nested 1000 deep, which a
+#: table of about 1000 files reaches; lifting that limit crashes it instead.
+_UNION_WIDTH = 250
 
 
 def _sql_str(value: str) -> str:
@@ -86,6 +92,10 @@ def _text_select(rel: duckdb.DuckDBPyRelation, file: SourceFile, temp_view: str)
     return f"SELECT {', '.join(exprs)} FROM {temp_view}"
 
 
+def _file_columns(rel: duckdb.DuckDBPyRelation, file: SourceFile) -> list[FileColumn]:
+    return [FileColumn(file.rel, c.lower(), c) for c in rel.columns]
+
+
 def _file_relation(
     conn: duckdb.DuckDBPyConnection, file: SourceFile, read: Callable[[str], Any] | None
 ) -> duckdb.DuckDBPyRelation:
@@ -100,8 +110,27 @@ def _prefix(source: str, table: str) -> str:
 
 
 def union_view(conn: duckdb.DuckDBPyConnection, source: str, table: str, selects: list[str]) -> str:
-    """Create ``raw_<source>."<table>"`` as the ``UNION ALL BY NAME`` of *selects*."""
+    """Create ``raw_<source>."<table>"`` as the ``UNION ALL BY NAME`` of *selects*.
+
+    More than ``_UNION_WIDTH`` selects are unioned in groups, each written to
+    a table, and the groups' tables unioned in turn: the same columns, in the
+    same order, and the rows still in file order, which unions nested as
+    views or subqueries do not keep.
+    """
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name(source)}")
+    prefix = _prefix(source, table)
+    level = 0
+    while len(selects) > _UNION_WIDTH:
+        groups: list[str] = []
+        for start in range(0, len(selects), _UNION_WIDTH):
+            group = f"_kptn_source_union_{prefix}_{level}_{start // _UNION_WIDTH}"
+            conn.execute(
+                f"CREATE OR REPLACE TABLE {group} AS "
+                + " UNION ALL BY NAME ".join(selects[start : start + _UNION_WIDTH])
+            )
+            groups.append(f"SELECT * FROM {group}")
+        selects = groups
+        level += 1
     name = view_name(source, table)
     conn.execute(f"CREATE OR REPLACE VIEW {name} AS " + " UNION ALL BY NAME ".join(selects))
     return name
@@ -113,11 +142,13 @@ def create_table_view(
     table: str,
     files: list[SourceFile],
     read: Callable[[str], Any] | None = None,
+    columns: list[FileColumn] | None = None,
 ) -> str:
     """Create ``raw_<source>."<table>"`` over *files* and return its name.
 
     Files are combined in ``_source_file`` order with ``UNION ALL BY NAME``, so
-    the result does not depend on the order *files* arrive in.
+    the result does not depend on the order *files* arrive in. Each file's
+    columns are added to *columns*, when given.
     """
     if not files:
         raise ValueError(f"Table {source}.{table} has no files.")
@@ -128,6 +159,8 @@ def create_table_view(
         temp_view = f"_kptn_source_file_{prefix}_{i}"
         rel.create_view(temp_view, replace=True)
         selects.append(_text_select(rel, file, temp_view))
+        if columns is not None:
+            columns.extend(_file_columns(rel, file))
     return union_view(conn, source, table, selects)
 
 
@@ -138,9 +171,9 @@ def read_file_table(
     file: SourceFile,
     index: int,
     read: Callable[[str], Any] | None = None,
-) -> str:
+) -> tuple[str, list[FileColumn]]:
     """Read one file of a table into its own table, as ``create_table_view``
-    would serve it, and return that table's name.
+    would serve it, and return that table's name and the file's columns.
 
     The file is read in full here: DuckDB reads CSV lazily, so an error past
     the rows it samples would otherwise surface only when the whole table is
@@ -153,6 +186,7 @@ def read_file_table(
     rel.create_view(raw_view, replace=True)
     try:
         conn.execute(f"CREATE OR REPLACE TABLE {name} AS {_text_select(rel, file, raw_view)}")
+        columns = _file_columns(rel, file)
     finally:
         conn.execute(f"DROP VIEW IF EXISTS {raw_view}")
-    return name
+    return name, columns

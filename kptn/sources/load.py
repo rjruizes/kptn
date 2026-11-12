@@ -10,6 +10,14 @@ import duckdb
 
 from kptn.sources.build import plan_source, read_table
 from kptn.sources.read import _ident, schema_name, view_name
+from kptn.sources.records import (
+    COLUMNS,
+    WARNINGS,
+    CheckWarning,
+    FileColumn,
+    create_columns_table,
+    create_warnings_table,
+)
 from kptn.sources.rejects import REJECTED_VIEW, RejectedFile, create_rejects_table
 from kptn.sources.spec import SourceHandle
 
@@ -42,6 +50,10 @@ def load(
     run's view of that name lists them. ``check=`` runs whatever *soda_checks*
     says: it is part of reading the source, like ``read=``.
 
+    Tables with a check file get their records too, as a run's views serve
+    them: ``raw_<source>._columns``, the columns each file had, and, with
+    *soda_checks*, ``raw_<source>._warnings``, the checks that warned.
+
     Args:
         conn: The connection to create the tables on, in its current database.
         source: What ``kptn.source`` returned.
@@ -67,6 +79,8 @@ def load(
     home = f"{_ident(database)}.{_ident(schema)}"
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {_ident(database)}.{schema_name(source.__name__)}")
     created: list[str] = []
+    warned: list[tuple[str, CheckWarning]] = []
+    columns: list[tuple[str, FileColumn]] = []
     for plan in plans:
         conn.execute(f"ATTACH ':memory:' AS {_SCRATCH}")
         try:
@@ -81,8 +95,19 @@ def load(
             conn.execute(f"DETACH {_SCRATCH}")
         created.append(view)
         rejected.extend(read.rejected)
+        if plan.columns is not None:
+            warned.extend((plan.table, w) for w in read.warnings)
+            columns.extend((plan.table, c) for c in read.columns)
     if no_table or spec.check is not None:
         name = view_name(source.__name__, REJECTED_VIEW)
         create_rejects_table(conn, f"{_ident(database)}.{name}", rejected)
         created.append(name)
+    if any(plan.columns is not None for plan in plans):
+        name = view_name(source.__name__, COLUMNS)
+        create_columns_table(conn, f"{_ident(database)}.{name}", columns)
+        created.append(name)
+        if soda_checks:
+            name = view_name(source.__name__, WARNINGS)
+            create_warnings_table(conn, f"{_ident(database)}.{name}", warned)
+            created.append(name)
     return created

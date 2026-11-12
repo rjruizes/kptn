@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kptn.sources.read import schema_name, view_name
+from kptn.sources.records import COLUMNS, WARNINGS
 from kptn.sources.rejects import REJECTED_DIR, REJECTED_VIEW
+
+#: Each record a source's tables can keep: its folder under the source's
+#: bronze, and the view over that folder's files.
+_RECORDS = ((REJECTED_DIR, REJECTED_VIEW), (WARNINGS, WARNINGS), (COLUMNS, COLUMNS))
 
 
 def _sql_str(value: str) -> str:
@@ -45,7 +50,8 @@ def with_search_path(factory: Callable[..., Any], bronze_root: Path) -> Callable
 
 def register_views(conn: Any, bronze_root: Path, source: str) -> list[str]:
     """Make ``raw_<source>`` hold exactly one view per built table of *source*,
-    and ``_rejected`` over its records of rejected files when it keeps any.
+    and ``_rejected``, ``_warnings`` and ``_columns`` over its tables' records
+    of each kind, when it keeps any.
 
     Views of tables the source no longer has are dropped, whichever run
     removed their files. The schema is the source's alone, so nothing else
@@ -56,8 +62,13 @@ def register_views(conn: Any, bronze_root: Path, source: str) -> list[str]:
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
     folder = Path(bronze_root) / source
     tables = sorted(p.stem for p in folder.glob("*.parquet")) if folder.is_dir() else []
-    records = sorted((folder / REJECTED_DIR).glob("*.parquet")) if folder.is_dir() else []
-    keep = tables + ([REJECTED_VIEW] if records else [])
+    records = {
+        view: sorted((folder / directory).glob("*.parquet"))
+        for directory, view in _RECORDS
+        if folder.is_dir()
+    }
+    records = {view: files for view, files in records.items() if files}
+    keep = tables + list(records)
     # fetchall, not fetchone: a partly fetched result on a shared connection
     # can wedge a later CHECKPOINT on DuckDB 1.4.
     existing = conn.execute(
@@ -74,9 +85,9 @@ def register_views(conn: Any, bronze_root: Path, source: str) -> list[str]:
         relative = _sql_str(f"{source}/{table}.parquet")
         conn.execute(f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM read_parquet({relative})")
         created.append(name)
-    if records:
-        name = view_name(source, REJECTED_VIEW)
-        paths = ", ".join(_sql_str(f"{source}/{REJECTED_DIR}/{p.name}") for p in records)
+    for view, files in records.items():
+        name = view_name(source, view)
+        paths = ", ".join(_sql_str(f"{source}/{p.parent.name}/{p.name}") for p in files)
         conn.execute(f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM read_parquet([{paths}])")
         created.append(name)
     return created
