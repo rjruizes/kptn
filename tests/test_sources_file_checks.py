@@ -348,3 +348,16 @@ def test_shared_bronze_carries_the_record(tmp_path: Path, monkeypatch) -> None:
     assert rec.finished("meals[meals]")["shared"] == "restored"
     assert seen[-1] == [("meals/p002.csv",), ("meals/p003.csv",)]
 
+
+
+def test_count_rejects_many_reads_every_record_at_once(tmp_path: Path) -> None:
+    from kptn.sources.rejects import count_rejects_many
+
+    two, none = tmp_path / "two.parquet", tmp_path / "none.parquet"
+    write_rejects([RejectedFile("t", "a.csv", "bad"), RejectedFile("t", "b.csv", "bad")], two)
+    write_rejects([], none)
+    linked = tmp_path / "linked.parquet"
+    linked.symlink_to(two)
+
+    assert count_rejects_many([two, none, linked]) == {two: 2, none: 0, linked: 2}
+    assert count_rejects_many([]) == {}

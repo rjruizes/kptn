@@ -296,3 +296,119 @@ def test_without_a_shared_bronze_tables_are_local_files(project: Path) -> None:
     sink = _run(_graph(_source_node(project)), FakeStateStore(), project)
     assert not (project / ".kptn" / "_bronze" / "s" / "a.parquet").is_symlink()
     assert "shared" not in _finished(sink, "s[a]").payload
+
+
+# -- restoring many tables at once ----------------------------------------------
+#
+# On an NFS-mounted release, restoring a source of 257 tables took 41 seconds,
+# all of it small per-table round trips: a count of each table's rejected
+# files, a state-store commit, and two links, one table after another.
+
+
+class CountingStore(FakeStateStore):
+    """A store that offers the bulk methods, and counts every call."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def read_hash(self, storage_key, pipeline, task):
+        self.calls.append("read_hash")
+        return super().read_hash(storage_key, pipeline, task)
+
+    def read_hashes(self, storage_key, pipeline):
+        self.calls.append("read_hashes")
+        return {t: h for (sk, p, t), h in self._store.items() if (sk, p) == (storage_key, pipeline)}
+
+    def write_hash(self, storage_key, pipeline, task, hash):
+        self.calls.append("write_hash")
+        super().write_hash(storage_key, pipeline, task, hash)
+
+    def write_hashes(self, storage_key, pipeline, hashes):
+        self.calls.append("write_hashes")
+        for task, value in hashes.items():
+            super().write_hash(storage_key, pipeline, task, value)
+
+
+def _only_whole_numbers(rows, file):
+    bad = rows.filter("try_cast(x AS INTEGER) IS NULL").aggregate("count(*)").fetchone()[0]
+    return "not a whole number" if bad else None
+
+
+def _checked_project(root: Path) -> SourceNode:
+    """Two tables of two files each; one file of table ``a`` fails the check."""
+    for rel, text in {
+        "in/a/1.csv": "x\n1\n",
+        "in/a/2.csv": "x\noops\n",
+        "in/b/1.csv": "x\n2\n",
+        "in/b/2.csv": "x\n3\n",
+    }.items():
+        _write(root, rel, text)
+    handle = kptn.source(
+        "s",
+        files=str(root / "in" / "*" / "*.csv"),
+        table=lambda f: f.path.parent.name,
+        check=_only_whole_numbers,
+    )
+    return SourceNode(spec=handle.__kptn__, name="s")
+
+
+def test_restoring_reads_and_writes_state_once(project: Path) -> None:
+    (project / "cache").mkdir()
+    store = CountingStore()
+    node = _source_node(project)
+    _run(_graph(node), FakeStateStore(), project, shared=SharedBronze(project / "cache"))
+    shutil.rmtree(project / ".kptn" / "_bronze")
+    sink = _run(_graph(node), store, project, shared=SharedBronze(project / "cache"), expect_warning=False)
+    assert store.calls == ["read_hashes", "write_hashes"]
+    assert sorted(store.list_tasks("kptn", "default")) == ["s[a]", "s[b]"]
+    assert _finished(sink, "s[b]").payload["shared"] == "restored"
+
+
+def test_restored_tables_still_report_their_rejected_files(tmp_path: Path) -> None:
+    (tmp_path / "cache").mkdir()
+    node = _checked_project(tmp_path)
+    cache = SharedBronze(tmp_path / "cache")
+    _run(_graph(node), FakeStateStore(), tmp_path, shared=cache)
+    shutil.rmtree(tmp_path / ".kptn" / "_bronze")  # another working directory, in effect
+    with patch("kptn.runner.executor.count_rejects") as one_by_one:
+        with pytest.warns(UserWarning, match=r"s\.a: skipped 1 of 2 files"):
+            sink = _run(
+                _graph(node), FakeStateStore(), tmp_path, shared=cache, expect_warning=False
+            )
+    one_by_one.assert_not_called()  # a restored table's count is read with the rest
+    assert _finished(sink, "s[a]").payload["rejected"] == 1
+    assert _finished(sink, "s[b]").payload["rejected"] == 0
+    record = tmp_path / ".kptn" / "_bronze" / "s" / "_rejected" / "a.parquet"
+    assert record.is_symlink()
+
+
+def test_a_table_that_cannot_be_restored_fails_alone(project: Path) -> None:
+    from kptn.sources import shared as shared_module
+
+    (project / "cache").mkdir()
+    cache = SharedBronze(project / "cache")
+    node = _source_node(project)
+    _run(_graph(node), FakeStateStore(), project, shared=cache)
+    shutil.rmtree(project / ".kptn" / "_bronze")
+    real_link = shared_module.link
+
+    def link(parquet: Path, target: Path) -> None:
+        if parquet.name == "b.parquet":
+            raise OSError("no space left on device")
+        real_link(parquet, target)
+
+    store = CountingStore()
+    sink = RecordingSink()
+    resolved = ResolvedGraph(graph=_graph(node), pipeline="default", storage_key="kptn")
+    with patch("kptn.runner.executor.link", side_effect=link):
+        with pytest.raises(TaskError, match="table 'b'.*no space left"):
+            execute(
+                resolved, store, cwd=project, shared=cache,
+                emitter=EventEmitter("run-1", "default", None, sink),
+            )
+    # The table that was restored keeps its state; the one that failed has none.
+    assert store.list_tasks("kptn", "default") == ["s[a]"]
+    assert _finished(sink, "s[a]").payload["status"] == "succeeded"
+    assert _finished(sink, "s[b]").payload["status"] == "failed"
+    assert _finished(sink, "s").payload["status"] == "failed"

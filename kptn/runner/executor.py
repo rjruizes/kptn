@@ -4,6 +4,8 @@ import hashlib
 import inspect
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
@@ -37,8 +39,10 @@ from kptn.runner.checkpoint import (
     restore_checkpoint,
     save_checkpoint,
 )
+from kptn.runner.plan import _PrefetchedHashes
 from kptn.sources.build import (
     BRONZE_DIR,
+    TablePlan,
     build_table,
     is_current,
     plan_source,
@@ -47,7 +51,14 @@ from kptn.sources.build import (
 )
 from kptn.sources.checks import ChecksFailed, warn_at
 from kptn.sources.records import write_warnings
-from kptn.sources.rejects import NO_TABLE, RejectedFile, count_rejects, rejects_path, write_rejects
+from kptn.sources.rejects import (
+    NO_TABLE,
+    RejectedFile,
+    count_rejects,
+    count_rejects_many,
+    rejects_path,
+    write_rejects,
+)
 from kptn.sources.shared import SharedBronze, link
 from kptn.sources.views import apply_search_path, register_views
 from kptn.state_store.protocol import StateStoreBackend
@@ -55,6 +66,10 @@ from kptn.state_store.protocol import StateStoreBackend
 logger = logging.getLogger(__name__)
 
 _NON_EXEC_NODES = (ParallelNode, StageNode, NoopNode, PipelineNode)
+
+#: Threads linking a source's tables from the shared bronze. Each link is two
+#: round trips to the file server, and nothing else.
+_RESTORE_WORKERS = 16
 
 
 def _default_emitter(resolved: ResolvedGraph) -> EventEmitter:
@@ -362,6 +377,66 @@ def _restore_into(
     return candidate
 
 
+@dataclass(frozen=True)
+class _Restored:
+    """A table linked from the shared bronze."""
+
+    #: What its state entry holds.
+    value: str
+    #: Files its check left out; None for a source without ``check=``.
+    rejected: int | None
+
+
+def _restore_tables(
+    plans: list[TablePlan],
+    hits: dict[str, Path],
+    sharing: SharedBronze | None,
+    state_store: StateStoreBackend,
+    resolved: ResolvedGraph,
+) -> dict[str, _Restored | Exception]:
+    """Link every table of *plans* from its shared entry in *hits*, and record
+    them as built. Returns each table's outcome, or what stopped it.
+
+    All at once, where one table at a time cost a round trip to the file
+    server per step: the links are made concurrently, the tables' rejected
+    files are counted in one read, and their state is written in one commit.
+    A table that cannot be linked fails alone; the others keep their state.
+    """
+    if not plans or sharing is None:
+        return {}
+
+    def restore(plan: TablePlan) -> str | Exception:
+        try:
+            for record, shared_record in sharing.records(plan):
+                link(record, shared_record)
+            link(plan.parquet, hits[plan.table])
+            # Through the link: the entry never changes.
+            return state_value(plan)
+        except Exception as exc:  # reported as this table's failure
+            return exc
+
+    with ThreadPoolExecutor(max_workers=min(_RESTORE_WORKERS, len(plans))) as pool:
+        values = dict(zip((p.table for p in plans), pool.map(restore, plans)))
+    linked = [p for p in plans if isinstance(values[p.table], str)]
+    counts = count_rejects_many(p.rejects for p in linked if p.rejects is not None)
+    hashes = {p.state_name: str(values[p.table]) for p in linked}
+    write_hashes = getattr(state_store, "write_hashes", None)
+    if callable(write_hashes):
+        write_hashes(resolved.storage_key, resolved.pipeline, hashes)
+    else:
+        for task, value in hashes.items():
+            state_store.write_hash(resolved.storage_key, resolved.pipeline, task, value)
+    outcomes: dict[str, _Restored | Exception] = {}
+    for plan in plans:
+        value = values[plan.table]
+        if isinstance(value, Exception):
+            outcomes[plan.table] = value
+        else:
+            rejected = counts[plan.rejects] if plan.rejects is not None else None
+            outcomes[plan.table] = _Restored(value, rejected)
+    return outcomes
+
+
 def _execute_source(
     node: SourceNode,
     *,
@@ -420,13 +495,34 @@ def _execute_source(
         remove_stale_tables(node.name, {p.table for p in plans}, root=root, rejects=records)
     )
     sharing = None if force or no_cache else shared
+    # Which tables are current, and which the shared bronze already holds, is
+    # settled for the whole source before any table's events: one read of the
+    # stored hashes, and every restore done at once.
+    stored = _PrefetchedHashes(state_store, resolved.storage_key, resolved.pipeline)
+    current: set[str] = set()
+    hits: dict[str, Path] = {}
     for plan in plans:
         if not force and not no_cache and is_current(
-            plan, state_store, resolved.storage_key, resolved.pipeline
+            plan, stored, resolved.storage_key, resolved.pipeline
         ):
+            current.add(plan.table)
+        elif sharing is not None and (found := sharing.lookup(plan)) is not None:
+            hits[plan.table] = found
+    try:
+        restored = _restore_tables(
+            [p for p in plans if p.table in hits], hits, sharing, state_store, resolved
+        )
+    except Exception as exc:
+        _emit_task_finished(
+            emitter, node.name, mode="source", status="failed", started_at=started_at, error=str(exc)
+        )
+        raise TaskError(f"Source '{node.name}': {exc}") from exc
+
+    for plan in plans:
+        if plan.table in current:
             _emit_task_skipped(emitter, plan.state_name, mode="source_table", groups=groups)
             continue
-        hit = sharing.lookup(plan) if sharing is not None else None
+        hit = hits.get(plan.table)
         table_started = _emit_task_started(
             emitter, plan.state_name, mode="source_table", groups=groups,
             **({"shared": "restored"} if hit is not None else {}),
@@ -435,26 +531,29 @@ def _execute_source(
         rejected: int | None = None
         try:
             with emitter.task_scope(plan.state_name):
-                if sharing is not None:  # always, when there is a hit
-                    if hit is None:
-                        target, outcome = sharing.publish(plan, node.spec, root=root)
-                    else:
-                        target, outcome = hit, "restored"
+                if hit is not None:
+                    done = restored[plan.table]
+                    if isinstance(done, BaseException):
+                        raise done
+                    outcome, rejected = "restored", done.rejected
+                elif sharing is not None:
+                    target, outcome = sharing.publish(plan, node.spec, root=root)
                     for record, shared_record in sharing.records(plan):
                         link(record, shared_record)
                     link(plan.parquet, target)
                 else:
                     build_table(plan, node.spec, root=root)
-                if plan.rejects is not None:
+                if hit is None and plan.rejects is not None:
                     rejected = count_rejects(plan.rejects)
-                    if rejected:
-                        warn_at(
-                            f"{node.name}.{plan.table}: skipped {rejected} of "
-                            f"{len(plan.files)} files; see raw_{node.name}._rejected.",
-                            node.spec.declared_at,
-                        )
-                # Through the link, for a shared table: the entry never changes.
-                value = state_value(plan)
+                if rejected:
+                    warn_at(
+                        f"{node.name}.{plan.table}: skipped {rejected} of "
+                        f"{len(plan.files)} files; see raw_{node.name}._rejected.",
+                        node.spec.declared_at,
+                    )
+                if hit is None:
+                    # Through the link, for a shared table: the entry never changes.
+                    value = state_value(plan)
         except Exception as exc:
             if isinstance(exc, ChecksFailed) and plan.warnings is not None:
                 # The table is not replaced, but what warned is still recorded.
@@ -468,7 +567,7 @@ def _execute_source(
                 started_at=started_at, error=f"table '{plan.table}' failed",
             )
             raise TaskError(f"Source '{node.name}', table '{plan.table}': {exc}") from exc
-        if not no_cache:
+        if not no_cache and hit is None:  # a restored table's is already written
             state_store.write_hash(resolved.storage_key, resolved.pipeline, plan.state_name, value)
         _emit_task_finished(
             emitter, plan.state_name, mode="source_table", status="succeeded",

@@ -10,6 +10,7 @@ underscore, so neither name can belong to a table.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -64,6 +65,28 @@ def write_rejects(rows: list[RejectedFile], dest: Path) -> None:
     finally:
         conn.close()
         tmp.unlink(missing_ok=True)
+
+
+def count_rejects_many(paths: Iterable[Path]) -> dict[Path, int]:
+    """How many files each record in *paths* holds, from one read of them all.
+
+    A source restoring hundreds of tables would otherwise open a connection
+    and a file for each, one after another.
+    """
+    paths = list(paths)
+    if not paths:
+        return {}
+    conn = duckdb.connect()
+    try:
+        rows = conn.execute(
+            "SELECT filename, count(*) FROM read_parquet(?, filename = true) GROUP BY filename",
+            [[str(p) for p in paths]],
+        ).fetchall()
+    finally:
+        conn.close()
+    counted = dict(rows)
+    # A record that holds no files has no rows, so no group.
+    return {p: counted.get(str(p), 0) for p in paths}
 
 
 def count_rejects(path: Path) -> int:

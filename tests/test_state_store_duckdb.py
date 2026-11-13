@@ -365,3 +365,40 @@ def test_keep_db_open_false_closes_connection(tmp_path):
     )
     assert result is None
     mock_conn.close.assert_called_once()
+
+
+# ─── Many hashes in one commit ───────────────────────────────────────────── #
+
+
+def test_write_hashes_stores_every_task(backend):
+    backend.write_hash("kptn", "p", "s[a]", "old")
+    backend.write_hashes("kptn", "p", {"s[a]": "h1", "s[b]": "h2"})
+    backend.write_hashes("kptn", "p", {})
+    assert backend.read_hashes("kptn", "p") == {"s[a]": "h1", "s[b]": "h2"}
+    assert backend.read_hashes("kptn", "other") == {}
+
+
+def test_write_hashes_duckdb_error_raises_state_store_error(tmp_path):
+    backend = _make_erroring_backend(tmp_path)
+    with pytest.raises(StateStoreError):
+        backend.write_hashes("kptn", "p", {"s[a]": "h1"})
+
+
+def test_write_hashes_in_factory_mode_commits_once(tmp_path):
+    """One call to the factory, where a write per table made one each."""
+    import duckdb
+
+    from kptn.state_store.duckdb import DuckDbBackend
+
+    conn = duckdb.connect(str(tmp_path / "pipeline.db"))
+    calls = []
+
+    def factory():
+        calls.append(1)
+        return conn
+
+    backend = DuckDbBackend(factory=factory)
+    calls.clear()
+    backend.write_hashes("kptn", "p", {f"s[t{i}]": "h" for i in range(50)})
+    assert len(calls) == 1
+    assert len(backend.read_hashes("kptn", "p")) == 50

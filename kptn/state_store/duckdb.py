@@ -1,7 +1,7 @@
 import duckdb
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from kptn.exceptions import StateStoreError
 from kptn.layout import DEFAULT_DB_PATH
@@ -105,6 +105,36 @@ class DuckDbBackend:
         # next open), and in factory mode a checkpoint blocks indefinitely on
         # duckdb 1.4.x whenever task code holds a partially-fetched result on
         # another connection to the same file.
+
+    def write_hashes(self, storage_key: str, pipeline: str, hashes: Mapping[str, str]) -> None:
+        """Store the hash of every task in *hashes* with one commit.
+
+        A source restoring hundreds of tables would otherwise commit once for
+        each, and in factory mode call the factory once for each.
+        """
+        if not hashes:
+            return
+        try:
+            self._write_hashes(storage_key, pipeline, hashes)
+        except duckdb.CatalogException:
+            self._create_table()
+            self._write_hashes(storage_key, pipeline, hashes)
+        except duckdb.Error as exc:
+            raise StateStoreError("write_hashes failed") from exc
+
+    def _write_hashes(self, storage_key: str, pipeline: str, hashes: Mapping[str, str]) -> None:
+        conn = self._conn()
+        ran_at = datetime.now(UTC).isoformat()
+        # One statement, so one commit, without opening a transaction of our
+        # own on a connection the project's factory may hand to its tasks too.
+        rows = [(storage_key, pipeline, task, value, "success", ran_at) for task, value in hashes.items()]
+        conn.execute(
+            "INSERT OR REPLACE INTO _kptn.task_state "
+            "(storage_key, pipeline_name, task_name, output_hash, status, ran_at) "
+            "VALUES " + ", ".join(["(?, ?, ?, ?, ?, ?)"] * len(rows)),
+            [field for row in rows for field in row],
+        )
+        conn.commit()
 
     def read_hash(self, storage_key: str, pipeline: str, task: str) -> str | None:
         try:

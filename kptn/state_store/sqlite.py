@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Mapping
 
 from kptn.exceptions import StateStoreError
 from kptn.layout import DEFAULT_DB_PATH
@@ -55,6 +56,23 @@ class SqliteBackend:
             return row[0] if row else None
         except sqlite3.Error as exc:
             raise StateStoreError("read_hash failed") from exc
+
+    def write_hashes(self, storage_key: str, pipeline: str, hashes: Mapping[str, str]) -> None:
+        """Store the hash of every task in *hashes* with one commit."""
+        if not hashes:
+            return
+        ran_at = datetime.now(UTC).isoformat()
+        try:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO task_state "
+                "(storage_key, pipeline_name, task_name, output_hash, status, ran_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [(storage_key, pipeline, task, value, "success", ran_at) for task, value in hashes.items()],
+            )
+            self._conn.commit()
+        except sqlite3.Error as exc:
+            self._conn.rollback()
+            raise StateStoreError("write_hashes failed") from exc
 
     def read_hashes(self, storage_key: str, pipeline: str) -> dict[str, str | None]:
         """Every stored hash for *pipeline*, by task name, in one query."""

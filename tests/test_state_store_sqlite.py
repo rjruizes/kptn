@@ -211,3 +211,14 @@ def test_init_state_store_raises_for_unknown_backend():
 
     with pytest.raises(ValueError, match="postgres"):
         init_state_store(Settings())
+
+
+# ─── Many hashes in one commit ───────────────────────────────────────────── #
+
+
+def test_write_hashes_stores_every_task(backend):
+    backend.write_hash("kptn", "p", "s[a]", "old")
+    backend.write_hashes("kptn", "p", {"s[a]": "h1", "s[b]": "h2"})
+    backend.write_hashes("kptn", "p", {})
+    assert backend.read_hashes("kptn", "p") == {"s[a]": "h1", "s[b]": "h2"}
+    assert backend.read_hashes("kptn", "other") == {}

@@ -15,6 +15,8 @@ class StateStoreBackend(Protocol):
     def list_tasks(self, storage_key: str, pipeline: str) -> list[str]: ...
 
     # Backends may also offer ``read_hashes(storage_key, pipeline) ->
-    # dict[str, str | None]``, every stored hash in one query; callers reading
-    # many tasks use it when present. It is left out of this protocol so that
-    # stores implementing only the methods above still conform.
+    # dict[str, str | None]``, every stored hash in one query, and
+    # ``write_hashes(storage_key, pipeline, hashes)``, many hashes in one
+    # commit; callers reading or writing many tasks use them when present.
+    # They are left out of this protocol so that stores implementing only the
+    # methods above still conform.

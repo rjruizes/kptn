@@ -1193,6 +1193,54 @@ def _counting_store_writes(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[st
     return calls
 
 
+def _event(kind: EventKind, task: str, **payload) -> RunEvent:
+    from datetime import datetime, timezone
+
+    return RunEvent(
+        run_id="unused",
+        sequence=0,
+        timestamp=datetime.now(timezone.utc),
+        kind=kind,
+        pipeline="p",
+        profile=None,
+        task_name=task,
+        payload=payload,
+    )
+
+
+def test_a_sources_table_events_are_written_in_a_few_transactions(
+    ui_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source with hundreds of tables emits two events per table. One
+    transaction each cost ~48ms on an NFS-mounted project: 25 seconds for a
+    source of 257 tables that had nothing to do but link them."""
+    run = create_fixture_run(ui_project, profile="success")
+    run.store.append_event(run.run_id, EventKind.RUN_STARTED.value)
+    calls = _counting_store_writes(monkeypatch)
+
+    with capture_worker_output(run.store, run.run_id) as capture:
+        sink = capture.sink
+        sink.emit(_event(EventKind.TASK_STARTED, "redcap", mode="source"))
+        for index in range(300):
+            name = f"redcap[t{index}]"
+            sink.emit(_event(EventKind.TASK_STARTED, name, mode="source_table"))
+            sink.emit(_event(EventKind.TASK_FINISHED, name, mode="source_table", status="succeeded"))
+        sink.emit(_event(EventKind.TASK_SKIPPED, "redcap[cached]", mode="source_table"))
+        sink.emit(_event(EventKind.TASK_FINISHED, "redcap", mode="source", status="succeeded"))
+
+    # Only the source's own two events are written one at a time.
+    assert calls["append_event"] == ["task_started", "task_finished"]
+    assert 1 <= len(calls["append_events"]) <= 5
+    events = run.events()
+    assert [e.sequence for e in events] == list(range(1, len(events) + 1))
+    # In the order they happened: the tables between the source's start and finish.
+    names = [e.task_name for e in events if e.kind != EventKind.RUN_STARTED.value]
+    assert names[0] == "redcap" and names[-1] == "redcap"
+    assert names[1:5] == ["redcap[t0]", "redcap[t0]", "redcap[t1]", "redcap[t1]"]
+    assert names[-2] == "redcap[cached]"
+    assert len(names) == 2 + 600 + 1
+
+
 def test_capture_writes_a_burst_of_output_in_a_few_transactions(
     ui_project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

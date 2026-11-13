@@ -141,6 +141,18 @@ MAX_PENDING_EVENTS = 1000
 #: about the run's state, and is written at once -- after whatever is pending.
 _BATCHED_KINDS = frozenset({EventKind.LOG.value, EventKind.WARNING.value})
 
+#: The task events of a source's tables are buffered too. A source emits two
+#: for every table it serves, and one with hundreds of tables that only had to
+#: link them spent nearly all of its time on one transaction per event.
+_BATCHED_TASK_KINDS = frozenset(
+    {
+        EventKind.TASK_STARTED.value,
+        EventKind.TASK_SKIPPED.value,
+        EventKind.TASK_FINISHED.value,
+    }
+)
+_BATCHED_TASK_MODE = "source_table"
+
 
 class RunStoreSink:
     """Persist runner events, captured output, and warnings into a run store.
@@ -148,7 +160,8 @@ class RunStoreSink:
     Satisfies the :class:`~kptn.runner.events.EventSink` protocol, so it can be
     handed straight to ``kptn.run(..., event_sink=...)``.
 
-    With *flush_interval* set, ``log`` and ``warning`` events are buffered and
+    With *flush_interval* set, ``log`` and ``warning`` events, and the task
+    events of a source's tables, are buffered and
     written together by :meth:`flush` -- on a background timer started by
     :meth:`start`, before any other event, at :data:`MAX_PENDING_EVENTS`, and
     on :meth:`close`. One transaction per captured line held the store's write
@@ -295,7 +308,10 @@ class RunStoreSink:
                 text=text,
             )
             return
-        write = self._buffer if kind in _BATCHED_KINDS else self._append
+        batched = kind in _BATCHED_KINDS or (
+            kind in _BATCHED_TASK_KINDS and payload.get("mode") == _BATCHED_TASK_MODE
+        )
+        write = self._buffer if batched else self._append
         write(
             kind,
             timestamp=event.timestamp,

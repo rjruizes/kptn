@@ -193,14 +193,14 @@ class _FileEntry:
     log_end: int | None
 
 
-#: Kinds that move a run's state machine. :meth:`RunStore.append_events`
-#: refuses them: each has its own transition rule in
-#: :meth:`RunStore.append_event`, and a batch is for the high-volume kinds
-#: that only stamp the heartbeat.
-_STATE_CHANGING_KINDS = frozenset(
+#: Kinds that move the run itself between statuses.
+#: :meth:`RunStore.append_events` refuses them: each has its own transition
+#: rule in :meth:`RunStore.append_event`. A ``task_started`` is not among
+#: them: it only names the run's current task, which a batch sets to the last
+#: one it holds.
+_BATCH_REFUSED_KINDS = frozenset(
     {
         EventKind.RUN_STARTED.value,
-        EventKind.TASK_STARTED.value,
         EventKind.RUN_FINISHED.value,
     }
 )
@@ -769,22 +769,25 @@ class RunStore:
         """Append several events in one transaction, in the order given.
 
         For the capture layer's ``log`` and ``warning`` events, which arrive a
-        line at a time: one transaction per line costs a write lock and an
-        fsync per line, ~20ms each on NFS, and a worker printing quickly spent
-        its time waiting on the store. All of *events* land with contiguous
+        line at a time, and for the events of a source's tables, two for each
+        of what can be hundreds of tables: one transaction per event costs a
+        write lock and an fsync, 20-50ms each on NFS, and a worker spent its
+        time waiting on the store. All of *events* land with contiguous
         sequence numbers, or -- if the run is gone or already terminal --
         none of them do.
 
-        State-changing kinds are refused with ``ValueError``; send those
-        through :meth:`append_event`.
+        A ``task_started`` among them makes its task the run's current one;
+        the last such event wins. ``run_started`` and ``run_finished`` are
+        refused with ``ValueError``; send those through :meth:`append_event`.
         """
         if not events:
             return []
-        refused = sorted({e.kind for e in events} & _STATE_CHANGING_KINDS)
+        refused = sorted({e.kind for e in events} & _BATCH_REFUSED_KINDS)
         if refused:
             raise ValueError(
-                f"append_events does not accept state-changing kinds: {refused}"
+                f"append_events does not accept run lifecycle kinds: {refused}"
             )
+        started = [e for e in events if e.kind == EventKind.TASK_STARTED.value]
 
         log_path: Path | None = None
         file_size: int | None = None
@@ -849,6 +852,11 @@ class RunStore:
                 "UPDATE runs SET heartbeat_at = ? WHERE run_id = ?",
                 (_dt_to_text(events[-1].timestamp), run_id),
             )
+            if started:
+                conn.execute(
+                    "UPDATE runs SET current_task = ? WHERE run_id = ?",
+                    (started[-1].task_name, run_id),
+                )
             conn.execute("COMMIT")
         except BaseException:
             try:

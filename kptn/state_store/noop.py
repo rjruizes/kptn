@@ -1,5 +1,7 @@
 """No-op state store backend — used when caching is disabled."""
 
+from typing import Mapping
+
 
 
 class NoOpBackend:
@@ -15,6 +17,9 @@ class NoOpBackend:
         return {}
 
     def write_hash(self, storage_key: str, pipeline: str, task: str, hash: str) -> None:
+        pass
+
+    def write_hashes(self, storage_key: str, pipeline: str, hashes: Mapping[str, str]) -> None:
         pass
 
     def delete(self, storage_key: str, pipeline: str, task: str) -> None:

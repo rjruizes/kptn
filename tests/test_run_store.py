@@ -765,10 +765,36 @@ def test_append_events_refuses_lifecycle_kinds(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "ui.db")
     run = store.create_run(request(tmp_path))
     now = datetime.now(timezone.utc)
-    for kind in ("run_started", "task_started", "run_finished"):
+    for kind in ("run_started", "run_finished"):
         with pytest.raises(ValueError):
             store.append_events(run.run_id, [PendingEvent(kind, now)])
     assert store.events_after(run.run_id, 0) == []
+
+
+def test_append_events_takes_task_starts_and_keeps_the_last_as_current(tmp_path: Path) -> None:
+    """A source's tables start and finish in one batch; the run then shows the last."""
+    from datetime import datetime, timezone
+
+    from kptn_server.run_store import PendingEvent
+
+    store = RunStore(tmp_path / "ui.db")
+    run = store.create_run(request(tmp_path))
+    store.append_event(run.run_id, "run_started")
+    store.append_event(run.run_id, "task_started", task_name="redcap")
+    at = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+    stored = store.append_events(
+        run.run_id,
+        [
+            PendingEvent("task_started", at, "redcap[a]", {"mode": "source_table"}),
+            PendingEvent("task_finished", at, "redcap[a]", {"mode": "source_table"}),
+            PendingEvent("task_started", at, "redcap[b]", {"mode": "source_table"}),
+            PendingEvent("task_finished", at, "redcap[b]", {"mode": "source_table"}),
+        ],
+    )
+
+    assert [e.sequence for e in stored] == [3, 4, 5, 6]
+    assert store.get_run(run.run_id).current_task == "redcap[b]"  # type: ignore[union-attr]
 
 
 def test_append_events_rejects_the_whole_batch_for_a_finished_run(tmp_path: Path) -> None:
